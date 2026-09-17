@@ -87,8 +87,8 @@ def _from_backend(token: str) -> str | None:
     served text handed the model a Python that cannot import dune.fem, with full
     confidence -- while a clean checkout got "<set DUNE_PYTHON>" for a DUNE the
     backend finds by itself. The backend's finder is what the run will actually use,
-    and for DUNE it verifies the import. A FEniCSx finder that falls back to the
-    server's own interpreter is not an answer, so that case is refused.
+    and it verifies the import before it returns an interpreter -- including the
+    server's own, which is a valid answer when the solver is installed there.
     """
     spec = _FINDERS.get(token)
     if spec is None:
@@ -101,8 +101,6 @@ def _from_backend(token: str) -> str | None:
     if not found:
         return None
     found = str(found)
-    if token in _PYTHON_TOKENS and os.path.realpath(found) == os.path.realpath(sys.executable or ""):
-        return None
     return found if os.path.exists(found) else None
 
 
