@@ -66,15 +66,38 @@ def _from_discovery(key: str) -> str | None:
     return found if isinstance(found, str) and found else None
 
 
-# token -> (module, finder) in the backend that already resolves this path for its own runs.
-_FINDERS: dict[str, tuple[str, str]] = {
-    "{FENICS_PYTHON}": ("backends.fenics.backend", "_find_fenics_python"),
-    "{DUNE_PYTHON}":   ("backends.dune.backend",   "_find_dune_python"),
-    "{FOURC_BINARY}":  ("backends.fourc.backend",  "_find_fourc_binary"),
-    "{FEBIO_BINARY}":  ("backends.febio.backend",  "_find_febio_binary"),
-    "{DEALII_BUILD}":  ("backends.dealii.backend", "_find_dealii"),
-    "{SPARTA_BINARY}": ("backends.sparta.backend", "_find_sparta_binary"),
+# token -> (module, finder, backend name) for the backend that already resolves this path for its runs.
+_FINDERS: dict[str, tuple[str, str, str]] = {
+    "{FENICS_PYTHON}": ("backends.fenics.backend", "_find_fenics_python", "fenics"),
+    "{DUNE_PYTHON}":   ("backends.dune.backend",   "_find_dune_python",   "dune"),
+    "{FOURC_BINARY}":  ("backends.fourc.backend",  "_find_fourc_binary",  "fourc"),
+    "{FEBIO_BINARY}":  ("backends.febio.backend",  "_find_febio_binary",  "febio"),
+    "{DEALII_BUILD}":  ("backends.dealii.backend", "_find_dealii",        "dealii"),
+    "{SPARTA_BINARY}": ("backends.sparta.backend", "_find_sparta_binary", "sparta"),
 }
+_AVAILABLE: dict[str, bool] = {}
+
+
+def _backend_works(name: str) -> bool:
+    """The backend's own availability check, once per process.
+
+    A finder LOCATES; not every finder VALIDATES (the FEniCSx finder can return a Python from
+    a matching conda env without importing dolfinx, the FEBio and SPARTA finders only find
+    files). Serving a located path the backend would itself call unavailable hands the model a
+    command that cannot run. Found by Copilot's review of Hereon PR #57.
+    """
+    if name not in _AVAILABLE:
+        try:
+            from core.backend import BackendStatus
+            from core.registry import get_backend, load_all_backends
+            backend = get_backend(name)
+            if backend is None:
+                load_all_backends()
+                backend = get_backend(name)
+            _AVAILABLE[name] = bool(backend) and backend.check_availability()[0] == BackendStatus.AVAILABLE
+        except Exception:                              # noqa: BLE001
+            _AVAILABLE[name] = False
+    return _AVAILABLE[name]
 _PYTHON_TOKENS = {"{FENICS_PYTHON}", "{DUNE_PYTHON}"}
 
 
@@ -101,7 +124,9 @@ def _from_backend(token: str) -> str | None:
     if not found:
         return None
     found = str(found)
-    return found if os.path.exists(found) else None
+    if not os.path.exists(found) or not _backend_works(spec[2]):
+        return None
+    return found
 
 
 def _resolve_one(token: str) -> str:
