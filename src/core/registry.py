@@ -115,11 +115,13 @@ def load_all_backends():
             import os
             for backend, info in config["backends"].items():
                 loc = info.get("location", "")
-                if backend == "fenics" and loc:
-                    os.environ.setdefault("FENICS_PYTHON", loc)
-                elif backend == "dune" and loc:
-                    os.environ.setdefault("DUNE_PYTHON", loc)
-                elif backend == "fourc" and loc:
+                # A RECORDED INTERPRETER IS NOT PROMOTED to FENICS_PYTHON / DUNE_PYTHON.
+                # Autodiscovery records the interpreter it probed WITH, so an old record
+                # named the server's own venv as DUNE's Python; promoting it made it look
+                # user-set, and every later lookup trusted it over the backend's own
+                # verified finder. Those finders search the conda envs themselves. A
+                # recorded 4C binary is still promoted, but only while it exists.
+                if backend == "fourc" and loc and os.path.isfile(loc):
                     os.environ.setdefault("FOURC_BINARY", loc)
                 src_root = info.get("source_root", "")
                 if src_root:

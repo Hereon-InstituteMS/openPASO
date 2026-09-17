@@ -13,8 +13,11 @@ So the reference stores TOKENS, and this module fills them in at the moment the
 text is served, in this order:
 
 1. the environment variable the project already documents for that solver,
-2. what autodiscovery actually found on this machine,
-3. a readable placeholder that names the variable to set.
+2. the solver backend's OWN finder -- the same function that decides whether
+   the solver is available and runs it,
+3. what autodiscovery recorded, but only for a binary or tree that still
+   exists -- never for an interpreter (see _from_backend),
+4. a readable placeholder that names the variable to set.
 
 The third case is the important one: an honest ``<path to your dolfinx python
 -- set FENICS_PYTHON>`` is better than a confident wrong path, because it tells
@@ -63,6 +66,69 @@ def _from_discovery(key: str) -> str | None:
     return found if isinstance(found, str) and found else None
 
 
+# token -> (module, finder, backend name) for the backend that already resolves this path for its runs.
+_FINDERS: dict[str, tuple[str, str, str]] = {
+    "{FENICS_PYTHON}": ("backends.fenics.backend", "_find_fenics_python", "fenics"),
+    "{DUNE_PYTHON}":   ("backends.dune.backend",   "_find_dune_python",   "dune"),
+    "{FOURC_BINARY}":  ("backends.fourc.backend",  "_find_fourc_binary",  "fourc"),
+    "{FEBIO_BINARY}":  ("backends.febio.backend",  "_find_febio_binary",  "febio"),
+    "{DEALII_BUILD}":  ("backends.dealii.backend", "_find_dealii",        "dealii"),
+    "{SPARTA_BINARY}": ("backends.sparta.backend", "_find_sparta_binary", "sparta"),
+}
+_AVAILABLE: dict[str, bool] = {}
+
+
+def _backend_works(name: str) -> bool:
+    """The backend's own availability check, once per process.
+
+    A finder LOCATES; not every finder VALIDATES (the FEniCSx finder can return a Python from
+    a matching conda env without importing dolfinx, the FEBio and SPARTA finders only find
+    files). Serving a located path the backend would itself call unavailable hands the model a
+    command that cannot run. Found by Copilot's review of Hereon PR #57.
+    """
+    if name not in _AVAILABLE:
+        try:
+            from core.backend import BackendStatus
+            from core.registry import get_backend, load_all_backends
+            backend = get_backend(name)
+            if backend is None:
+                load_all_backends()
+                backend = get_backend(name)
+            _AVAILABLE[name] = bool(backend) and backend.check_availability()[0] == BackendStatus.AVAILABLE
+        except Exception:                              # noqa: BLE001
+            _AVAILABLE[name] = False
+    return _AVAILABLE[name]
+_PYTHON_TOKENS = {"{FENICS_PYTHON}", "{DUNE_PYTHON}"}
+
+
+def _from_backend(token: str) -> str | None:
+    """The path the backend itself would use, or None.
+
+    WHY NOT JUST AUTODISCOVERY. For a Python backend, autodiscovery records the
+    interpreter it PROBED WITH as the "location". Measured: a months-old
+    discovered_config.json named the server's own venv as DUNE's location, so the
+    served text handed the model a Python that cannot import dune.fem, with full
+    confidence -- while a clean checkout got "<set DUNE_PYTHON>" for a DUNE the
+    backend finds by itself. The backend's finder is what the run will actually use,
+    and it verifies the import before it returns an interpreter -- including the
+    server's own, which is a valid answer when the solver is installed there.
+    """
+    spec = _FINDERS.get(token)
+    if spec is None:
+        return None
+    try:
+        import importlib
+        found = getattr(importlib.import_module(spec[0]), spec[1])()
+    except Exception:                                  # noqa: BLE001
+        return None
+    if not found:
+        return None
+    found = str(found)
+    if not os.path.exists(found) or not _backend_works(spec[2]):
+        return None
+    return found
+
+
 def _resolve_one(token: str) -> str:
     env_var, discovery_key, human = _TOKENS[token]
     if token == "{PYTHON}":
@@ -71,9 +137,12 @@ def _resolve_one(token: str) -> str:
         value = os.environ.get(env_var, "").strip()
         if value:
             return value
-    if discovery_key:
+    found = _from_backend(token)
+    if found:
+        return found
+    if discovery_key and token not in _PYTHON_TOKENS:
         found = _from_discovery(discovery_key)
-        if found:
+        if found and os.path.exists(found):
             return found
     if env_var:                                  # last chance: on PATH?
         guess = shutil.which(env_var.split("_")[0].lower())
