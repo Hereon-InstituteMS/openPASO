@@ -268,7 +268,12 @@ def register_simulation_tools(mcp: FastMCP):
 
         # Output configuration check
         if solver == "fourc":
-            if "IO/RUNTIME VTK OUTPUT" not in input_content:
+            # A particle deck is exempt: see directly below. Warning it to add the section told a
+            # correct deck to go and look for one (found by Copilot review, Hereon PR #55).
+            # NOTE: register_simulation_tools is not called by the server, and this tool imports
+            # quality-check helpers that no longer exist, so it is unreachable as shipped.
+            if ("IO/RUNTIME VTK OUTPUT" not in input_content
+                    and "PARTICLE DYNAMIC" not in input_content):
                 warnings.append(
                     "No IO/RUNTIME VTK OUTPUT section found in 4C input. "
                     "Add this section to get ParaView-readable VTU/VTP output files."
