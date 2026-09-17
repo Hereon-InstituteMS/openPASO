@@ -138,9 +138,11 @@ def check_agent_packages() -> bool:
         import langgraph                                 # noqa: F401
         import openai                                    # noqa: F401
     except Exception:                                    # noqa: BLE001
-        print(f"{HM} The agent packages are not installed. You need them only for "
-              f"`python run_agent.py`.")
-        print("   To get them:  pip install -r langgraph_eval/requirements-langgraph.txt")
+        # Same shape as a missing solver: what is missing and its fix on ONE line, so a reader
+        # (and the test that holds every "not installed" line to naming its fix) finds both together.
+        print(f"{HM} The agent packages are not installed — to get it:  "
+              f"pip install -r langgraph_eval/requirements-langgraph.txt")
+        print("   You need them only for `python run_agent.py`, not for an AI app.")
         return False
     print(f"{OK} The agent packages are installed, so `python run_agent.py` can run.")
     return True
@@ -207,7 +209,7 @@ def main() -> int:
         return 1
     print(f"{OK} Install is working: {usable} solver(s) ready. openPASO will use these "
           f"and tell a model the others are missing.")
-    print("   Next: pick how you talk to it — README.md \"Quick start\", or https://hereon-institutems.github.io/openPASO/use/")
+    print("   Next: pick how you talk to it — README.md \"Quick start\", or https://alhermann.github.io/openPASO/use/")
     return 0
 
 
