@@ -1,0 +1,30 @@
+name: Documentation website
+
+# Builds the MkDocs site from docs/ and publishes it to GitHub Pages on every push to main.
+# The Tools and Solvers pages are generated and committed (docs/_gen_reference.py), so this job
+# needs no solver installed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "mkdocs-material>=9.5,<10"
+      - run: mkdocs build --strict
+      - run: mkdocs gh-deploy --force --no-history

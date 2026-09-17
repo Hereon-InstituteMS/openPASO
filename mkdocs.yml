@@ -1,0 +1,117 @@
+site_name: openPASO
+site_description: >-
+  Describe a physics problem in plain words. An AI model picks a finite-element solver,
+  writes its input, runs it, and checks the answer.
+site_url: https://hereon-institutems.github.io/openPASO/
+repo_url: https://github.com/Hereon-InstituteMS/openPASO
+repo_name: openPASO
+edit_uri: edit/main/docs/
+copyright: MIT licence · Helmholtz-Zentrum Hereon · Hamburg University of Technology
+
+exclude_docs: |
+  _gen_reference.py
+  CONSOLIDATION.md
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle: {icon: material/weather-sunny, name: Light mode}
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+    - toc.follow
+
+extra_css:
+  - stylesheets/openpaso.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed: {alternate_style: true}
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Install: getting-started/install.md
+      - Check that it works: getting-started/check.md
+  - Use it:
+      - Choose how: use/index.md
+      - "Option A: an AI app": use/ai-app.md
+      - "Option B: an API key": use/api-key.md
+      - What a run looks like: use/first-run.md
+  - Solvers:
+      - solvers/index.md
+      - scikit-fem: solvers/skfem.md
+      - NGSolve: solvers/ngsolve.md
+      - Kratos Multiphysics: solvers/kratos.md
+      - DUNE-fem: solvers/dune.md
+      - FEniCSx: solvers/fenics.md
+      - deal.II: solvers/dealii.md
+      - FEBio: solvers/febio.md
+      - 4C Multiphysics: solvers/fourc.md
+      - SPARTA: solvers/sparta.md
+  - Tools:
+      - tools/index.md
+      - Find out:
+          - discover: tools/discover.md
+          - knowledge: tools/knowledge.md
+          - examples: tools/examples.md
+          - prepare_simulation: tools/prepare_simulation.md
+          - session_insights: tools/session_insights.md
+      - Run:
+          - run_simulation: tools/run_simulation.md
+          - run_with_generator: tools/run_with_generator.md
+          - check_input: tools/check_input.md
+          - generate_mesh: tools/generate_mesh.md
+          - visualize: tools/visualize.md
+      - Check the answer:
+          - verify_mesh_independence: tools/verify_mesh_independence.md
+          - verify_pde_consistency: tools/verify_pde_consistency.md
+          - verify_interface_flux: tools/verify_interface_flux.md
+          - audit_results: tools/audit_results.md
+          - submit_critic_review: tools/submit_critic_review.md
+      - Two solvers on one problem:
+          - couple: tools/couple.md
+          - couple_levels: tools/couple_levels.md
+          - coupled_solve: tools/coupled_solve.md
+          - couple_precice: tools/couple_precice.md
+          - transfer_field: tools/transfer_field.md
+      - Set up and develop:
+          - setup_backend: tools/setup_backend.md
+          - rediscover_backends: tools/rediscover_backends.md
+          - reload_catalog: tools/reload_catalog.md
+          - developer: tools/developer.md
+  - How it works:
+      - Checking the answer: how-it-works/checking.md
+      - Two solvers on one problem: how-it-works/coupling.md
+      - How it is built: how-it-works/architecture.md
+  - Help:
+      - Troubleshooting: troubleshooting.md
+      - Words used here: glossary.md
+  - Contribute: contribute.md
+  - Cite: cite.md

@@ -4,7 +4,7 @@
   "backend": "kratos",
   "physics": "linear_elasticity",
   "surface_symptom": "The catalog template `linear_elasticity_2d` (Kratos) bypassed KratosMultiphysics entirely — it assembled stiffness with scipy and called spsolve. An LLM-driven agent asked to 'simulate a Kratos cantilever' would consume a template that uses Kratos in name only, defeating the point of selecting Kratos as the backend. Equally, the sweep harness reported the cell green while no Kratos object was ever constructed.",
-  "root_cause": "Three intertwined invariants in Kratos's structural-mechanics application were poorly documented and easy to miss when writing the first real template: (1) SmallDisplacementElement2D{3,4,...}N inherits BaseSolidElement, which probes a Z-DOF on every node even in plane analyses; (2) the Properties→CONSTITUTIVE_LAW binding requires an *instance*, not a class — passing the class silently keeps the null law; (3) ModelPart variable allocation must happen before nodes are created and before SetBufferSize(2). Violating any of (1)–(3) produces a silently wrong simulation, which is precisely the pitfall pattern Section 3.2 of the Open-FEM-Agent paper warns about.",
+  "root_cause": "Three intertwined invariants in Kratos's structural-mechanics application were poorly documented and easy to miss when writing the first real template: (1) SmallDisplacementElement2D{3,4,...}N inherits BaseSolidElement, which probes a Z-DOF on every node even in plane analyses; (2) the Properties→CONSTITUTIVE_LAW binding requires an *instance*, not a class — passing the class silently keeps the null law; (3) ModelPart variable allocation must happen before nodes are created and before SetBufferSize(2). Violating any of (1)–(3) produces a silently wrong simulation, which is precisely the pitfall pattern Section 3.2 of the openPASO design paper warns about.",
   "categories": ["Syntax", "API"],
   "pitfall_db_entries": [
     "[Syntax] SmallDisplacementElement2D{3,4,6,8,9}N inherits the SolidElementCheck path from BaseSolidElement, which queries the Z DOF on every node even in plane analyses (Kratos uses 3-component vectors internally). Add DISPLACEMENT_Z and REACTION_Z DOFs to every node and Fix(DISPLACEMENT_Z)=0. Signal: `Check failed for DISPLACEMENT_Z` at strat.Check(), long before the first solver step.",
@@ -13,9 +13,9 @@
   ],
   "agent_detection_after_fix": "Pre-execution critic gate retrieves the three new pitfalls when the agent's plan references SmallDisplacementElement2D*N. The post-execution critic matches the explicit Signal: clauses against actual error text (`Check failed for DISPLACEMENT_Z`, singular-matrix warnings, missing-component errors), so a regression that introduces any of (1)–(3) into a new template surfaces as a named pitfall hit rather than as an opaque crash. Both critic gates are exercised by tests/test_pitfall_categories.py (strict gate) plus the held-out 17-task regression on the Kratos cantilever (#44).",
   "source_refs": [
-    "PR #24 (Hereon-InstituteMS/Open-FEM-agent) — Kratos LE real-template + .vtk acceptance",
-    "Open-FEM-Agent Section 3.2 — silent no-op pitfalls (FSI velocity-30x example)",
-    "Open-FEM-Agent Table 1 — Syntax / API categories",
+    "PR #24 (Hereon-InstituteMS/openPASO, then named Open-FEM-agent) — Kratos LE real-template + .vtk acceptance",
+    "openPASO design paper Section 3.2 — silent no-op pitfalls (FSI velocity-30x example)",
+    "openPASO design paper Table 1 — Syntax / API categories",
     "task #46 — pitfall-DB-first merge discipline"
   ]
 }

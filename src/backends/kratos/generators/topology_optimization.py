@@ -27,15 +27,13 @@ KNOWLEDGE = {
                        "multi_objective", "frequency_maximization"],
         "constraints": ["volume_fraction", "stress_limit", "displacement_limit"],
         "pitfalls": [
-                        '[Integration] Requires StructuralMechanicsApplication as dependency '
-                        "Signal: RuntimeError 'KeyError' from JSON parsing OR 'SubModelPart not found' / 'Property ID ... missing' during AnalysisStage.Initialize.",
-                        '[Numerical] SIMP penalization factor p=3 is standard '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Filter radius needed to avoid checkerboard patterns '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Mesh-dependent results without proper filtering '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                    ],
+            "[Integration] Requires StructuralMechanicsApplication as dependency Signal: StructuralMechanicsApplication imports while TopologyOptimizationApplication itself is not published as a wheel at any version \u2014 the prerequisite is satisfiable and the application it is for is not reachable on a pip stack. OptimizationApplication is the maintained replacement and does import.",
+        ],
+        "guidance": [
+            "[Numerical] SIMP penalization factor p=3 is standard",
+            "[Numerical] Filter radius needed to avoid checkerboard patterns",
+            "[Numerical] Mesh-dependent results without proper filtering",
+        ]
     },
 }
 

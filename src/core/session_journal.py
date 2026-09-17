@@ -24,6 +24,7 @@ EVENT_TYPES = frozenset({
     "source_read",        # developer(action='files') called
     "parameter_override", # agent used non-default parameters
     "convergence_issue",  # coupling took many iterations
+    "critic_review",      # submit_critic_review called
 })
 
 
@@ -112,7 +113,30 @@ class SessionJournal:
             self._solvers_used.add(solver)
         if physics:
             self._physics_used.add(physics)
+        self._persist_live(evt)
         return evt
+
+    # THE JOURNAL IS WRITTEN WHERE IT CAN BE READ WHILE THE SESSION RUNS.
+    #
+    # It used to reach disk only when the server shut down. The server is its own
+    # process -- the agent reaches it over stdio -- so anything outside it that
+    # asked "has this run fetched that contract?" read an empty journal. Measured:
+    # the write-time check `contract_never_fetched` fired in 19 recorded runs and
+    # was wrong in all 19, including one that graded correct. One line per event,
+    # appended as it is recorded, into the same session directory the shutdown
+    # save uses (the campaign mounts it at the run's work/.openpaso_sessions).
+    # Best-effort and silent on failure: it must never break the tool it records.
+    def _persist_live(self, evt: JournalEvent) -> None:
+        try:
+            import os as _os
+            base = _os.environ.get("OPENPASO_JOURNAL_LIVE_DIR")
+            directory = (Path(base) if base
+                         else Path(__file__).resolve().parents[2] / "data" / "sessions")
+            directory.mkdir(parents=True, exist_ok=True)
+            with open(directory / f"session_{self.session_id}.jsonl", "a") as fh:
+                fh.write(json.dumps(_event_to_dict(evt), default=str) + "\n")
+        except Exception:                                   # noqa: BLE001
+            pass
 
     # ── Queries ──────────────────────────────────────────────
 

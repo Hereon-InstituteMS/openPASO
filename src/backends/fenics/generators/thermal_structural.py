@@ -5,6 +5,17 @@ Variants: 2d
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['thermal_structural'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Coupled thermal-structural: solve heat equation, apply temperature as thermal load to elasticity",
     "weak_form": "Step 1: k*(grad(T),grad(v))*dx = 0. Step 2: (C:eps_mech, eps(v))*dx = ((3\u03bb+2\u03bc)*\u03b1*\u0394T*I, eps(v))*dx",
     "function_space": "Scalar Lagrange for temperature, Vector Lagrange for displacement",

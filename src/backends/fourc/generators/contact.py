@@ -48,8 +48,15 @@ class ContactGenerator(BaseGenerator):
                 "CONTACT DYNAMIC",
                 "SOLVER 1",
                 "MATERIALS",
-                "STRUCTURE GEOMETRY",
                 "DESIGN SURF MORTAR CONTACT CONDITIONS 3D",
+                # Plus ONE mesh route - these three are alternatives, not
+                # three requirements, and only the middle one needs a file:
+                #   inline   : NODE COORDS + STRUCTURE ELEMENTS
+                #              + D*-NODE TOPOLOGY
+                #   Exodus   : STRUCTURE GEOMETRY (FILE + ELEMENT_BLOCKS)
+                #   generated: STRUCTURE DOMAIN (HEX/WEDGE cells only)
+                "one of: NODE COORDS + STRUCTURE ELEMENTS "
+                "| STRUCTURE GEOMETRY | STRUCTURE DOMAIN",
             ],
             "materials": {
                 "MAT_Struct_StVenantKirchhoff": {
@@ -103,10 +110,15 @@ class ContactGenerator(BaseGenerator):
                 },
                 "Uzawa": {
                     "description": (
-                        "Augmented Lagrangian (Uzawa iteration): iteratively "
-                        "updates Lagrange multipliers to enforce zero penetration.  "
-                        "More accurate than pure penalty but more expensive "
-                        "(multiple Newton solves per time step)."
+                        "DO NOT SELECT THIS. 'Uzawa' is in the STRATEGY enum "
+                        "that `4C --parameters` prints, but the code does not "
+                        "implement it: choosing it aborts at setup with "
+                        "'This contact strategy is not yet considered!' from "
+                        "contact/src/4C_contact_strategy_factory.cpp. Being "
+                        "present in --parameters means the parser accepts the "
+                        "word, not that the method exists. Use Penalty or "
+                        "Lagrange instead. (Verified by execution "
+                        "2026-08-03.)"
                     ),
                     "key_parameter": "PENALTYPARAM (initial penalty for augmentation)",
                     "typical_range": "1e2 -- 1e4",
@@ -128,9 +140,21 @@ class ContactGenerator(BaseGenerator):
                     "This is the standard and recommended algorithm."
                 ),
                 "LM_SHAPEFCN": (
-                    "'Standard' -- standard Lagrange multiplier shape functions.  "
-                    "Alternative: 'Dual' for dual Lagrange multipliers (more "
-                    "robust for non-matching meshes)."
+                    "'Standard' -- standard Lagrange multiplier shape "
+                    "functions.  'Dual' is the DEFAULT and is what STRATEGY "
+                    "Lagrange with the default SYSTEM: Condensed requires."
+                ),
+                "LM_DUAL_CONSISTENT": (
+                    "Default 'boundary'. MUST be set to 'none' for any "
+                    "STRATEGY other than Lagrange while LM_SHAPEFCN is Dual, "
+                    "or 4C aborts with 'Consistent dual shape functions in "
+                    "boundary elements only for Lagrange multiplier "
+                    "strategy.' Setting LM_SHAPEFCN: 'Standard' instead is an "
+                    "equally valid escape. The MORTAR COUPLING section must "
+                    "also be PRESENT and NON-EMPTY: 'MORTAR COUPLING: {}' "
+                    "still aborts. (Verified by execution 2026-08-03 across "
+                    "the four LM_SHAPEFCN x LM_DUAL_CONSISTENT combinations "
+                    "under STRATEGY Penalty.)"
                 ),
             },
             "contact_conditions": {
@@ -189,91 +213,123 @@ class ContactGenerator(BaseGenerator):
             },
             "pitfalls": [
                 (
-                    "[Input] Both MORTAR COUPLING and CONTACT DYNAMIC "
-                    "sections are REQUIRED.  Missing either one causes "
-                    "4C to crash or silently ignore the contact "
-                    "conditions. Signal: input parser aborts with "
-                    "`MORTAR COUPLING section required for contact` / "
-                    "`CONTACT DYNAMIC section missing`, OR the run "
-                    "completes but two bodies pass through each other "
-                    "(zero contact pressure, identical displacement to "
-                    "no-contact reference). (Audit 2026-06-02.)"
+                    "[Input] Both MORTAR COUPLING and CONTACT DYNAMIC sections are REQUIRED, "
+                    "and each one aborts in a different place, neither of them the input "
+                    "parser. Signal: dropping CONTACT DYNAMIC gets to the solver factory "
+                    "before it fails -- 'no linear solver defined for meshtying/contact "
+                    "problem. Please set LINEAR_SOLVER in CONTACT DYNAMIC to a valid "
+                    "number!' from structure_new/src/linear_solver/"
+                    "4C_structure_new_solver_factory.cpp, exit 1. Dropping MORTAR COUPLING "
+                    "lets its defaults stand and they contradict a penalty strategy, so the "
+                    "contact strategy factory stops instead, on the consistent-dual-shape "
+                    "check. Its greppable core is 'Consistent dual shape functions in "
+                    "boundary elements only for Lagrange'; the source splits the literal "
+                    "there and the printed sentence continues with the words multiplier "
+                    "strategy. It comes from "
+                    "contact/src/4C_contact_strategy_factory.cpp, exit 1. Neither "
+                    "message names the missing SECTION, and neither run silently ignores "
+                    "the contact conditions. (Audit 2026-06-02; the quoted 'MORTAR COUPLING "
+                    "section required for contact' does not exist in 4C, and neither does "
+                    "'CONTACT DYNAMIC section missing' -- both falsified by execution "
+                    "2026-08-09 on the shipped contact_penalty_3d deck, dropping each "
+                    "section in turn.) "
                 ),
                 (
-                    "[Input] Each contact interface needs BOTH a Slave "
-                    "and a Master surface with the same InterfaceID.  "
-                    "A missing partner surface causes the contact "
-                    "search to fail. Signal: log line `no master "
-                    "partner found for interface X` / `MortarInterface: "
-                    "InterfaceID X has 0 master elements`. (Audit "
-                    "2026-06-02.)"
+                    "[Input] Each contact interface needs BOTH a Slave and a Master surface "
+                    "with the same InterfaceID. Signal: marking both surfaces Slave gives "
+                    "'Master side missing in contact condition group!' from "
+                    "4C_contact_utils.cpp, while listing only ONE surface gives 'Not enough "
+                    "contact conditions in discretization' -- which never names a side, so it "
+                    "reads like a missing-section problem rather than a missing-partner one. "
+                    "The log line 'no master partner found for interface X' quoted earlier "
+                    "does not exist in 4C, and neither does "
+                    "'MortarInterface: InterfaceID X has 0 master elements'. "
+                    "(Executed 2026-08-06.) "
                 ),
                 (
-                    "[Numerical] PENALTYPARAM tuning is critical.  Too "
-                    "low: excessive penetration (inaccurate results).  "
-                    "Too high: ill-conditioned system matrix (Newton "
-                    "divergence).  Start with 1e3 and adjust based on "
-                    "penetration depth. Signal: NOX log shows "
-                    "non-monotonic residual or condition-number warning "
-                    "above ~1e14; OR max contact penetration in "
-                    "post-processing exceeds ~5% of the contact-pair "
-                    "element edge length. (Audit 2026-06-02.)"
+                    "[Numerical] PENALTYPARAM tuning is critical, and both ends fail "
+                    "differently. Signal: too low, and the run converges happily while the bodies "
+                    "interpenetrate -- there is no warning, only the geometry tells you. Too "
+                    "high: Newton stops, with 'The nonlinear solver did not converge!' from "
+                    "4C_solver_nonlin_nox_problem.cpp and NO condition-number warning of any "
+                    "kind, so the promised ill-conditioning message is not an observable. "
+                    "Treat 1e3 as a first bracket rather than a default: on a plain two-block "
+                    "penalty problem it still leaves penetration above the five-per-cent-of- "
+                    "edge-length rule this entry recommends. Raise it until the penetration "
+                    "you measure is acceptable, then stop -- the divergence edge is only a "
+                    "couple of decades further up. (Executed 2026-08-06.) "
                 ),
                 (
-                    "[Numerical] Quasi-static contact MUST use load "
-                    "stepping.  Applying the full load in one step "
-                    "almost always causes Newton divergence because "
-                    "the contact zone changes drastically. Signal: "
-                    "NOX hits StatusTest::MaxIters at the first step; "
-                    "the residual oscillates between two values "
-                    "associated with the contact set toggling each "
-                    "iteration. (Audit 2026-06-02.)"
+                    "[Numerical] Load stepping is NOT a safety property of quasi-static "
+                    "contact. Signal: there is none -- the single-step run does not misbehave. The "
+                    "earlier advice that applying the full load in one step "
+                    "'almost always causes Newton divergence' is wrong. On a two-block mortar "
+                    "penalty problem the single-step run converges at every load level tested "
+                    "and costs fewer total Newton iterations than the stepped run; at the "
+                    "harshest level it is the STEPPED run that fails, with 'The nonlinear "
+                    "solver did not converge!'. More steps means more intermediate "
+                    "configurations, each with its own active-set transition, and one of "
+                    "those can be the one that breaks. What is true is that a contact solve "
+                    "can fail where the active set changes sharply. If it does, do not reach "
+                    "for a smaller step size first -- check the initial geometry and "
+                    "PENALTYPARAM. The claimed 'NOX hits StatusTest::MaxIters at the first "
+                    "step' does not appear. (Executed 2026-08-06.) "
                 ),
                 (
-                    "[Numerical] Slave surface should be the "
-                    "FINER mesh or the SOFTER body. Swapping "
-                    "slave and master can cause convergence "
-                    "issues or inaccurate pressure "
-                    "distributions. Signal: a coarse-mesh "
-                    "slave + fine-mesh master gives contact-"
-                    "pressure spikes at master-node "
-                    "locations (resolution mismatch makes "
-                    "the mortar projection over-concentrate "
-                    "load); swapping which side is slave "
-                    "evens out the distribution. Rule of "
-                    "thumb: slave = finer mesh OR softer "
-                    "material. (Audit 2026-06-02.)"
+                    "[Numerical] With non-matching meshes, which side is Slave changes the "
+                    "LOAD DISTRIBUTION across the interface. Signal: making the coarse face "
+                    "the slave lets the mortar projection concentrate the transfer at the "
+                    "coarse nodes, and the fine face's own displacement becomes several times "
+                    "less uniform between its corners and its centre; making the fine face "
+                    "the slave evens it out. The active-set size follows the slave node "
+                    "count, which is the quickest way to confirm which side 4C took. The "
+                    "convergence half of the older advice did not reproduce: swapping the "
+                    "sides left the Newton iteration count unchanged. Rule of thumb stands -- "
+                    "slave = finer mesh OR softer material. (Executed 2026-08-06.) "
                 ),
                 (
-                    "[Numerical] KINEM must be 'nonlinear' for contact "
-                    "problems to correctly handle the geometric "
-                    "nonlinearity of contact gap computation.  Linear "
-                    "kinematics produce wrong results. Signal: contact "
-                    "pressure distribution is symmetric about the "
-                    "initial geometry instead of following the "
-                    "deformed configuration; for a Hertz benchmark "
-                    "the contact radius is off by ~20% from the "
-                    "analytical (3*F*R/(4*E*))^(1/3). (Audit "
-                    "2026-06-02.)"
+                    "[Numerical] KINEM must be 'nonlinear' for contact, and the danger is "
+                    "that 4C accepts 'linear' in complete silence: the deck parses, the "
+                    "contact interface is built, the active set fills, every step converges, "
+                    "and no log line mentions kinematics. Signal: none at run time. The two "
+                    "kinematics give different answers and the disagreement GROWS with the "
+                    "deformation, so a single small-deformation run looks fine and the error "
+                    "only surfaces once the load is raised. Compare a KINEM linear against a "
+                    "KINEM nonlinear run at two load levels rather than trusting either "
+                    "alone. (Executed 2026-08-06.) "
                 ),
                 (
-                    "[Input] Use node_set_id or NODE_SET_NAME (not "
-                    "element set) for contact surface definitions.  "
-                    "The mortar integration is surface-based and "
-                    "requires node sets. Signal: parser error "
-                    "`expected node set for contact surface, got "
-                    "element set` / `MortarInterface needs DNODE not "
-                    "DELE`. (Audit 2026-06-02.)"
+                    "[Input] A mortar contact surface is a design SURFACE built from nodes -- "
+                    "by default an index into the inline DSURF-NODE TOPOLOGY list. Conditions "
+                    "also accept an explicit ENTITY_TYPE of node_set_id, element_block_id or "
+                    "a NODE_SET_NAME, and all three of those resolve against a MESH FILE. "
+                    "Signal: using them on a deck with inline topology gives \"Cannot apply "
+                    "condition 'Contact' to element block N / to node set N which is not "
+                    "specified in the mesh file.\" from 4C_fem_condition.cpp; declaring the "
+                    "node groups as DVOLUMEs instead of DSURFACEs gives 'not in range [0:0[' "
+                    "and, on the next line, 'DSurface condition on non existent DSurface?' "
+                    "immediately followed by 'Could not read set from entity type.' — two "
+                    "adjacent literals at 4C_fem_condition.cpp:135-136 which the compiler "
+                    "concatenates, so the joined sentence exists only at run time. "
+                    "Note that element_block_id is a legitimate entity type, "
+                    "not a forbidden one -- the refusal above is about the absent mesh file. "
+                    "The parser errors 'expected node set for contact surface, got element "
+                    "set' and 'MortarInterface needs DNODE not DELE' do not exist. (Executed "
+                    "2026-08-06.) "
                 ),
                 (
-                    "[Numerical] Contact surfaces must not overlap or "
-                    "intersect initially.  An initial penetration can "
-                    "cause the Newton iteration to diverge at the "
-                    "first step. Signal: NOX residual at iteration 0 "
-                    "is already large (~|PENALTYPARAM * penetration|) "
-                    "and the first Newton update overshoots; "
-                    "MortarInterface diagnostic prints `initial "
-                    "penetration X.X > tolerance`. (Audit 2026-06-02.)"
+                    "[Numerical] Contact surfaces must not overlap in the reference "
+                    "configuration. A gap and an exactly touching start both solve; an "
+                    "overlap of a fraction of an element breaks the first Newton solve before "
+                    "a single step is finalised, with a full active set already present at "
+                    "step 0. Signal: 'The nonlinear solver did not converge!' from "
+                    "4C_solver_nonlin_nox_problem.cpp, and a NOX force norm at Nonlinear "
+                    "Solver Step 0 an order of magnitude above the same deck started touching "
+                    "-- but NOTHING that names the cause. There is no MortarInterface message "
+                    "about penetration; the log mentions neither penetration nor overlap, so "
+                    "this failure is indistinguishable from any other non-convergence and has "
+                    "to be found by inspecting the geometry. The quoted 'initial penetration "
+                    "X.X > tolerance' does not exist. (Executed 2026-08-06.) "
                 ),
             ],
             "typical_experiments": [

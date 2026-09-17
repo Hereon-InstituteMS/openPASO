@@ -5,6 +5,17 @@ Variants: 2d
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['biharmonic'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Biharmonic equation (4th order PDE) via interior penalty DG",
     "weak_form": "(laplacian(u), laplacian(v))*dx - avg(laplacian(u))*jump(grad(v).n)*dS - jump(grad(u).n)*avg(laplacian(v))*dS + alpha/h*jump(grad(u).n)*jump(grad(v).n)*dS",
     "function_space": "Lagrange order 2+ (C0-IP method), or DG order 2+ (full DG)",

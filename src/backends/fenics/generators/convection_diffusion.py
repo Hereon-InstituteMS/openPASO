@@ -5,12 +5,24 @@ Variants: 2d
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['convection_diffusion'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Convection-diffusion with SUPG stabilization",
     "weak_form": "(eps*grad(u) + b*u, grad(v))*dx + tau*(b\u00b7grad(u), b\u00b7grad(v))*dx = (f, v+tau*b\u00b7grad(v))*dx",
     "function_space": "Lagrange order 1",
     "solver": {"ksp_type": "preonly", "pc_type": "lu"},
     "pitfalls": [
-        "[Numerical] SUPG stabilisation parameter is "
+        "[Numerical] Streamline-upwind Petrov-Galerkin (SUPG) "
+        "stabilisation needs "
         "tau = h/(2|b|) * (coth(Pe) - 1/Pe), where the local Peclet "
         "number is Pe = |b|*h/(2*eps). Signal: using a constant tau "
         "(e.g. tau = 0.1) in the dolfinx BilinearForm produces "

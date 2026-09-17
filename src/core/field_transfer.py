@@ -14,7 +14,7 @@ from typing import Optional
 
 import numpy as np
 
-logger = logging.getLogger("oasis.field_transfer")
+logger = logging.getLogger("openpaso.field_transfer")
 
 
 @dataclass
@@ -23,7 +23,7 @@ class InterfaceData:
     coordinates: np.ndarray   # (N, dim) — interface node positions
     values: np.ndarray        # (N,) or (N, n_comp) — field values
     field_name: str
-    normal_fluxes: Optional[np.ndarray] = None  # (N,) — normal gradient at interface
+    normal_fluxes: Optional[np.ndarray] = None  # (N,) or (N, n_comp) — outward flux/traction per point; both shapes round-trip (measured)
 
     def to_dict(self) -> dict:
         d = {
@@ -62,11 +62,23 @@ def extract_interface_from_vtu(
 ) -> InterfaceData:
     """Extract field values at an interface plane from a VTU file.
 
+    VOLUME MODE (`interface_axis = -1`). A surface coupling exchanges a field on
+    a plane, and slicing one out is what this function was written for. A FIELD
+    coupling does not: in thermo-structural interaction both participants own
+    the WHOLE body and exchange volume fields — temperature one way, volumetric
+    strain the other — so there is no plane to slice and the plane-slicing
+    signature cannot express the exchange at all. With `interface_axis = -1`
+    every point in the file is taken and `interface_coord` is ignored. The
+    returned object is the same InterfaceData the `couple` driver moves; nothing
+    downstream needs to know which mode produced it.
+
     Args:
         vtu_path: Path to VTU result file.
         field_name: Name of the field to extract (e.g. "temperature").
         interface_coord: Coordinate value defining the interface plane.
-        interface_axis: Axis perpendicular to interface (0=x, 1=y, 2=z).
+            Ignored when interface_axis is -1.
+        interface_axis: Axis perpendicular to interface (0=x, 1=y, 2=z), or -1
+            for the WHOLE VOLUME (field coupling; see above).
         tol: Tolerance for node matching.
 
     Returns:
@@ -77,8 +89,11 @@ def extract_interface_from_vtu(
     mesh = read_mesh(vtu_path)
     points = np.asarray(mesh.points)
 
-    # Find nodes at the interface
-    mask = np.abs(points[:, interface_axis] - interface_coord) < tol
+    if interface_axis == -1:
+        mask = np.ones(len(points), dtype=bool)
+    else:
+        # Find nodes at the interface
+        mask = np.abs(points[:, interface_axis] - interface_coord) < tol
     if not np.any(mask):
         raise ValueError(
             f"No nodes found at {['x','y','z'][interface_axis]}={interface_coord} "
@@ -97,15 +112,22 @@ def extract_interface_from_vtu(
         available = list(mesh.point_data.keys()) + list(mesh.cell_data.keys())
         raise ValueError(f"Field '{field_name}' not found. Available: {available}")
 
-    # Sort by the tangential coordinate for consistent ordering
-    tangential_axes = [i for i in range(points.shape[1]) if i != interface_axis]
-    sort_key = interface_points[:, tangential_axes[0]]
-    order = np.argsort(sort_key)
-
-    logger.info(
-        f"Extracted {len(indices)} interface nodes at "
-        f"{['x','y','z'][interface_axis]}={interface_coord}"
-    )
+    # Sort for a consistent, reproducible ordering. The driver relaxes export
+    # vectors ENTRY BY ENTRY, so the order a participant exports in must be the
+    # same on every iteration or relaxation is meaningless.
+    if interface_axis == -1:
+        # lexicographic over all coordinates — there is no tangential direction
+        order = np.lexsort(tuple(interface_points[:, i]
+                                 for i in reversed(range(points.shape[1]))))
+        logger.info(f"Extracted {len(indices)} volume nodes (field coupling)")
+    else:
+        tangential_axes = [i for i in range(points.shape[1]) if i != interface_axis]
+        sort_key = interface_points[:, tangential_axes[0]]
+        order = np.argsort(sort_key)
+        logger.info(
+            f"Extracted {len(indices)} interface nodes at "
+            f"{['x','y','z'][interface_axis]}={interface_coord}"
+        )
 
     return InterfaceData(
         coordinates=interface_points[order],
@@ -124,51 +146,102 @@ def interpolate_to_points(
     Uses scipy.interpolate.griddata for non-matching meshes.
     For 1D interfaces (e.g. y-values along x=const), uses interp1d.
 
+    VECTOR FIELDS ARE MAPPED COMPONENT BY COMPONENT. `source.values` may be
+    (N,) for a scalar or (N, n_comp) for a displacement, velocity or traction,
+    and the two are NOT interchangeable here: `np.interp` takes only a 1-D
+    `fp`, so the 1-D branch used to raise on any vector field, and the
+    NaN-backfill in the 2-D branch indexed a coordinate array with a
+    2-D boolean mask. Every component is interpolated on its own and the
+    components are stacked back, so the returned shape always matches
+    `source.values` in its trailing dimension.
+
     Args:
         source: InterfaceData from the source solver.
         target_coords: (M, dim) target node positions.
         method: Interpolation method ('nearest', 'linear', 'cubic').
 
     Returns:
-        Interpolated values at target coordinates.
+        Interpolated values at target coordinates: (M,) for a scalar source,
+        (M, n_comp) for a vector one.
     """
-    src_coords = source.coordinates
-    src_values = source.values
+    src_coords = np.atleast_2d(np.asarray(source.coordinates, float))
+    raw = np.asarray(source.values, float)
+    vector = raw.ndim >= 2 and raw.shape[-1] > 1
+    src_values = raw.reshape(len(src_coords), -1) if raw.size else raw.reshape(0, 1)
+    target_coords = np.atleast_2d(np.asarray(target_coords, float))
+    ncomp = src_values.shape[1]
 
-    # Determine dimensionality of the interface
-    # Remove the constant-axis columns
-    nonconst = []
-    for ax in range(src_coords.shape[1]):
-        if src_coords[:, ax].max() - src_coords[:, ax].min() > 1e-10:
-            nonconst.append(ax)
+    def _shape(a):
+        return a if vector else a.ravel()
 
-    if len(nonconst) == 0:
-        # Single point — return constant
-        return np.full(len(target_coords), src_values[0])
+    # THE INTERFACE'S OWN DIMENSION, not the number of coordinate columns that
+    # happen to vary. Dropping constant columns is right only for an
+    # axis-aligned interface: a flat patch that is TILTED in 3-D varies in all
+    # three columns while being a 2-D manifold, and handing those three columns
+    # to Qhull raises "initial simplex is not full dimensional" — the same
+    # class of mistake as measuring a surface with a path length. So the
+    # intrinsic dimension comes from an SVD of the centred coordinates and the
+    # interpolation happens in the interface's OWN principal coordinates, which
+    # also fixes the 1-D branch for any interface that is not parallel to an
+    # axis. Target points are projected with the SAME basis.
+    if len(src_coords) == 0:
+        return _shape(np.zeros((len(target_coords), ncomp)))
+    origin = src_coords.mean(axis=0)
+    centred = src_coords - origin
+    try:
+        u_, sv, vt = np.linalg.svd(centred, full_matrices=False)
+    except np.linalg.LinAlgError:
+        sv, vt = np.zeros(1), np.eye(src_coords.shape[1])
+    rank = int(np.sum(sv > 1e-8 * sv[0])) if sv.size and sv[0] > 0 else 0
 
-    if len(nonconst) == 1:
+    if rank == 0:
+        # Single location — return that constant, per component
+        return _shape(np.tile(src_values[0], (len(target_coords), 1)))
+
+    src_p = centred @ vt[:rank].T
+    # THE TWO SIDES NEED NOT CARRY THE SAME NUMBER OF COLUMNS. A source read
+    # from a VTU always has three (VTK stores z even for a plane problem) while
+    # a target assembled in Python commonly has two, and slicing the target to
+    # the source's width does not widen it: `target[:, :3]` on an (M, 2) array
+    # is still (M, 2), so subtracting the 3-vector `origin` raised
+    # "operands could not be broadcast together with shapes (9,2) (3,)" and the
+    # skfem<->skfem poisson_dd coupling died in its update step. The previous
+    # implementation never met this because it indexed the target by the
+    # source's VARYING axes only, which for a plane interface are columns the
+    # target does have.
+    #
+    # A column the target omits is taken to sit at the interface's own position
+    # along that axis — it contributes zero once centred, which is exactly
+    # right for the constant axis this case is about, and is the same answer
+    # the axis-dropping version gave.
+    tgt = np.tile(origin, (len(target_coords), 1))
+    shared = min(src_coords.shape[1], target_coords.shape[1])
+    tgt[:, :shared] = target_coords[:, :shared]
+    tgt_p = (tgt - origin) @ vt[:rank].T
+
+    if rank == 1:
         # 1D interface — use numpy interp (robust, no scipy needed)
-        ax = nonconst[0]
-        order = np.argsort(src_coords[:, ax])
-        return np.interp(
-            target_coords[:, ax],
-            src_coords[order, ax],
-            src_values[order],
-        )
+        s, t = src_p[:, 0], tgt_p[:, 0]
+        order = np.argsort(s)
+        out = np.column_stack([
+            np.interp(t, s[order], src_values[order, c])
+            for c in range(ncomp)])
+        return _shape(out)
 
-    # 2D+ interface — use scipy griddata
+    # 2D+ interface — use scipy griddata in the interface's own coordinates
     from scipy.interpolate import griddata
-    src_2d = src_coords[:, nonconst]
-    tgt_2d = target_coords[:, nonconst]
-    result = griddata(src_2d, src_values, tgt_2d, method=method)
-
-    # Fill NaN (extrapolation) with nearest
-    nans = np.isnan(result)
-    if np.any(nans):
-        nearest = griddata(src_2d, src_values, tgt_2d[nans], method="nearest")
-        result[nans] = nearest
-
-    return result
+    cols = []
+    for c in range(ncomp):
+        col = np.asarray(griddata(src_p, src_values[:, c], tgt_p,
+                                  method=method), float).ravel()
+        # Fill NaN (extrapolation) with nearest
+        nans = ~np.isfinite(col)
+        if np.any(nans):
+            col[nans] = np.asarray(
+                griddata(src_p, src_values[:, c], tgt_p[nans],
+                         method="nearest"), float).ravel()
+        cols.append(col)
+    return _shape(np.column_stack(cols))
 
 
 def format_for_fenics(
@@ -181,8 +254,18 @@ def format_for_fenics(
 
     Generates code that applies Dirichlet or Neumann BC at the interface.
 
+    SCALAR AND VECTOR fields take different code. For a vector field (a
+    displacement, a velocity, a traction) the FEniCSx space is BLOCKED: one
+    row of `tabulate_dof_coordinates()` per NODE, and component c of node n at
+    scalar index `n*bs + c`. The scalar snippet writes
+    `func.x.array[i] = np.interp(...)` with `i` a node index, which on a
+    blocked space writes component 0 of node i and leaves every other component
+    at zero — and `np.interp` refuses a 2-D `fp` in the first place. So the
+    vector form loops over components and indexes `n*bs + c`.
+
     Args:
-        interface_data: Field values at the interface.
+        interface_data: Field values at the interface. `values` may be (N,) or
+            (N, n_comp).
         bc_type: 'dirichlet' or 'neumann'.
         interface_axis: Axis of the interface (0=x, 1=y).
         interface_coord: Coordinate of the interface.
@@ -190,62 +273,71 @@ def format_for_fenics(
     Returns:
         Python code snippet for FEniCS.
     """
-    coords = interface_data.coordinates
-    values = interface_data.values
+    coords = np.atleast_2d(np.asarray(interface_data.coordinates, float))
+    raw = np.asarray(interface_data.values, float)
+    vector = raw.ndim >= 2 and raw.shape[-1] > 1
+    values = raw.reshape(len(coords), -1) if raw.size else raw.reshape(0, 1)
+    ncomp = values.shape[1]
 
     # Determine tangential axis
     tangential_axes = [i for i in range(coords.shape[1]) if i != interface_axis]
     tang_ax = tangential_axes[0] if tangential_axes else 0
 
     tang_vals = coords[:, tang_ax].tolist()
-    field_vals = values.tolist()
+    field_vals = (values.tolist() if vector else values.ravel().tolist())
 
     axis_name = ['x', 'y', 'z'][interface_axis]
-
-    if bc_type == "dirichlet":
-        return f"""\
-# Interface Dirichlet BC from coupled solver
-# {len(tang_vals)} nodes at {axis_name}={interface_coord}
+    what = "vals" if bc_type == "dirichlet" else "flux"
+    kind = ("Dirichlet BC" if bc_type == "dirichlet"
+            else "Neumann BC (flux/traction)")
+    header = f"""\
+# Interface {kind} from coupled solver
+# {len(tang_vals)} nodes at {axis_name}={interface_coord}, \
+{ncomp} component(s) per node
 _interface_tang = np.array({tang_vals})
-_interface_vals = np.array({field_vals})
+_interface_{what} = np.array({field_vals})
 
 def interface_marker(x):
     return np.isclose(x[{interface_axis}], {interface_coord})
-
-interface_facets = mesh.locate_entities_boundary(domain, fdim, interface_marker)
-interface_dofs = fem.locate_dofs_topological(V, fdim, interface_facets)
-
-# Interpolate coupled values onto FEniCS DOFs
-_iface_func = fem.Function(V)
-_coords = V.tabulate_dof_coordinates()
-for i in interface_dofs:
-    _tang = _coords[i, {tang_ax}]
-    _iface_func.x.array[i] = np.interp(_tang, _interface_tang, _interface_vals)
-bc_interface = fem.dirichletbc(_iface_func, interface_dofs)
 """
-    else:
-        return f"""\
-# Interface Neumann BC from coupled solver (flux)
-# {len(tang_vals)} nodes at {axis_name}={interface_coord}
-_interface_tang = np.array({tang_vals})
-_interface_flux = np.array({field_vals})
-
-def interface_marker(x):
-    return np.isclose(x[{interface_axis}], {interface_coord})
-
+    # ONE assignment body for both the scalar and the vector case: `bs` is the
+    # space's own block size, so the scalar case (bs == 1) reduces to
+    # `array[n]` exactly as before.
+    fill = f"""\
+_bs = V.dofmap.index_map_bs
+_coords = V.tabulate_dof_coordinates()
+_ncomp = {ncomp}
+for _n in _iface_nodes:
+    _tang = _coords[_n, {tang_ax}]
+    for _c in range(min(_ncomp, _bs)):
+        _col = (_interface_{what} if _ncomp == 1
+                else _interface_{what}[:, _c])
+        _fn.x.array[_n * _bs + _c] = np.interp(_tang, _interface_tang, _col)
+"""
+    if bc_type == "dirichlet":
+        return header + f"""
 interface_facets = mesh.locate_entities_boundary(domain, fdim, interface_marker)
-facet_tags = mesh.meshtags(domain, fdim, interface_facets,
+_iface_nodes = fem.locate_dofs_topological(V, fdim, interface_facets)
+
+# Interpolate coupled values onto FEniCS DOFs (component by component)
+_fn = fem.Function(V)
+{fill}
+bc_interface = fem.dirichletbc(_fn, _iface_nodes)
+"""
+    return header + f"""
+interface_facets = mesh.locate_entities_boundary(domain, fdim, interface_marker)
+facet_tags = mesh.meshtags(domain, fdim, np.sort(interface_facets),
                             np.full(len(interface_facets), 99, dtype=np.int32))
 ds_iface = ufl.Measure("ds", domain=domain, subdomain_data=facet_tags)(99)
 
-# Interpolate flux values
-_flux_func = fem.Function(V)
-_coords = V.tabulate_dof_coordinates()
-for i in range(len(_coords)):
-    if np.isclose(_coords[i, {interface_axis}], {interface_coord}):
-        _tang = _coords[i, {tang_ax}]
-        _flux_func.x.array[i] = np.interp(_tang, _interface_tang, _interface_flux)
-# Add to RHS: L += _flux_func * v * ds_iface
+# Interpolate flux/traction values (component by component)
+_fn = fem.Function(V)
+_coords0 = V.tabulate_dof_coordinates()
+_iface_nodes = np.where(
+    np.isclose(_coords0[:, {interface_axis}], {interface_coord}))[0]
+{fill}
+# Add to RHS:  L += ufl.inner(_fn, v) * ds_iface     (vector)
+#              L += _fn * v * ds_iface               (scalar)
 """
 
 

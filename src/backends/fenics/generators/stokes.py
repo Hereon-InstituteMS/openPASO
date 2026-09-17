@@ -5,6 +5,17 @@ Variants: 2d
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['stokes'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Stokes flow with Taylor-Hood P2/P1 or MINI element",
     "weak_form": "nu*(grad(u),grad(v))*dx + div(v)*p*dx + div(u)*q*dx = (f,v)*dx",
     "function_space": (
@@ -38,16 +49,32 @@ KNOWLEDGE = {
         "W = fem.functionspace(domain, TH) where TH = "
         "basix.ufl.mixed_element([P2, P1]). Passing the bare element "
         "tuple as kwarg is wrong. Signal: fem.functionspace(domain, "
-        "(P2, P1)) raises TypeError 'expected basix.ufl element or "
-        "tuple (family, degree)'. (Audit 2026-06-02.)",
+        "(P2, P1)) raises \"AttributeError: 'tuple' object has no "
+        "attribute 'cell'\" — dolfinx reads the second argument as ONE "
+        "element and asks it for .cell. A list gives the same message "
+        "with 'list'. The previously quoted \"TypeError 'expected "
+        "basix.ufl element or tuple (family, degree)'\" is emitted "
+        "nowhere in dolfinx, ufl or basix and does not reproduce; note "
+        "the exception CLASS was wrong too, so an `except TypeError` "
+        "guard built on it would not even catch. The plain "
+        "(family, degree) tuple — fem.functionspace(domain, "
+        "('Lagrange', 2)) — is still valid; it is a tuple of ELEMENTS "
+        "that fails. (Verified by execution 2026-08-07, dolfinx "
+        "0.10.0 / basix 0.10.0.)",
         "[API] Non-homogeneous Dirichlet BCs on the velocity sub-"
         "space: collapse_subspace from W, create a Function on the "
         "collapsed space, interpolate the desired profile, then call "
         "fem.dirichletbc. Signal: passing a scalar value to "
         "fem.dirichletbc on a sub of a VectorH1 raises "
-        "RuntimeError 'Value shape must match function space'; the "
-        "fix is W0, dofs = W.sub(0).collapse() + interpolate. "
-        "(Audit 2026-06-02.)",
+        "'RuntimeError: Rank mismatch between Constant and function "
+        "space in DirichletBC' — the check is on RANK (a rank-0 "
+        "Constant against a rank-1 space), which is why the same "
+        "message comes back for a plain vector space as for a mixed "
+        "sub-space. The previously quoted 'Value shape must match "
+        "function space' is in no dolfinx binary and does not "
+        "reproduce. The fix is W0, dofs = W.sub(0).collapse() + "
+        "interpolate. (Verified by execution 2026-08-07, dolfinx "
+        "0.10.0.)",
         "[Numerical] Pressure is determined only up to a constant "
         "for enclosed flows — pin one DOF via fem.dirichletbc on a "
         "single pressure node, or ensure an outflow boundary takes "

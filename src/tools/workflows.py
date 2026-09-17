@@ -23,7 +23,7 @@ from mcp.server.fastmcp import FastMCP
 from core.registry import get_backend, available_backends
 from core.backend import BackendStatus
 
-logger = logging.getLogger("oasis.workflows")
+logger = logging.getLogger("openpaso.workflows")
 
 FOURC_ROOT = Path(os.environ.get("FOURC_ROOT", ""))
 
@@ -235,7 +235,8 @@ def register_workflow_tools(mcp: FastMCP):
         except json.JSONDecodeError:
             return f"Invalid base_params JSON: {base_params}"
 
-        output_dir = Path(__file__).resolve().parents[2] / "simulation_outputs"
+        from core.output_paths import output_dir as _output_dir
+        output_dir = _output_dir("simulation_outputs")
         output_dir.mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         study_dir = output_dir / f"param_study_{solver}_{parameter_name}_{ts}"

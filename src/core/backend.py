@@ -42,7 +42,17 @@ _GENERATED_INPUT_PATTERNS = {
     InputFormat.YAML:   ["*.4C.yaml", "*.yaml", "*.yml"],
     InputFormat.PYTHON: ["solve.py", "main.py", "*.py"],
     InputFormat.XML:    ["input.feb", "*.feb", "*.xml"],
-    InputFormat.JSON:   ["MainKratos.py", "*.json"],
+    # Kratos is the only InputFormat.JSON backend, and its declared format is
+    # its CONFIG format, not the thing you execute — every Kratos generator
+    # emits a python script. `input.py` sits ahead of `*.json` because the DEM
+    # generator is a file writer: it leaves MaterialsDEM.json,
+    # ProjectParametersDEM.json, two .mdpa files and the input.py that drives
+    # DEMAnalysisStage. Without this entry the glob picked MaterialsDEM.json,
+    # which KratosBackend.run then wrote into MainKratos.py and executed as
+    # python — a SyntaxError on the first brace. Measured 2026-08-07: the same
+    # deck that scripts/audit_two_stage_templates.py runs to completion could
+    # not be run through run_with_generator at all.
+    InputFormat.JSON:   ["MainKratos.py", "input.py", "*.json"],
     InputFormat.SPARTA: ["in.sparta", "in.*", "*.sparta"],
 }
 

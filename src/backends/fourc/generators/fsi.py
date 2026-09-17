@@ -131,9 +131,14 @@ class FSIGenerator(BaseGenerator):
                 "alternatives": [
                     "iter_monolithicfluidsplit",
                     "iter_monolithicstructuresplit",
-                    "iter_stagg_AITKEN_rel_force",
-                    "iter_stagg_fixed_rel_force",
+                    "iter_mortar_monolithicstructuresplit",
+                    "iter_stagg_AITKEN_rel_param",
+                    "iter_stagg_fixed_rel_param",
                 ],
+                "not_valid": (
+                    "iter_stagg_AITKEN_rel_force and iter_stagg_fixed_rel_force "
+                    "do NOT exist; the staggered schemes are named ..._rel_param."
+                ),
                 "key_settings": {
                     "COUPALGO": "Coupling algorithm selector in FSI DYNAMIC",
                     "SHAPEDERIVATIVES": "Must be true for monolithic FSI",
@@ -163,41 +168,281 @@ class FSIGenerator(BaseGenerator):
                 ),
             },
             "pitfalls": [
-                "FSI is the most complex problem type in 4C -- read carefully.",
-                "Fluid elements MUST use NA: ALE (not Euler!) for FSI problems.",
-                "ALE Dirichlet BCs must be applied on all outer fluid boundaries "
-                "that are not FSI coupling surfaces.  If missing, the ALE mesh "
-                "distorts freely and the simulation diverges.",
-                "Coupling surfaces must have matching node sets in both the "
-                "structure and fluid meshes (or use mortar coupling).",
-                "CLONING MATERIAL MAP is required: it maps fluid -> ALE material.",
-                "SHAPEDERIVATIVES must be true in FSI DYNAMIC/MONOLITHIC SOLVER "
-                "for monolithic schemes.",
-                "SECONDORDER: true couples the time integration at second order -- "
-                "recommended for accuracy.",
-                "Each field (structure, fluid, ALE) needs its own SOLVER N entry.",
-                "For 2-D: use DESIGN FSI COUPLING LINE CONDITIONS.  "
-                "For 3-D: use DESIGN FSI COUPLING SURF CONDITIONS.",
-                "Structure uses NUMDOF matching dimension (2 or 3), "
-                "fluid uses NUMDOF = dim + 1 (includes pressure).",
+                # Every Signal: below was produced by running
+                #   LD_LIBRARY_PATH=/opt/4C-dependencies/lib stdbuf -oL -eL \
+                #     {FOURC_BINARY} <deck>.yaml <out>
+                # on 4C 2026.2.0-dev (commit 89519cfe76), mutating one key at a
+                # time in two decks that both run clean unmutated:
+                #   [2D] this backend's fsi/fsi_2d template (decks/fsi_2d.4C.yaml,
+                #        partitioned Dirichlet-Neumann, 4 WALL QUAD4 + 16 FLUID
+                #        QUAD4, 10 steps, 0.9 s, exit 0);
+                #   [3D] tests/tutorials/preconditioner/tutorial_prec_fsi.4C.yaml
+                #        (exodus mesh, iter_mortar_monolithicfluidsplit, Belos +
+                #        Teko, cut to NUMSTEP 2 / MAXTIME 2e-4, 52 s, exit 0).
+                (
+                    "[Input] FSI is the most complex problem type in 4C and "
+                    "the reason is structural, not conceptual: one deck drives "
+                    "THREE discretisations (structure, fluid, ALE), and the "
+                    "sections that wire them together fail in unrelated places "
+                    "with unrelated wording, so there is no single string to grep "
+                    "for. Signal: from the same working 2D deck, deleting PROBLEM "
+                    "TYPE gives \"Required section 'PROBLEM TYPE' not found in "
+                    "input file.\" from core/io/src/4C_io_input_file.cpp:617, "
+                    "while deleting ALE DYNAMIC — a section with no default "
+                    "LINEAR_SOLVER — gives 'No linear solver defined for ALE "
+                    "problems. Please set' immediately followed by "
+                    "'LINEAR_SOLVER in ALE DYNAMIC to a valid number!', two "
+                    "adjacent literals at src/adapter/4C_adapter_ale.cpp:90-91 "
+                    "thrown from line 89, i.e. the "
+                    "field adapter blames the KEY and never says the section is "
+                    "missing. Both exit 1, from different subsystems, at "
+                    "different stages. Start from a working tutorial deck and "
+                    "mutate it; do not assemble an FSI input from the grammar "
+                    "and expect the errors to guide you. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Input] FSI fluid elements MUST carry NA: ALE, never NA: "
+                    "Euler — a non-ALE fluid field has no mesh-displacement dofs, "
+                    "so the ALE field it should be cloned into comes out empty. "
+                    "Signal: on the 2D partitioned deck the abort is 'got 27 "
+                    "master nodes but 0 slave nodes for coupling' from "
+                    "coupling/src/adapter/4C_coupling_adapter.cpp:182, thrown out "
+                    "of Coupling::Adapter::Coupling::setup_coupling under "
+                    "Adapter::FluidAle::FluidAle, before the first time step, "
+                    "exit 1. Read the two numbers: 27 is EVERY fluid node in that "
+                    "deck (the fluid->ALE field coupling, not the FSI interface) "
+                    "and 0 is the empty ALE discretisation. Nothing in the "
+                    "message mentions NA, Euler, or elements — it reads like a "
+                    "mesh-pairing problem. Grep 'but 0 slave nodes'. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Input] ALE Dirichlet BCs pin the mesh on every outer fluid "
+                    "boundary that is not the FSI interface. Omitting them is a "
+                    "quiet accuracy bug, NOT a divergence: an earlier version of "
+                    "this entry claimed the mesh 'distorts freely and the "
+                    "simulation diverges', and execution does not support that. "
+                    "Signal: deleting the whole DESIGN LINE ALE DIRICH "
+                    "CONDITIONS block from the 2D deck still completes all 10 "
+                    "steps at exit 0 with no det(J), inverted-element or ALE "
+                    "warning anywhere in the log. What moves is the answer: with "
+                    "the same RESULT DESCRIPTION probes, fluid pressure at node "
+                    "34 goes from -3.93255047510823741e-02 to "
+                    "-3.73966417858043604e-02 (-4.9%) and fluid velx at node 12 "
+                    "from 1.99424892254557146e-01 to 1.98440962728185039e-01, "
+                    "while structural dispx at node 7 barely moves "
+                    "(6.53965141370764086e-02 -> 6.53963740970964907e-02). Only "
+                    "the FLUID quantities tell you. Result-test a fluid pressure "
+                    "or interface value; exit status will never flag this. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Mesh] With conforming (non-mortar) FSI coupling the two "
+                    "interface node SETS must have equal cardinality — 4C pairs "
+                    "them by geometric search and refuses to proceed on a count "
+                    "mismatch. Signal: dropping a single node from the "
+                    "fluid-side DLINE of the 2D deck's FSI interface aborts "
+                    "before the first step with 'got 3 master nodes but 2 slave "
+                    "nodes for coupling' from coupling/src/adapter/"
+                    "4C_coupling_adapter.cpp:69, thrown from "
+                    "Coupling::Adapter::Coupling::setup_condition_coupling, exit "
+                    "1. Note the line number: :69 is the CONDITION coupling (the "
+                    "FSI interface) whereas the identically-worded throw at :182 "
+                    "is the field-wide fluid->ALE coupling — same sentence, "
+                    "different bug, so check the frame. The counts are node "
+                    "counts, so they localise the fault to the topology sections. "
+                    "For non-matching meshes the documented route is a mortar "
+                    "COUPALGO such as iter_mortar_monolithicfluidsplit (the 3D "
+                    "tutorial deck runs one), but that this equal-count check is "
+                    "skipped under mortar was NOT tested here — treat it as the "
+                    "alternative to try, not as an established fact. "
+                    "(Signal verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Input] CLONING MATERIAL MAP is required in every FSI deck: "
+                    "the ALE discretisation does not exist in the input, it is "
+                    "cloned from the fluid, and the map is what tells 4C which "
+                    "material the clone gets (SRC_FIELD: fluid, SRC_MAT: <fluid "
+                    "id>, TAR_FIELD: ale, TAR_MAT: <a St.-Venant pseudo-material>). "
+                    "Signal: deleting the section from the 2D deck aborts with "
+                    "'At least one material pairing required in --CLONING "
+                    "MATERIAL MAP.' from core/fem/src/general/utils/"
+                    "4C_fem_general_utils_createdis.hpp:318, exit 1. The message "
+                    "comes from the SHARED cloning helper, so it names neither "
+                    "FSI nor the ALE field, and it spells the section in the "
+                    "retired '--SECTION' dat form that you must NOT copy into "
+                    "YAML. TSI, SSI and every other cloned-field problem emit the "
+                    "identical sentence — read the backtrace (AleCloneStrategy "
+                    "here) to learn which clone failed. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Numerical] SHAPEDERIVATIVES in FSI DYNAMIC/MONOLITHIC "
+                    "SOLVER adds d(fluid residual)/d(ALE displacement) to the "
+                    "monolithic Jacobian. It is a Newton-cost knob, NOT a "
+                    "requirement — an earlier version of this entry said it "
+                    "'must be true for monolithic schemes', and execution "
+                    "refutes that. Signal: flipping it from true to false on the "
+                    "3D mortar-monolithic tutorial changes nothing about success "
+                    "and nothing about the answer: the run still converges every "
+                    "step at exit 0, and the initial residual of time step 2 is "
+                    "IDENTICAL in both runs ('||F|| = 8.447e+02'), which is the "
+                    "line to compare because it is the state carried out of step "
+                    "1. What changes is only the Newton path — counting the "
+                    "'-- Nonlinear Solver Step N -- ' banners, the two time "
+                    "steps go from 7 + 7 with SHAPEDERIVATIVES true to 7 + 8 "
+                    "with it false (the banner is printed once for the initial "
+                    "evaluation, so those are 6 and 7 Newton updates). Since it "
+                    "only touches the Jacobian, it cannot alter the converged "
+                    "solution; treat it as a knob to try when Newton is slow, "
+                    "and note it is meaningless for partitioned COUPALGOs. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Numerical] SECONDORDER in FSI DYNAMIC raises the interface "
+                    "time discretisation to second order. Unlike SHAPEDERIVATIVES "
+                    "it CHANGES THE SOLUTION, so it is a modelling decision and "
+                    "must be recorded alongside TIMESTEP when you report results. "
+                    "Signal: it fails no test and prints no warning either way — "
+                    "on the 3D mortar-monolithic tutorial, true and false both "
+                    "converge every step at exit 0. The observable is the printed "
+                    "nonlinear residual: with SECONDORDER: true the second time "
+                    "step opens at '||F|| = 8.447e+02', with false at '||F|| = "
+                    "1.226e+03', i.e. step 1 ended in a different state; the "
+                    "first step already diverges in path ('||F|| = 1.191e+00' vs "
+                    "'2.409e+00' at its first Newton update) and prints 9 "
+                    "'-- Nonlinear Solver Step N -- ' banners instead of 7. "
+                    "Diff the '||F|| =' column between two "
+                    "runs — that is how you confirm a coupling switch did "
+                    "anything at all. (Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Input] Each field's DYNAMIC section carries its own "
+                    "LINEAR_SOLVER: N pointing at a SOLVER N block. Reusing one "
+                    "block for all three fields is legal but usually "
+                    "suboptimal; pointing at a block that does not exist is the "
+                    "trap, because 4C does not check it. Signal: setting ALE "
+                    "DYNAMIC/LINEAR_SOLVER to an undefined 9 produces NO 'PROC 0 "
+                    "ERROR' block, no MPI_ABORT banner and no 4C source location "
+                    "— Trilinos throws through 4C uncaught and the process dies "
+                    "on SIGABRT at exit 134 with 'terminate called after throwing "
+                    "an instance of Teuchos::Exceptions::InvalidParameterName' "
+                    "and 'what():  Error!  The parameter \"SOLVER\" does not "
+                    "exist in the parameter (sub)list \"ROOT->SOLVER 9\".' — that "
+                    "quoted list name is the only thing that tells you which "
+                    "number was wrong. The field is identifiable solely from the "
+                    "backtrace frame (Adapter::AleBaseAlgorithm::setup_ale here). "
+                    "Grep for 'does not exist' and 'ROOT->SOLVER'. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Input] The FSI coupling condition is conventionally a LINE "
+                    "condition in 2D and a SURF condition in 3D, but what 4C "
+                    "actually enforces is that the topology you name EXISTS — the "
+                    "condition is looked up by name ('FSICoupling'), not by "
+                    "geometry rank. Signal: renaming DESIGN FSI COUPLING LINE "
+                    "CONDITIONS to ...SURF... in the 2D deck, which defines "
+                    "DLINEs and no DSURFACEs, is a loud two-line abort, not a "
+                    "silent decoupling: 'DSurface 0 not in range [0:0[' followed "
+                    "by 'DSurface condition on non existent DSurface?' and "
+                    "'Could not read set from entity type.' — adjacent literals "
+                    "at core/fem/src/condition/4C_fem_condition.cpp:135-136 that "
+                    "the compiler joins with no separator, thrown from line 133 — "
+                    "exit 1. The '[0:0[' is the giveaway "
+                    "— zero entities of that kind were read. So the real rule is: "
+                    "the condition kind must match the *-NODE TOPOLOGY sections "
+                    "you wrote (DLINE-NODE TOPOLOGY -> LINE conditions). "
+                    "(Verified by execution 2026-08-09.)"
+                ),
+                (
+                    "[Input] Per-field NUMDOF in an FSI deck: structure = dim "
+                    "(2 or 3), fluid = dim + 1 (the extra dof is pressure), ALE = "
+                    "dim. The same DESIGN ... DIRICH section serves whichever "
+                    "field owns the nodes, so one section can need two different "
+                    "NUMDOFs on two different entity sets. Signal: adding a "
+                    "DESIGN LINE DIRICH with NUMDOF: 2 on the 2D deck's "
+                    "fluid-only outflow DLINE aborts reading 2 DOFs given but 3 "
+                    "expected in Line Dirichlet boundary condition, from "
+                    "core/fem/src/discretization/4C_fem_discretization_utils_dbc."
+                    "cpp:292 at exit 1 — proving that a plain (non-ALE) Dirichlet "
+                    "does reach the FLUID discretisation — while the identical "
+                    "condition written with NUMDOF: 3 and 3-entry arrays runs to "
+                    "exit 0, and the deck's structural DESIGN POINT DIRICH keeps "
+                    "NUMDOF: 2 throughout. The message never names the field, so "
+                    "map the entity id back to its topology section yourself. "
+                    "The counts and the condition name are all substituted into "
+                    "a format string of the shape <given> DOFs given but "
+                    "<expected> expected in <condition name>, so the pieces to "
+                    "grep are the 14-character run DOFs given but, one hit in "
+                    "the tree, and the condition name, a string of its own: "
+                    "'Line Dirichlet boundary condition' in "
+                    "core/legacy_enum_definitions/"
+                    "4C_legacy_enum_definitions_conditions.cpp:22. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
                 # Shared-node NUMDOF conflict (applies to ALL multi-physics)
-                "CRITICAL: DESIGN LINE DIRICH CONDITIONS applies to ALL "
-                "discretizations containing a node, not just the intended one.  "
-                "If a node exists in both structure (NUMDOF=2) and fluid (NUMDOF=3) "
-                "discretizations, a Dirichlet with the wrong NUMDOF will fail.  "
-                "Workarounds: (a) offset the structural mesh slightly to avoid "
-                "shared nodes at the FSI-Dirichlet boundary, (b) use mortar "
-                "coupling with non-conforming meshes, (c) remove the structural "
-                "Dirichlet and rely on the FSI coupling constraint.",
+                (
+                    "[Input] CRITICAL: a DESIGN ... DIRICH condition is applied "
+                    "to EVERY discretisation that contains the node, not the one "
+                    "you had in mind. Where structure and fluid share interface "
+                    "nodes this makes one NUMDOF serve two fields with different "
+                    "dof counts, and only one direction of the clash is caught. "
+                    "Signal: merging the 2D deck's fluid interface nodes onto the "
+                    "structural ones (so nodes 7, 8, 9 live in both) and then "
+                    "putting a DESIGN LINE DIRICH with NUMDOF: 2 on that line "
+                    "aborts reading 2 DOFs given but 3 expected in Line "
+                    "Dirichlet boundary condition (core/fem/src/discretization/"
+                    "4C_fem_discretization_utils_dbc.cpp:292; the counts and the "
+                    "name are run-time substitutions into that line's format "
+                    "string, and the only piece of it that is a literal in its "
+                    "own right is 'Line Dirichlet boundary condition' in "
+                    "core/legacy_enum_definitions/"
+                    "4C_legacy_enum_definitions_conditions.cpp:22) — the FLUID "
+                    "claimed the structural condition. The SAME condition with "
+                    "NUMDOF: 3 "
+                    "runs to exit 0 even though the structure has only 2 dofs "
+                    "there: the check is `num_dbc_dofs < numdf`, so a surplus is "
+                    "dropped in silence and the structure quietly gets a "
+                    "fluid-shaped Dirichlet. The dangerous direction is the one "
+                    "that does not abort. Workarounds: (a) offset the structural "
+                    "mesh so no node is shared, (b) mortar coupling with "
+                    "non-conforming meshes, (c) drop the structural Dirichlet and "
+                    "let the FSI constraint carry it. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
                 # Invalid section names
-                "DESIGN FLUID LINE LIFT&DRAG does NOT exist in 4C for 2-D.  "
-                "Only DESIGN FLUID SURF LIFT&DRAG exists (for 3-D).  "
-                "For 2-D lift/drag, set LIFTDRAG: true in FLUID DYNAMIC and "
-                "4C computes it automatically from the no-slip boundaries.",
+                (
+                    "[Syntax] There is no DESIGN FLUID LINE LIFT&DRAG section in "
+                    "4C — only the SURF form is defined — so 2D lift/drag has no "
+                    "line-condition route. Signal: writing it into the 2D FSI "
+                    "deck is refused at parse, before anything is read, with "
+                    "\"Section 'DESIGN FLUID LINE LIFT&DRAG' is not a valid "
+                    "section name.\" from core/io/src/4C_io_input_file.cpp:546, "
+                    "exit 1. Note the check quotes your string verbatim and "
+                    "offers no candidates, so a near-miss name gives you no hint. "
+                    "Do NOT reach for LIFTDRAG: true in FLUID DYNAMIC as the 2D "
+                    "substitute: only DESIGN FLUID SURF LIFT&DRAG registers the "
+                    "'LIFTDRAG' condition that FLD::Utils::lift_drag() fetches, so "
+                    "the flag alone parses, converges and computes nothing. "
+                    "Integrate the traction yourself in 2D. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
                 # IO section
-                "The IO section does NOT have EVERY_ITERATION -- that is not a "
-                "valid parameter.  Use RESULTSEVERY in each field's DYNAMIC section "
-                "to control output frequency.",
+                (
+                    "[Syntax] EVERY_ITERATION is not a parameter of the IO "
+                    "section — it is real, but it lives in IO/RUNTIME VTK OUTPUT. "
+                    "Signal: 'EVERY_ITERATION: true' under IO: aborts at parse "
+                    "with 'Could not match this input' from "
+                    "core/io/src/4C_io_input_spec_builders.cpp:633, the IO block "
+                    "echoed back and the candidate specification printed, exit 1. "
+                    "That message is generic — the identical string comes from a "
+                    "mis-sized array, an out-of-enum value or a misplaced key — "
+                    "so read the echoed block, not the sentence. Per-field output "
+                    "frequency is RESULTSEVERY in STRUCTURAL DYNAMIC, FLUID "
+                    "DYNAMIC and ALE DYNAMIC. "
+                    "(Verified by execution 2026-08-09.)"
+                ),
             ],
             "ale_boundary_conditions": {
                 "description": (
@@ -218,12 +463,21 @@ class FSIGenerator(BaseGenerator):
                 ),
             },
             "valid_2d_elements": {
-                "FLUID": ["QUAD4", "QUAD9", "TRI3", "TRI6"],
-                "SOLID (structure)": ["QUAD4", "QUAD9", "TRI3", "TRI6"],
+                "FLUID": ["QUAD4", "QUAD8", "QUAD9", "TRI3", "TRI6"],
+                "WALL (2-D structure)": ["QUAD4", "QUAD8", "QUAD9", "TRI3", "TRI6"],
                 "notes": (
+                    "The 2-D structural element type is WALL, NOT SOLID.  "
+                    "SOLID is 3-D only (HEX8/HEX18/HEX20/HEX27, TET4/TET10, "
+                    "WEDGE6, PYRAMID5, NURBS27); asking for 'SOLID: QUAD4' "
+                    "is rejected with 'Could not match this input'.  A WALL "
+                    "QUAD4 element block requires all six of MAT, KINEM, EAS, "
+                    "THICK, STRESS_STRAIN and GP -- the token is THICK, not "
+                    "THICKNESS, and GP is a 2-vector such as [2, 2].  "
                     "QUAD4 is most commonly used and best validated for FSI.  "
                     "TRI3 works but is less accurate for pressure.  "
-                    "For 3-D FSI: FLUID HEX8/TET4, SOLID HEX8/TET4."
+                    "For 3-D FSI: FLUID HEX8/TET4, SOLID HEX8/TET4 (SOLID "
+                    "takes MAT and KINEM, and optionally TECH, PRESTRESS_TECH, "
+                    "FIBER1..3, RAD/AXI/CIR and an INTEGRATION sub-group)."
                 ),
             },
             "typical_experiments": [
@@ -384,15 +638,24 @@ class FSIGenerator(BaseGenerator):
                 TAR_MAT: 4
 
             # == Geometry ==================================================
+            # ELEMENT_BLOCKS entries are ID -> <ELEMENT_TYPE> -> <CELL_TYPE> ->
+            # tokens, and the element type must match the dimension.  SOLID is
+            # 3-D ONLY: its legal cell types are HEX8/HEX18/HEX20/HEX27/TET4/
+            # TET10/WEDGE6/PYRAMID5/NURBS27, so 'SOLID: QUAD4:' is rejected
+            # with "Could not match this input".  The 2-D structural element
+            # type is WALL, and its QUAD4 block requires ALL SIX of MAT, KINEM,
+            # EAS, THICK, STRESS_STRAIN and GP.  Note THICK, not THICKNESS --
+            # THICKNESS is not an element token anywhere in 4C.
             STRUCTURE GEOMETRY:
               FILE: "fsi_2d.e"
               ELEMENT_BLOCKS:
                 - ID: 1
-                  SOLID:
+                  WALL:
                     QUAD4:
                       MAT: 2
                       KINEM: nonlinear
-                      THICKNESS: <wall_thickness>
+                      EAS: none
+                      THICK: <wall_thickness>
                       STRESS_STRAIN: plane_strain
                       GP: [2, 2]
 

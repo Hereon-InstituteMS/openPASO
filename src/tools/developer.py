@@ -1,7 +1,7 @@
 """
 MCP tools for developer mode — read, modify, and extend solver source code.
 
-This is what makes the OASiS a development PARTNER, not just an
+This is what makes the openPASO a development PARTNER, not just an
 operator. The agent can read solver source, understand architecture,
 suggest modifications, and even implement new features.
 """
@@ -15,7 +15,7 @@ from core.registry import get_backend, available_backends
 
 # ── Environment variables for source roots ──────────────────────────────
 # Users can point the MCP at source trees by setting these env vars
-# in .claude/settings.json under mcpServers.oasis.env:
+# in .claude/settings.json under mcpServers.openpaso.env:
 #
 #   FOURC_ROOT:   /path/to/4C                  (C++, CMake)
 #   DEALII_ROOT:  /path/to/dealii              (C++, CMake)
@@ -62,7 +62,7 @@ _SOURCE_LOCATIONS = {
             "materials": "src/mat/",
             "input_parser": "src/inpar/",
             "io": "src/core/io/",
-            "templates": "oasis/src/backends/fourc/",
+            "templates": "openpaso/src/backends/fourc/",
             "kinematics_enum": "src/inpar/4C_inpar_structure.hpp (Inpar::Solid::KinemType)",
             "solid_element_factory": "src/solid_ele/4C_solid_ele_factory.cpp",
             "plane_2d_helpers": "src/solid_ele/4C_solid_ele_calc_lib_plane.{hpp,cpp}",
@@ -72,7 +72,7 @@ _SOURCE_LOCATIONS = {
             "New material: add to src/mat/4C_mat_<name>.hpp/cpp.  Register the input "
             "parser group in src/global_legacy_module/4C_global_legacy_module_validmaterials.cpp "
             "and an enum value in src/core/legacy_enum_definitions/4C_legacy_enum_definitions_materials.cpp. "
-            "Then add a catalog entry in oasis/src/backends/fourc/generators/<physics>.py.",
+            "Then add a catalog entry in openpaso/src/backends/fourc/generators/<physics>.py.",
             "New solid element kinematic mode (e.g. axisymmetric — not yet in 4C as of the "
             "tree the MCP was built against; grep -r 'axisym' src/ returns nothing): "
             "(1) extend the Inpar::Solid::KinemType enum in src/inpar/4C_inpar_structure.hpp "
@@ -104,7 +104,7 @@ _SOURCE_LOCATIONS = {
             "(e.g. pressurized cylinder cross-section under axial restraint for an "
             "axisymmetric quad4 patch); "
             "(6) declare the new mode in the agent's catalog by extending the relevant "
-            "physics generator (e.g. oasis/src/backends/fourc/generators/solid_mechanics.py) "
+            "physics generator (e.g. openpaso/src/backends/fourc/generators/solid_mechanics.py) "
             "so the catalog-consistency tests stay green.",
             "New fluid element: same pattern under src/fluid_ele/ with its own factory.",
             "New physics module: create src/<module_name>/ with CMakeLists.txt declaring "
@@ -114,7 +114,7 @@ _SOURCE_LOCATIONS = {
             "src/core/fem/src/condition/4C_fem_condition_definition.hpp from the relevant "
             "src/inpar/ module's set_valid_conditions() so the input parser exposes the new key.",
             "New inline mesh generator (Python side only): add a builder to "
-            "oasis/src/backends/fourc/inline_mesh.py and surface it via the relevant "
+            "openpaso/src/backends/fourc/inline_mesh.py and surface it via the relevant "
             "physics generator's template; no 4C source changes needed.",
         ],
     },
@@ -126,7 +126,7 @@ _SOURCE_LOCATIONS = {
         "build_command": "pip install fenics-dolfinx  # or: cd build && cmake --build .",
         "reference_files": "Official demos at https://docs.fenicsproject.org/dolfinx/main/python/demos.html",
         "key_dirs": _make_key_dirs(os.environ.get("FENICS_ROOT", ""), {
-            "templates": "oasis/src/backends/fenics/backend.py",
+            "templates": "openpaso/src/backends/fenics/backend.py",
         }),
         "extension_points": [
             "New physics: add template function _<physics>_<variant>() in backend.py",
@@ -143,7 +143,7 @@ _SOURCE_LOCATIONS = {
         "build_command": "cmake -DDEAL_II_DIR=/usr/share/deal.II . && make",
         "reference_files": "97 step tutorials at /usr/share/doc/libdeal.ii-doc/examples/step-*/",
         "key_dirs": _make_key_dirs(os.environ.get("DEALII_ROOT", ""), {
-            "templates": "oasis/src/backends/dealii/backend.py",
+            "templates": "openpaso/src/backends/dealii/backend.py",
             "include": "/usr/include/deal.II/",
             "step_tutorials": "/usr/share/doc/libdeal.ii-doc/examples/",
         }),
@@ -162,7 +162,7 @@ _SOURCE_LOCATIONS = {
         "build_command": "pip install ngsolve  # or: cd build && cmake --build .",
         "reference_files": "i-tutorials at https://docu.ngsolve.org/latest/i-tutorials/index.html",
         "key_dirs": _make_key_dirs(os.environ.get("NGSOLVE_ROOT", ""), {
-            "templates": "oasis/src/backends/ngsolve/backend.py",
+            "templates": "openpaso/src/backends/ngsolve/backend.py",
         }),
         "extension_points": [
             "New physics: add template function in backend.py",
@@ -178,7 +178,7 @@ _SOURCE_LOCATIONS = {
         "language": "Python (numpy/scipy)",
         "build_command": "pip install scikit-fem",
         "key_dirs": _make_key_dirs(os.environ.get("SKFEM_ROOT", ""), {
-            "templates": "oasis/src/backends/skfem/backend.py",
+            "templates": "openpaso/src/backends/skfem/backend.py",
         }),
         "extension_points": [
             "New physics: define @BilinearForm and @LinearForm",
@@ -196,7 +196,7 @@ _SOURCE_LOCATIONS = {
         "source_repo": "https://github.com/KratosMultiphysics/Kratos",
         "reference_files": "Examples at https://kratosmultiphysics.github.io/Examples/",
         "key_dirs": _make_key_dirs(os.environ.get("KRATOS_ROOT", ""), {
-            "templates": "oasis/src/backends/kratos/backend.py",
+            "templates": "openpaso/src/backends/kratos/backend.py",
             "applications": "kratos/applications/",
         }),
         "extension_points": [
@@ -214,7 +214,7 @@ _SOURCE_LOCATIONS = {
         "build_command": "pip install dune-fem  # or: cd build && cmake --build .",
         "reference_files": "Tutorials at https://www.dune-project.org/sphinx/content/sphinx/dune-fem/",
         "key_dirs": _make_key_dirs(os.environ.get("DUNE_ROOT", ""), {
-            "templates": "oasis/src/backends/dune/backend.py",
+            "templates": "openpaso/src/backends/dune/backend.py",
         }),
         "extension_points": [
             "New physics: define UFL weak forms (same syntax as FEniCS)",
@@ -356,7 +356,7 @@ def register_developer_tools(mcp: FastMCP):
     @mcp.tool()
     def discover_sources(refresh: bool = False) -> str:
         """Find source trees + binaries for every backend by scanning the
-        local filesystem. Reads ~/.config/oasis/sources.json for
+        local filesystem. Reads ~/.config/openpaso/sources.json for
         pinned paths first, then walks $HOME / /opt / /usr/local/src.
 
         Each backend gets one of four statuses:
@@ -380,8 +380,8 @@ def register_developer_tools(mcp: FastMCP):
             src = info.get("source_path") or "—"
             bn = info.get("binary_info") or "—"
             lines.append(f"| {be} | {info['status']} | `{src}` | `{bn}` |")
-        lines.append("\nEdit `~/.config/oasis/sources.json` to pin paths "
-                     "globally, or set `$OFA_SOURCE_CONFIG=<file>` for "
+        lines.append("\nEdit `~/.config/openpaso/sources.json` to pin paths "
+                     "globally, or set `$OPENPASO_SOURCE_CONFIG=<file>` for "
                      "session-local overrides.")
         return "\n".join(lines)
 

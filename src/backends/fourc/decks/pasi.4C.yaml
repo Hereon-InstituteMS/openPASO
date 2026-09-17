@@ -1,0 +1,110 @@
+# PASI: particle-structure interaction, partitioned two-way coupling.
+# A single DEM sphere (r = 0.5) rests on an elastic plate and is pressed into
+# it by gravity. The plate is a 4 x 4 x 1 HEX8 slab generated inline by
+# STRUCTURE DOMAIN and clamped on all four side faces. Its top face z+ carries
+# the DESIGN SURFACE PARTICLE WALL condition, i.e. it is the contact wall the
+# particle sees. Because PARTICLE_WALL_MOVING/LOADED are on, the particle
+# contact force is applied to the structure and the deformed wall is fed back
+# to the particle solver every coupling iteration.
+PROBLEM TYPE:
+  PROBLEMTYPE: "Particle_Structure_Interaction"
+IO:
+  VERBOSITY: "Standard"
+IO/RUNTIME VTK OUTPUT:
+  INTERVAL_STEPS: 10
+IO/RUNTIME VTK OUTPUT/STRUCTURE:
+  OUTPUT_STRUCTURE: true
+  DISPLACEMENT: true
+# The bounding box must enclose the particle and the whole wall for all time.
+# BIN_SIZE_LOWER_BOUND >= largest particle diameter.
+BINNING STRATEGY:
+  BIN_SIZE_LOWER_BOUND: 1.0
+  DOMAINBOUNDINGBOX: "-1.2 -1.2 -0.5 1.2 1.2 1.5"
+# Outer coupling loop: Dirichlet-Neumann fixed-point iteration per time step.
+# Switch COUPLING to partitioned_twowaycoup_disprelaxaitken if it stalls.
+PASI DYNAMIC:
+  RESULTSEVERY: 10
+  RESTARTEVERY: 150
+  TIMESTEP: 0.0005
+  NUMSTEP: 150
+  MAXTIME: 0.075
+  COUPLING: partitioned_twowaycoup
+  ITEMAX: 20
+  CONVTOLSCALEDDISP: 1e-06
+  CONVTOLRELATIVEDISP: 1e-06
+  CONVTOLSCALEDFORCE: 1e-06
+  CONVTOLRELATIVEFORCE: 1e-06
+# Particle field: explicit DEM.
+PARTICLE DYNAMIC:
+  INTERACTION: "DEM"
+  GRAVITY_ACCELERATION: "0.0 0.0 -9.81"
+  PHASE_TO_DYNLOADBALFAC: "phase1 1.0"
+  PHASE_TO_MATERIAL_ID: "phase1 1"
+  PARTICLE_WALL_SOURCE: "DiscretCondition"
+  PARTICLE_WALL_MOVING: true
+  PARTICLE_WALL_LOADED: true
+# Contact law. REL_PENETRATION + MAX_VELOCITY fix the normal spring stiffness
+# k_n = 2/3*pi*r_max*rho_max*v_max^2/c^2.
+PARTICLE DYNAMIC/DEM:
+  NORMALCONTACTLAW: "NormalLinearSpringDamp"
+  MAX_RADIUS: 0.5
+  MAX_VELOCITY: 0.5
+  REL_PENETRATION: 0.01
+  COEFF_RESTITUTION: 0.8
+  POISSON_RATIO: 0.3
+# Structure field: implicit, mass- and stiffness-proportional damping so the
+# plate settles instead of ringing.
+STRUCTURAL DYNAMIC:
+  DAMPING: "Rayleigh"
+  M_DAMP: 1
+  K_DAMP: 0.02
+  LOADLIN: true
+  LINEAR_SOLVER: 1
+SOLVER 1:
+  SOLVER: "UMFPACK"
+STRUCT NOX/Printing:
+  Warning: false
+  Outer Iteration: false
+  Inner Iteration: false
+  Outer Iteration StatusTest: false
+MATERIALS:
+  - MAT: 1
+    MAT_ParticleDEM:
+      INITRADIUS: 0.5
+      INITDENSITY: 1
+  - MAT: 2
+    MAT_ParticleWallDEM:
+      FRICT_COEFF_TANG: 0.2
+  - MAT: 3
+    MAT_Struct_StVenantKirchhoff:
+      YOUNG: 100000
+      NUE: 0.3
+      DENS: 1
+PARTICLES:
+  - "TYPE phase1 POS 0.0 0.0 0.5"
+DESIGN SURF DIRICH CONDITIONS:
+  - E: 2
+    NUMDOF: 3
+    ONOFF: [1, 1, 1]
+    VAL: [0, 0, 0]
+    FUNCT: [0, 0, 0]
+DESIGN SURFACE PARTICLE WALL:
+  - E: 1
+    MAT: 2
+DSURF-NODE TOPOLOGY:
+  - "SIDE structure z+ DSURFACE 1"
+  - "SIDE structure x- DSURFACE 2"
+  - "SIDE structure x+ DSURFACE 2"
+  - "SIDE structure y- DSURFACE 2"
+  - "SIDE structure y+ DSURFACE 2"
+# Inline mesh generation: no external mesh file needed.
+STRUCTURE DOMAIN:
+  bottom_corner_point: [-1.0, -1.0, -0.1]
+  top_corner_point: [1.0, 1.0, 0.0]
+  subdivisions: [4, 4, 1]
+  auto_partition: false
+  elements:
+    SOLID:
+      HEX8:
+        MAT: 3
+        KINEM: nonlinear

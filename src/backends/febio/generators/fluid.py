@@ -15,7 +15,7 @@ def _fluid_3d_channel(params: dict) -> str:
     """
     rho = params.get("density", 1.0)
     mu = params.get("viscosity", 0.01)
-    p_in = params.get("p_inlet", 1.0)
+    p_in = params.get("p_inlet", 0.01)
     return f'''\
 <?xml version="1.0" encoding="ISO-8859-1"?>
 <febio_spec version="4.0">
@@ -26,10 +26,11 @@ def _fluid_3d_channel(params: dict) -> str:
     <step_size>0.1</step_size>
     <solver type="fluid">
       <symmetric_stiffness>non-symmetric</symmetric_stiffness>
+      <linear_solver type="bicgstab"/>
     </solver>
   </Control>
   <Material>
-    <material id="1" type="fluid">
+    <material id="1" name="Material1" type="fluid">
       <density>{rho}</density>
       <k>1e3</k>
       <viscous type="Newtonian fluid">
@@ -48,22 +49,15 @@ def _fluid_3d_channel(params: dict) -> str:
       <node id="7">1,1,1</node>
       <node id="8">0,1,1</node>
     </Nodes>
-    <Elements type="hex8" mat="1" name="Part1">
+    <Elements type="hex8" mat="Material1" name="Part1">
       <elem id="1">1,2,3,4,5,6,7,8</elem>
     </Elements>
-    <NodeSet name="inlet">
-      <n id="1"/><n id="4"/><n id="5"/><n id="8"/>
-    </NodeSet>
-    <NodeSet name="outlet">
-      <n id="2"/><n id="3"/><n id="6"/><n id="7"/>
-    </NodeSet>
-    <NodeSet name="walls">
-      <n id="1"/><n id="2"/><n id="3"/><n id="4"/>
-      <n id="5"/><n id="6"/><n id="7"/><n id="8"/>
-    </NodeSet>
+    <NodeSet name="inlet">1,4,5,8</NodeSet>
+    <NodeSet name="outlet">2,3,6,7</NodeSet>
+    <NodeSet name="walls">1,2,3,4,5,6,7,8</NodeSet>
   </Mesh>
   <MeshDomains>
-    <SolidDomain name="Part1" mat="1"/>
+    <SolidDomain name="Part1" mat="Material1"/>
   </MeshDomains>
   <Boundary>
     <bc name="noslip" type="zero fluid velocity" node_set="walls">
@@ -88,6 +82,10 @@ def _fluid_3d_channel(params: dict) -> str:
       <var type="fluid velocity"/>
       <var type="effective fluid pressure"/>
     </plotfile>
+    <logfile>
+      <node_data data="nfvx;nfvy;nfvz" delim="," file="fluid_vel.csv"/>
+      <element_data data="fJ;fd;fp" delim="," file="fluid_elem.csv"/>
+    </logfile>
   </Output>
 </febio_spec>
 '''
@@ -115,33 +113,23 @@ KNOWLEDGE = {
         },
         "pitfalls": [
             (
-                "[Input] Module type MUST be 'fluid' (NOT 'solid' / "
-                "'biphasic'). The fluid solver uses velocity+dilatation "
-                "DOFs not displacement DOFs. Signal: input parser "
-                "rejects with `material type fluid not allowed in "
-                "module solid` or BC names with `prescribed "
-                "displacement` raise `invalid dof for fluid module`. "
-                "(Audit 2026-06-02.)"
+                "[Syntax] A `fluid` material needs <Module type=\"fluid\"/>, and the first thing that fails if you leave the module as solid is the SOLVER, not the material — so the message points somewhere you did not edit. "
+                "WRONG: <Module type=\"solid\"/> with <solver type=\"fluid\"> and a `fluid` material. "
+                "RIGHT: <Module type=\"fluid\"/> with <solver type=\"fluid\"><symmetric_stiffness>non-symmetric</symmetric_stiffness><linear_solver type=\"bicgstab\"/></solver>. "
+                "Signal: tag \"solver\" (line N) : `invalid value for attribute \"type\"` and `Reading file ...FAILED!`. The solver factory is module-scoped, so an out-of-module solver name is rejected before the <Material> section is ever read. Do not go looking for a material problem. (Executed 2026-08-05, FEBio 4.12.0.86045466d.)"
             ),
             (
-                "[Input] Velocity BCs are 'zero fluid velocity' / "
-                "'prescribed fluid velocity' with wx_dof / wy_dof / "
-                "wz_dof children (NOT x_dof). Signal: using "
-                "<x_dof>1</x_dof> on a fluid module raises `unknown "
-                "BC parameter x_dof` — fluid uses w-prefixed DOFs to "
-                "distinguish velocity from displacement. (Audit "
-                "2026-06-02.)"
+                "[Syntax] Fluid velocity DOFs are wx/wy/wz, and a solid-style name is a hard parse error indistinguishable from a made-up one. "
+                "WRONG: <bc type=\"zero fluid velocity\" node_set=\"walls\"><y_dof>1</y_dof></bc>. "
+                "RIGHT: <bc name=\"noslip\" type=\"zero fluid velocity\" node_set=\"walls\"><wy_dof>1</wy_dof><wz_dof>1</wz_dof></bc>. "
+                "Signal: tag \"y_dof\" (line N) : `unrecognized tag` and `Reading file ...FAILED!`. Executed against a deliberately invented name too: the message is byte-identical, so it tells you the tag is unknown and nothing more — it will not hint that you wanted the w prefix. (Executed 2026-08-05, FEBio 4.12.0.86045466d.)"
             ),
             (
-                "[Numerical] Bulk modulus k controls how strictly "
-                "near-incompressibility is enforced. Too low: large "
-                "spurious dilatation; too high: ill-conditioning and "
-                "Newton stalls. Rule of thumb: k > 100 * mu * "
-                "(u_max / L) to keep dilatation < 1%. Signal: "
-                "fluid velocity field has visible volume change "
-                "(div(v) != 0 by >1%), or solver reports cond > 1e14 "
-                "with the k that was too aggressive. (Audit "
-                "2026-06-02.)"
+                "[Numerical] The `fluid` material's <k> is a bulk modulus, and whether it controls anything depends on how you drive the problem. In a deck whose inlet and outlet PRESCRIBE the fluid dilatation, k does not set the volume ratio at all — the boundary condition does. "
+                "WRONG: tuning <k> to control compressibility in a dilatation-driven deck, or reading an unchanged volume ratio as evidence that k is ignored. "
+                "RIGHT: to make k matter, drive the flow with a velocity or a traction and leave the dilatation free; to control the volume ratio in a dilatation-driven deck, change the prescribed value. "
+                "Signal: none — measure it. The fluid log variables are NOT the solid ones: use <element_data data=\"fJ;fd;fp\"/> for volume ratio, dilatation and pressure, and <node_data data=\"nfvx;nfvy;nfvz\"/> for nodal velocity. The rejection is per RECORD TYPE, not per name: <element_data data=\"ef\"/> gives `\"ef\" is not a valid field variable name (line N)` as part of a READ FAILURE — the run prints `Reading file ...FAILED!` and stops there. AN EARLIER VERSION OF THIS ENTRY said that rejection arrives after a successful read; re-executed, it does not. By contrast <node_data data=\"ef\"/> is ACCEPTED and runs to `N O R M A L   T E R M I N A T I O N` — `ef` is the nodal dilatation DOF, and it is exactly what the shipped fluid_fsi and biphasic_fsi templates log. Check which record type you are writing into before concluding a name is invalid; an earlier version of this entry said \"ef\" is rejected without that qualification, which contradicts the templates in this same catalog. (Both directions executed 2026-08-05.) Executed as a k sweep over six decades on the shipped channel deck: fJ came back identical at every value, because the inlet and outlet prescribe it. "
+                "STILL UNVERIFIED: the size of the spurious dilatation k admits when the dilatation is genuinely free. Closing it needs a velocity- or traction-driven channel, which is a different deck from the one shipped here. Retained rather than softened. (Executed 2026-08-05, FEBio 4.12.0.86045466d.)"
             ),
             (
                 "[Numerical] CFL-like restriction on dt for "

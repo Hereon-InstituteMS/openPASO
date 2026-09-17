@@ -15,7 +15,7 @@
   "source_refs": [
     "branch layer-a/kratos-source-scanner — commit adding diff_catalog_vs_scan.py",
     "scripts/scan_results/diffs/dealii.json (before this encoding pass)",
-    "Open-FEM-Agent §3.2 / Table 1 (Syntax / Physics / Numerical / API / Integration)",
+    "the openPASO design paper §3.2 / Table 1 (Syntax / Physics / Numerical / API / Integration)",
     "task #33 — Encode discovered upstream capabilities into MCP catalog",
     "task #46 — Pitfall-DB-first merge discipline (every fix ships pitfall entry + post-mortem)",
     "deal.II step-8 (basic LE), step-18 (quasi-static), and the upstream `fe_rannacher_turek.h` for the locking-free choice"

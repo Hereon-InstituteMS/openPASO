@@ -54,7 +54,15 @@ KNOWLEDGE["_general"] = {
         "CellBasis: element interior assembly",
         "FacetBasis: boundary facet assembly",
         "InteriorFacetBasis: interior facet assembly (DG, error estimators)",
-        "MortarFacetBasis: mortar mesh assembly (domain decomposition)",
+        "skfem.supermeshing.intersect / elementwise_quadrature: "
+        "mortar / non-matching-interface assembly (domain "
+        "decomposition). CORRECTION 2026-08-03: there is NO "
+        "MortarFacetBasis in skfem 12.0.1 — it is absent from "
+        "skfem, skfem.assembly and every subpackage, and no name "
+        "containing 'Mortar' is exported anywhere. Build the "
+        "coupling quadrature with skfem.supermeshing.intersect("
+        "m1, m2) -> (supermesh, t1, t2) and feed it to two "
+        "FacetBasis objects via elementwise_quadrature.",
     ],
     "mesh_types": [
         "MeshTri: init_symmetric, init_sqsymmetric, init_tensor, init_circle, init_lshaped",
@@ -69,8 +77,14 @@ KNOWLEDGE["_general"] = {
         "Assembly-level control — you build the matrices, you choose the solver",
         "50+ element types including Argyris, Morley, Nedelec, Raviart-Thomas",
         "meshio integration for any mesh format",
-        "JAX-based automatic differentiation via skfem.autodiff",
-        "Mortar methods for domain decomposition (MortarFacetBasis)",
+        "JAX-based automatic differentiation via skfem.autodiff "
+        "(OPTIONAL — skfem does not depend on jax; on the openPASO "
+        "venv `import skfem.autodiff` raises ModuleNotFoundError, "
+        "checked 2026-08-03)",
+        "Mortar / non-matching interfaces for domain "
+        "decomposition via skfem.supermeshing (intersect, "
+        "elementwise_quadrature) — NOT via a MortarFacetBasis "
+        "class, which does not exist on 12.0.1",
         "Adaptive refinement: mesh.refined(element_indices)",
     ],
     "cell_basis_extras": {
@@ -97,13 +111,19 @@ KNOWLEDGE["_general"] = {
             "to elements). "
             "(2) basis.probes(x) / basis.interpolator(y) "
             "internally call _base_tensor_order which raises a "
-            "BARE NotImplementedError() (empty message) if the "
-            "element returns more than one component "
-            "(ElementComposite or ElementVector). Users on "
-            "Taylor-Hood / Mini / vector-valued bases hit a "
-            "naked NotImplementedError with no description; "
-            "they need to split via basis.split_bases() first "
-            "and probe/interpolate the scalar sub-bases. "
+            "BARE NotImplementedError() (empty message) — but "
+            "ONLY for ElementComposite, NOT for ElementVector, "
+            "contrary to the prior catalog text. Re-measured "
+            "2026-08-03 on skfem 12.0.1, MeshTri().refined(2): "
+            "Basis(m, ElementVector(ElementTriP1())).probes("
+            "[[0.5],[0.5]]) returns a coo_matrix of shape "
+            "(2, 50) and .interpolator(...) returns a callable "
+            "whose result has shape (2, 1) — both work. "
+            "Basis(m, ElementComposite(ElementTriP2(), "
+            "ElementTriP1())).probes(...) is the one that raises "
+            "the naked NotImplementedError(''). For composite "
+            "(Taylor-Hood / Mini) bases split first and "
+            "probe/interpolate the scalar sub-bases. "
             "(3) basis.refinterp(y, nrefs=K, Nrefs=N) has a "
             "BACKCOMPAT shim: if both nrefs AND Nrefs are "
             "passed, Nrefs SILENTLY wins ("
@@ -136,7 +156,27 @@ KNOWLEDGE["_general"] = {
                         "INDEPENDENT; use this for standard "
                         "Taylor-Hood / Mini-style mixed "
                         "formulations where velocity and "
-                        "pressure have separate DOF tables."),
+                        "pressure have separate DOF tables. "
+                        "GAP FILLED 2026-08-03: BOTH operators "
+                        "require the two bases to carry the SAME "
+                        "number of quadrature points, which the "
+                        "defaults do NOT give you for the very "
+                        "case this is advertised for. On "
+                        "MeshTri().refined(2), "
+                        "Basis(m, ElementTriP2()) * "
+                        "Basis(m, ElementTriP1()) raises "
+                        "ValueError('Each Basis must have the "
+                        "same number of quadrature points.') "
+                        "because the default intorder is "
+                        "2*elem.maxdeg (P1 -> 3 points, P2 -> 6). "
+                        "Pass a matching explicit intorder to "
+                        "both, e.g. "
+                        "Basis(m, ElementTriP2(), intorder=4) * "
+                        "Basis(m, ElementTriP1(), intorder=4), "
+                        "which then gives a CompositeBasis with "
+                        "N = 106 = 81 + 25. (Verified "
+                        "empirically 2026-08-03 on skfem "
+                        "12.0.1.)"),
         },
         "Signal": (
             "[API] Five less-publicized sharp edges in "
@@ -367,10 +407,24 @@ KNOWLEDGE["_general"] = {
             "NonlinearForm (subclass of Form whose .assemble "
             "linearizes a user form at a point x via "
             "jax.linearize + jax.jvp, returning the Jacobian K "
-            "and the (negated) residual F)."),
+            "and the (negated) residual F). "
+            "AVAILABILITY (checked 2026-08-03 on the openPASO "
+            "venv): jax is NOT installed, so "
+            "`import skfem.autodiff` raises "
+            "ModuleNotFoundError(\"No module named 'jax'\") at "
+            "skfem/autodiff/__init__.py line 5 "
+            "(`from jax import jvp, linearize, config`). skfem "
+            "does not declare jax as a dependency, so this whole "
+            "block — including the det() bug in item (5) below — "
+            "is UNVERIFIABLE on this install and is retained "
+            "from a file walk only. Do not offer skfem.autodiff "
+            "to a user without first checking "
+            "`import jax` succeeds. "),
         "Signal": (
             "[Integration]+[API] Four under-publicized edges in "
-            "skfem.autodiff: "
+            "skfem.autodiff (all from a file walk — see the "
+            "AVAILABILITY note above, none of them are "
+            "re-executable on this install): "
             "(1) IMPORT SIDE EFFECT: `import skfem.autodiff` "
             "unconditionally executes "
             "`jax.config.update(\"jax_enable_x64\", True)` at "
@@ -648,9 +702,20 @@ KNOWLEDGE["_general"] = {
             "passing the boundary element EXPLICITLY via "
             "FacetBasis(basis_mesh, cell_elem, "
             "facet_quadrature=..., facets=..., "
-            "**{'elem': boundary_elem}). Users who pass only "
-            "the cell element get a KeyError from "
-            "BOUNDARY_ELEMENT_MAP[ElementTriP3] on construction. "
+            "**{'elem': boundary_elem}). CORRECTION 2026-08-03: "
+            "passing only the cell element does NOT raise a "
+            "KeyError. FacetBasis falls back gracefully — "
+            "measured on skfem 12.0.1, MeshTri().refined(2): "
+            "FacetBasis(m, ElementTriP3()) constructs with "
+            "nelems=16 and Nbfun=10, and FacetBasis also "
+            "constructs cleanly for ElementTriP4, "
+            "ElementTriBDM1, ElementTriRT1 and (on MeshTet) "
+            "ElementTetN1 — all of which are absent from the "
+            "13-entry BOUNDARY_ELEMENT_MAP. The map is a "
+            "fast-path table, not a gate; the explicit-elem "
+            "escape hatch is still the way to control which "
+            "boundary element is used, but the 'KeyError on "
+            "construction' signal is stale. "
             "Source: skfem/element/__init__.py lines 45-59."
         ),
         "Signal": (

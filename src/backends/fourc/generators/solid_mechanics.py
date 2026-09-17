@@ -28,29 +28,121 @@ class SolidMechanicsGenerator(BaseGenerator):
     def get_knowledge(self) -> dict[str, Any]:
         return {
             "description": (
-                "The solid mechanics module solves quasi-static structural "
-                "problems (no inertia effects) using DYNAMICTYPE: Statics.  "
-                "Supports small-deformation linear elasticity (KINEM: linear, "
-                "MAXITER: 1) and large-deformation nonlinear analysis "
-                "(KINEM: nonlinear, Newton-Raphson iteration).  "
-                "The PROBLEM TYPE is 'Structure', the dynamics section is "
-                "'STRUCTURAL DYNAMIC', and geometry goes into "
-                "'STRUCTURE GEOMETRY'.  In 4C 2026.3 BOTH 2D "
-                "and 3D problems use the SOLID eletype "
-                "(e.g. 'SOLID QUAD4' in 2D with "
-                "'PLANE_ASSUMPTION plane_strain' / 'plane_stress'; "
-                "'SOLID HEX8' in 3D, no PLANE_ASSUMPTION). The "
-                "legacy 'WALL' / 'THICK' / 'STRESS_STRAIN' "
-                "keywords were renamed to 'SOLID' / 'THICKNESS' "
-                "/ 'PLANE_ASSUMPTION' — writing the legacy form "
-                "raises 'Unknown type WALL of finite element'."
+                "Quasi-static structural mechanics.\n"
+                "  PROBLEMTYPE:      Structure\n"
+                "  control section:  STRUCTURAL DYNAMIC "
+                "(DYNAMICTYPE: Statics for no inertia)\n"
+                "  element section:  STRUCTURE ELEMENTS\n"
+                "  3D element line:  <eid> SOLID HEX8 <8 nodes> MAT <m> "
+                "KINEM linear|nonlinear\n"
+                "  2D element line:  VERSION-DEPENDENT, see the "
+                "'2d_element_type' key below - the two spellings share no "
+                "keywords\n"
+                "  material:         MAT_Struct_StVenantKirchhoff with "
+                "YOUNG, NUE, DENS (DENS required even under Statics)\n"
+                "  convergence:      TOLDISP (update norm) + TOLRES "
+                "(residual norm), both must be met\n"
+                "Use 'minimal_working_input_3d' below - it is a complete "
+                "deck that runs as written."
             ),
+            "2d_element_type": (
+                "WHICH element type owns 2D structural cells is "
+                "VERSION-DEPENDENT and the two spellings share no keywords, "
+                "so they cannot be mixed:\n"
+                "  WALL  QUAD4 <n..> MAT m KINEM k EAS e THICK t "
+                "STRESS_STRAIN s GP a b\n"
+                "  SOLID QUAD4 <n..> MAT m KINEM k THICKNESS t "
+                "<that build's plane-assumption key>\n"
+                "(the second line is what a build that gives SOLID the 2D "
+                "cells looks like; the plane-assumption key is named by that "
+                "build's own grammar dump. There is no PLANE_ASSUMPTION key "
+                "in the 4C measured here -- it occurs in zero files of src/ "
+                "and zero of the 1978 test decks, and this build's SOLID owns "
+                "only HEX/TET/WEDGE/PYRAMID, so 2D is WALL's.)\n"
+                "Decide it, do not guess: `4C --parameters` lists, per "
+                "element type, the cell types it owns. If SOLID's list is "
+                "3D-only (HEX/TET/WEDGE/PYRAMID), 2D belongs to WALL and "
+                "'SOLID QUAD4' aborts with \"Element 'SOLID' does not seem "
+                "to know cell type 'quad4'.\"; if SOLID lists QUAD4/TRI3 "
+                "then 'WALL' aborts with \"Unknown type 'WALL' of finite "
+                "element\". On the build this catalogue was verified "
+                "against, WALL owns 2D and needs all six of its keys."
+            ),
+            "minimal_working_input_3d": """\
+# Complete 3D cantilever. The mesh is GENERATED - not one node coordinate.
+# Runs as written: exit 0, one static step, VTU written.
+PROBLEM TYPE:
+  PROBLEMTYPE: "Structure"
+STRUCTURE DOMAIN:                        # box generator (3D cells only)
+  bottom_corner_point: [0.0, 0.0, 0.0]   # REQUIRED
+  top_corner_point: [10.0, 1.0, 1.0]     # REQUIRED
+  subdivisions: [10, 2, 2]               # REQUIRED
+  elements:                              # REQUIRED
+    SOLID:
+      HEX8:
+        MAT: 1
+        KINEM: nonlinear
+STRUCTURAL DYNAMIC:
+  DYNAMICTYPE: "Statics"
+  TIMESTEP: 1.0
+  NUMSTEP: 1
+  MAXTIME: 1.0
+  TOLDISP: 1.0e-10
+  TOLRES: 1.0e-09
+  MAXITER: 30
+  LINEAR_SOLVER: 1
+SOLVER 1:
+  SOLVER: "UMFPACK"
+  NAME: "Structure_Solver"
+MATERIALS:
+  - MAT: 1
+    MAT_Struct_StVenantKirchhoff:
+      YOUNG: 1000.0
+      NUE: 0.3            # validated to lie in [-1, 0.5)
+      DENS: 1.0           # REQUIRED even for Statics
+FUNCT1:
+  - SYMBOLIC_FUNCTION_OF_SPACE_TIME: "t"
+DESIGN SURF DIRICH CONDITIONS:
+  - E: 1
+    NUMDOF: 3
+    ONOFF: [1, 1, 1]
+    VAL: [0.0, 0.0, 0.0]
+    FUNCT: [0, 0, 0]
+DESIGN SURF NEUMANN CONDITIONS:
+  - E: 2
+    NUMDOF: 3
+    ONOFF: [0, 0, 1]
+    VAL: [0.0, 0.0, -1.0]
+    FUNCT: [0, 0, 1]
+    TYPE: "Live"
+DSURF-NODE TOPOLOGY:      # symbolic faces of the generated box
+  - "SIDE structure x- DSURFACE 1"
+  - "SIDE structure x+ DSURFACE 2"
+IO/RUNTIME VTK OUTPUT:    # OPTIONAL - drop both VTK sections and the deck
+  INTERVAL_STEPS: 1       # still runs, it just writes no .vtu. But for .vtu
+IO/RUNTIME VTK OUTPUT/STRUCTURE:   # you need BOTH sections AND at least one
+  OUTPUT_STRUCTURE: true           # field flag; any one of the three alone
+  DISPLACEMENT: true               # writes nothing.
+RESULT DESCRIPTION:
+  - STRUCTURE:
+      DIS: "structure"
+      NODE: 1
+      QUANTITY: "dispz"
+      VALUE: 0.0
+      TOLERANCE: 1.0e30   # record mode: abs(diff) prints the true value
+""",
             "required_sections": [
                 "PROBLEM TYPE",
                 "STRUCTURAL DYNAMIC",
                 "SOLVER 1",
                 "MATERIALS",
-                "STRUCTURE GEOMETRY",
+                # Plus ONE mesh route - these three are alternatives, not
+                # three requirements. Only the middle one needs a file.
+                #   inline   : NODE COORDS + STRUCTURE ELEMENTS
+                #              + D*-NODE TOPOLOGY
+                #   Exodus   : STRUCTURE GEOMETRY (FILE + ELEMENT_BLOCKS)
+                #   generated: STRUCTURE DOMAIN (HEX/WEDGE cells only)
+                "one of: NODE COORDS + STRUCTURE ELEMENTS | STRUCTURE GEOMETRY | STRUCTURE DOMAIN",
             ],
             "materials": {
                 "MAT_Struct_StVenantKirchhoff": {
@@ -192,9 +284,10 @@ class SolidMechanicsGenerator(BaseGenerator):
                 ),
                 "MAXITER": (
                     "Maximum Newton-Raphson iterations per load step.  "
-                    "Set MAXITER: 1 for truly linear problems (linear material + "
-                    "KINEM: linear) to avoid unnecessary iterations.  "
-                    "Typical: 20--50 for nonlinear problems."
+                    "NEVER set MAXITER: 1, not even for a linear problem: "
+                    "exhausting MAXITER is an ABORT, not an early exit.  "
+                    "Typical: 20--50; there is no cost to a generous cap "
+                    "because Newton stops at the tolerance, not at the cap."
                 ),
                 "TOLDISP": "Displacement convergence tolerance (typical: 1e-6 to 1e-10).",
                 "TOLRES": "Residual force convergence tolerance (typical: 1e-6 to 1e-10).",
@@ -341,90 +434,173 @@ class SolidMechanicsGenerator(BaseGenerator):
                 (
                     "[Numerical] KINEM must match the physical assumption.  "
                     "Using 'KINEM: linear' with a hyperelastic material "
-                    "(Neo-Hookean, Mooney-Rivlin) is WRONG and produces "
-                    "meaningless results. Signal: deflection / strain "
-                    "results stay linear with load and disagree sharply "
-                    "with the equivalent KINEM: nonlinear run for the same "
-                    "geometry — typical divergence ~40% at large strain. "
-                    "(Audit 2026-06-02.)"
+                    "(Neo-Hookean, Mooney-Rivlin) is WRONG, and it is "
+                    "COMPLETELY SILENT: the deck parses, converges, exits 0 "
+                    "and returns a substantially larger deflection than the "
+                    "same deck under KINEM: nonlinear. 4C emits no warning and "
+                    "never prints the string 'kinem' anywhere in the log, so "
+                    "there is nothing to grep for. Signal: the only way to see "
+                    "it is to run both and compare, or to notice that the "
+                    "response scales far more nearly with load than a "
+                    "hyperelastic material at that strain should. Set KINEM "
+                    "deliberately on every element line. (Audit 2026-06-02; "
+                    "the silence confirmed by execution 2026-08-06.)"
                 ),
                 (
-                    "[Performance] For truly linear problems set MAXITER: 1. "
-                    " 4C will waste time iterating if MAXITER > 1 because "
-                    "the solution is already converged after one step. "
-                    "Signal: NOX convergence log shows residual already "
-                    "below TOLRES at iteration 1 yet a second Newton step "
-                    "is taken on every time step. (Audit 2026-06-02.)"
+                    "[Numerical] NEVER set MAXITER = 1, not even for a linear "
+                    "problem. Exhausting MAXITER is an ABORT, not an early "
+                    "exit: the iteration counter reaches 1 before the "
+                    "convergence test is credited, so MAXITER: 1 kills a "
+                    "perfectly converged linear deck. Leave the default or "
+                    "set 10-30. Signal: NOX's final status block reports the "
+                    "iteration test as Failed with the number of iterations "
+                    "1 shown as less than the required 1 -- that block is "
+                    "printed by Trilinos NOX, not by 4C, so it is in no 4C "
+                    "source file -- then a PROC 0 ERROR from "
+                    "solver_nonlin_nox/4C_solver_nonlin_nox_problem.cpp and "
+                    "exit 1. (An earlier version of this entry RECOMMENDED "
+                    "MAXITER = 1 here. Falsified by execution 2026-08-03 on "
+                    "the deployed 4C: the served minimal_working_input_3d deck "
+                    "with MAXITER: 1 aborts with exit 1 under BOTH "
+                    "KINEM linear and KINEM nonlinear, while the same deck "
+                    "with MAXITER: 30 finishes normally with exit 0.)"
                 ),
                 (
-                    "[Input] DENS (density) is only needed for dynamics or "
-                    "body-force loads (gravity).  For quasi-static problems "
-                    "without gravity it can be omitted, but it is MANDATORY "
-                    "for structural dynamics. Signal: a transient run with "
-                    "DYNAMICTYPE: GenAlpha aborts with `mass matrix needs "
-                    "DENS in material X` or produces all-zero displacements "
-                    "with no inertia effect. (Audit 2026-06-02.)"
+                    "[Input] DENS is a REQUIRED key of "
+                    "MAT_Struct_StVenantKirchhoff and cannot be omitted — an "
+                    "earlier version of this entry said it could be dropped "
+                    "for quasi-static problems, and that is wrong: leaving the "
+                    "line out aborts at parse with 'Could not match this "
+                    "input' from core/io/src/4C_io_input_spec_builders.cpp. "
+                    "What is true is that its VALUE is inert under Statics "
+                    "without gravity: DENS 0.0 and DENS 1.0 give the same "
+                    "static answer to the last bit. Under a transient scheme "
+                    "the same DENS 0.0 is fatal. Signal: a transient run with "
+                    "DYNAMICTYPE: GenAlpha and DENS 0 aborts with "
+                    "\"You are about to invert a singular matrix!\" from "
+                    "structure_new/4C_structure_new_integrator.cpp and exit 1 "
+                    "-- the message names the linear algebra, NOT the density, "
+                    "so check DENS first when you see it. "
+                    "(An earlier version of this entry quoted "
+                    "`mass matrix needs DENS in material X`. That string does "
+                    "not occur anywhere in the 4C binary; grepping for it "
+                    "finds nothing. Corrected by execution 2026-08-03: the "
+                    "served 3D deck switched to GenAlpha with DENS: 0.0 "
+                    "produced the singular-matrix message above.)"
                 ),
                 (
-                    "[Numerical] HEX8 elements suffer from "
-                    "volumetric and shear locking in "
-                    "bending-dominated or nearly-"
-                    "incompressible problems. Use TECH: "
-                    "eas_full or TECH: fbar on the SOLID "
-                    "MAT_ElastHyper element, or use "
-                    "higher-order elements (HEX27, TET10). "
-                    "Signal: deflection in a cantilever / "
-                    "plate-bending benchmark (with "
-                    "PROBLEMTYPE: Structure and "
-                    "STRUCTURAL DYNAMIC: Statics) is much "
-                    "smaller than analytical (often "
-                    "10-100x too stiff), or Poisson ratio "
-                    "nu approaching 0.5 makes the response "
-                    "approach rigid. (Audit 2026-06-02.)"
+                    "[Numerical] HEX8 elements lock in two ways — BENDING and "
+                    "VOLUMETRIC — and the cures are NOT symmetric. On the "
+                    "SOLID element line, TECH: eas_full (or eas_mild) "
+                    "addresses BOTH, while TECH: fbar addresses only the "
+                    "volumetric one. So fbar on a slender bending problem "
+                    "leaves it far too stiff, but eas_full on a "
+                    "nearly-incompressible problem DOES cure it: EAS enhances "
+                    "the strain field, volumetric modes included. Measured on "
+                    "a 10x1x1 HEX8 cantilever, L/h = 20, tip traction, against "
+                    "the -1.586797e-01 reference: at NUE 0.499 with nonlinear "
+                    "kinematics, plain gives -2.314e-02 (15% of it), fbar "
+                    "-9.133e-02 (58%), eas_full -1.5658e-01 (99%); at NUE "
+                    "0.4999 with KINEM linear, plain gives -9.321e-03 (6%) "
+                    "while eas_full gives -1.5654e-01 (99%) and fbar recovers "
+                    "the reference outright. Pick eas_* when bending is "
+                    "present or when you are unsure; pick fbar when the "
+                    "problem is purely volumetric. Higher-order cells (HEX27, "
+                    "TET10) are the other route. TECH is an ENUM — "
+                    "none, fbar, eas_mild, eas_full, shell_ans, shell_eas, "
+                    "shell_eas_ans — so a plausible abbreviation like 'eas' is "
+                    "rejected with \"Could not parse value 'eas' as an enum "
+                    "constant of type 'ElementTechnology'.\" rather than "
+                    "silently ignored. Signal: a cantilever or plate-bending "
+                    "deck (PROBLEMTYPE: Structure, DYNAMICTYPE: Statics) whose "
+                    "deflection is a small fraction of the analytical value, "
+                    "or a response that stiffens sharply as NUE approaches "
+                    "0.5. (Audit 2026-06-02. This entry previously said "
+                    "eas_* 'leaves the volumetric part untouched' and carried "
+                    "a 'confirmed by execution 2026-08-06' stamp; the fixture "
+                    "behind that stamp has six arms and none of them ran EAS "
+                    "at high NUE, so the claim's second half had never been "
+                    "executed. All six numbers above measured 2026-08-30 on "
+                    "4C 2026.2.0-dev.)"
                 ),
                 (
-                    "[API] In 4C 2026.3 BOTH 2D and 3D "
-                    "structural elements use the SOLID eletype "
-                    "factory. 2D elements (SOLID QUAD4 / TRI3 "
-                    "etc.) require THICKNESS and "
-                    "PLANE_ASSUMPTION: 'THICKNESS 1.0 "
-                    "PLANE_ASSUMPTION plane_strain' or "
-                    "'plane_stress'. Signal: writing the "
-                    "legacy 'WALL' category + 'THICK' / "
-                    "'STRESS_STRAIN' keywords raises 'Unknown "
-                    "type WALL of finite element' from "
-                    "parobjectfactory.cpp:153 at problem setup. "
-                    "In ELEMENT_BLOCKS with Exodus meshes use "
-                    "the SOLID: sub-key for both 2D and 3D. "
-                    "(Audit 2026-06-02.)"
+                    "[API] WHICH element type owns 2D structural "
+                    "cells is VERSION-DEPENDENT, and the two "
+                    "spellings share no keywords, so you cannot "
+                    "hedge by writing both:\n"
+                    "  WALL  QUAD4 <n..> MAT m KINEM k EAS e "
+                    "THICK t STRESS_STRAIN s GP a b\n"
+                    "  SOLID QUAD4 <n..> MAT m KINEM k "
+                    "THICKNESS t <plane-assumption key>\n"
+                    "Determine which one the installed build "
+                    "registers BEFORE writing anything: "
+                    "`4C --parameters` lists, per element type, "
+                    "the cell types it owns. If SOLID's list is "
+                    "3D-only (HEX/TET/WEDGE/PYRAMID), 2D is "
+                    "WALL's; if SOLID lists QUAD4/TRI3, 2D is "
+                    "SOLID's. 3D is always SOLID and takes no "
+                    "thickness or plane-assumption key at all. On "
+                    "the build measured here SOLID owns only "
+                    "HEX/TET/WEDGE/PYRAMID, so 2D is WALL's and "
+                    "no plane-assumption key exists anywhere in "
+                    "the source tree. Signal: the "
+                    "element type this build does not register "
+                    "raises \"Unknown type 'WALL' of finite "
+                    "element\" from "
+                    "core/comm/src/4C_comm_parobjectfactory.cpp "
+                    "(note the QUOTES around the type name — the "
+                    "binary's template is \"Unknown type '{}' of "
+                    "finite element\", so an unquoted grep finds "
+                    "nothing), while the right element type with "
+                    "the wrong cell type raises \"Element 'SOLID' "
+                    "does not seem to know cell type 'quad4'.\" "
+                    "with the cell type echoed in lowercase. In "
+                    "ELEMENT_BLOCKS with Exodus meshes the "
+                    "sub-key is whichever element type won. "
+                    "(Verified by execution 2026-08-03: on 4C "
+                    "2026.2.0-dev WALL owns 2D, and the Tier-2 "
+                    "fixture structural_2d_solid_quad4_not_wall "
+                    "probes both spellings rather than "
+                    "hard-coding either.)"
                 ),
                 (
-                    "[Input] Neumann conditions for structures "
-                    "have NUMDOF: 6 (3 forces + 3 moments in "
-                    "3D) or NUMDOF: 6 in 2D (2 forces + 1 "
-                    "moment + 3 unused). The first entries "
-                    "are force components. Signal: NUMDOF: 3 "
-                    "on a structural Neumann silently drops "
-                    "the moment components — applied "
-                    "concentrated moments are zero, but no "
-                    "error message; the displacement field "
-                    "looks like a force-only result. Use "
-                    "NUMDOF: 6 even when only forces are "
-                    "needed and zero the moment slots. "
-                    "(Audit 2026-06-02.)"
+                    "[Input] A Neumann condition's NUMDOF must match the "
+                    "number of dofs the ELEMENT carries, and for 3D continuum "
+                    "SOLID that is THREE, not six. An earlier version of this "
+                    "entry told you to always write NUMDOF: 6 and warned that "
+                    "NUMDOF: 3 'silently drops the moment components'. Nothing "
+                    "is dropped silently: on SOLID, NUMDOF: 3 runs; NUMDOF: 6 "
+                    "with the last three slots zeroed also runs and gives the "
+                    "identical answer, so the extra slots buy nothing; and "
+                    "NUMDOF: 6 with a moment slot switched ON aborts. Signal: "
+                    "'Number of Dimensions in Neumann_Evaluation is 3. Further "
+                    "DoFs are not considered.' from "
+                    "solid_3D_ele/4C_solid_3D_ele_surface_evaluate.cpp, exit "
+                    "1. Moment loads need elements with rotational dofs — "
+                    "SHELL7P conditions use NUMDOF: 6, BEAM3R ones NUMDOF: 9. "
+                    "(Falsified and corrected by execution 2026-08-06.)"
                 ),
                 (
-                    "[Input] INT_STRATEGY: Standard is the "
-                    "default and works for most problems. Only "
-                    "change to 'Old' for legacy compatibility. "
-                    "Signal: explicitly setting INT_STRATEGY: "
-                    "Old in a new problem can disable modern "
-                    "FSI hooks or contact accelerations — the "
-                    "simulation runs but features added since "
-                    "the rewrite (e.g. specific contact "
-                    "formulations) are unavailable. Default "
-                    "(omit) is the safe choice. (Audit "
-                    "2026-06-02.)"
+                    "[Input] INT_STRATEGY: Standard is the default; leave "
+                    "it alone. Setting 'Old' does not merely relax a "
+                    "compatibility flag, it swaps the entire nonlinear solver "
+                    "stack for the legacy integrator, and on a plain "
+                    "structural deck it does so without changing the answer — "
+                    "same result to the last bit, exit 0, no warning — so "
+                    "nothing in the numbers tells you. Signal: the log shape "
+                    "changes completely. Standard prints NOX blocks headed "
+                    "'-- Status Test Results --' and ends each step with "
+                    "'nlniter N'; Old prints none of them and ends with "
+                    "'numiter N', preceded by the legacy banner \"Structural "
+                    "predictor for field 'structure' ConstDis yields absolute "
+                    "res-norm\". Everything NOX-side (status-test XML, line "
+                    "search, custom convergence combinations) is silently "
+                    "unavailable. Coupled problems are less forgiving: an SSI "
+                    "run asserts with 'Only the new solid time integration is "
+                    "supported for SSI problems. Set `INT_STRATEGY` to "
+                    "`Standard`!' from ssi/4C_ssi_dyn.cpp. (Audit 2026-06-02; "
+                    "mechanism and signals established by execution "
+                    "2026-08-06.)"
                 ),
             ],
             "typical_experiments": [
@@ -432,9 +608,11 @@ class SolidMechanicsGenerator(BaseGenerator):
                     "name": "cantilever_2d",
                     "description": (
                         "2D cantilever beam under tip load.  Fixed left edge, "
-                        "point or line load on right edge.  Uses SOLID QUAD4 "
-                        "elements with plane_strain, MAT_Struct_StVenantKirchhoff, "
-                        "KINEM: linear, MAXITER: 1."
+                        "point or line load on right edge.  Uses QUAD4 cells of "
+                        "whichever 2D element type this build registers (see the "
+                        "'2d_element_type' key -- it is version-dependent) with "
+                        "plane_strain, MAT_Struct_StVenantKirchhoff, "
+                        "KINEM: linear, MAXITER: 20."
                     ),
                     "template_variant": "linear_2d",
                 },

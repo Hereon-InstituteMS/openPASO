@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from core.user_dirs import desktop_dirs
+
 
 _REPO = Path(__file__).resolve().parent.parent.parent
 _CACHE_PATH = _REPO / "data" / "source_discovery_cache.json"
@@ -189,13 +191,13 @@ _PRUNE_DIRS = frozenset([
 ])
 
 # Default scan roots (in priority order). User can extend via
-# config file (see source_config.py) or OFA_EXTRA_SOURCE_PATHS env var.
+# config file (see source_config.py) or OPENPASO_EXTRA_SOURCE_PATHS env var (OFA_EXTRA_SOURCE_PATHS still works).
 def _default_roots() -> list[Path]:
     home = Path.home()
     candidates = [
         # Auto-cloned trees live here — highest priority.
         _REPO / "upstream_sources",
-        home / "Schreibtisch",
+        *desktop_dirs(),
         home / "Documents",
         home / "projects",
         home / "src",
@@ -278,8 +280,8 @@ def _check_binary(spec: BackendSpec) -> tuple[bool, str]:
         if repo_venv.exists():
             pythons.append(str(repo_venv))
         home = Path.home()
-        for env in ("ofa-fenicsx", "ofa-dealii", "ofa-dune", "ofa-ngsolve",
-                    "ofa-kratos", "ofa-febio"):
+        for env in (*(f"{p}-{b}" for p in ("openpaso", "ofa")
+                      for b in ("fenicsx", "dealii", "dune", "ngsolve", "kratos", "febio")),):
             p = home / f"miniconda3/envs/{env}/bin/python"
             if p.exists():
                 pythons.append(str(p))

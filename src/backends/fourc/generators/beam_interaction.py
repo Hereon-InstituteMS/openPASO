@@ -39,10 +39,16 @@ class BeamInteractionGenerator(BaseGenerator):
                 "with additional BEAM INTERACTION sections.  The dynamics "
                 "section is STRUCTURAL DYNAMIC.  Beams use BEAM3R or "
                 "BEAM3EB elements; solids use standard SOLID HEX8/TET4.  "
-                "The BEAM INTERACTION section configures the contact "
-                "algorithm, penalty parameters, search strategy, and "
-                "coupling type (contact, meshtying, or tied).  A "
-                "BINNING STRATEGY section is typically required for "
+                "Beams and solids live in the SAME structure "
+                "discretisation, so both are declared in STRUCTURE "
+                "ELEMENTS (legacy) or in one STRUCTURE GEOMETRY / "
+                "ELEMENT_BLOCKS list -- there is no separate beam mesh "
+                "section.  The top-level BEAM INTERACTION section only "
+                "accepts REPARTITIONSTRATEGY and SEARCH_STRATEGY; the "
+                "contact algorithm and its penalty parameters live in the "
+                "sub-sections (BEAM INTERACTION/BEAM TO BEAM CONTACT, "
+                "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING, ...).  "
+                "A BINNING STRATEGY section is typically required for "
                 "efficient spatial search."
             ),
             "required_sections": [
@@ -56,9 +62,15 @@ class BeamInteractionGenerator(BaseGenerator):
             ],
             "optional_sections": [
                 "BEAM INTERACTION/BEAM TO BEAM CONTACT",
+                "BEAM INTERACTION/BEAM TO BEAM CONTACT CONDITIONS",
+                "BEAM INTERACTION/BEAM TO BEAM CONTACT/RUNTIME VTK OUTPUT",
                 "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING",
+                "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING LINE",
+                "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING VOLUME",
+                "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING/RUNTIME VTK OUTPUT",
                 "BEAM INTERACTION/BEAM TO SOLID SURFACE CONTACT",
                 "BEAM INTERACTION/BEAM TO SOLID SURFACE MESHTYING",
+                "BEAM INTERACTION/BEAM TO SOLID SURFACE/RUNTIME VTK OUTPUT",
                 "STRUCTURAL DYNAMIC/GENALPHA",
                 "IO/RUNTIME VTK OUTPUT",
                 "IO/RUNTIME VTK OUTPUT/BEAMS",
@@ -137,25 +149,69 @@ class BeamInteractionGenerator(BaseGenerator):
                 },
             },
             "beam_interaction_parameters": {
-                "STRATEGY": (
-                    "Interaction strategy: 'beam_to_beam_contact', "
-                    "'beam_to_solid_volume_meshtying', "
-                    "'beam_to_solid_surface_contact', "
-                    "'beam_to_solid_surface_meshtying'."
+                "BEAM INTERACTION/REPARTITIONSTRATEGY": (
+                    "'Adaptive' (default) or 'Everydt'.  How often the "
+                    "beam discretisation is repartitioned.  These two "
+                    "plus SEARCH_STRATEGY are the ONLY keys the "
+                    "top-level BEAM INTERACTION section accepts."
                 ),
-                "PENALTY_PARAMETER": (
-                    "Penalty stiffness for contact enforcement.  "
-                    "Controls penetration: larger values reduce "
-                    "penetration but worsen conditioning."
+                "BEAM INTERACTION/SEARCH_STRATEGY": (
+                    "'bruteforce_with_binning' (default) or "
+                    "'bounding_volume_hierarchy'.  There is no search "
+                    "RADIUS here -- the search extent comes from "
+                    "BINNING STRATEGY/BIN_SIZE_LOWER_BOUND."
                 ),
-                "SEARCH_RADIUS": (
-                    "Search radius for detecting potential beam-beam "
-                    "or beam-solid interaction pairs.  Must exceed the "
-                    "expected gap + beam radius."
+                "BEAM INTERACTION/BEAM TO BEAM CONTACT/BEAMS_BTBPENALTYPARAM": (
+                    "Penalty parameter for beam-to-beam POINT contact.  "
+                    "Larger values reduce penetration but worsen "
+                    "conditioning.  Must be >= 0."
                 ),
-                "COUPLING_TYPE": (
-                    "For beam-to-solid: 'consistent' (mortar-like) or "
-                    "'penalty' (simpler, less accurate)."
+                "BEAM INTERACTION/BEAM TO BEAM CONTACT/BEAMS_BTBLINEPENALTYPARAM": (
+                    "Penalty parameter per unit length for beam-to-beam "
+                    "LINE contact (small-angle contact).  Required and "
+                    "must be >= 0 whenever BEAMS_SEGCON is true."
+                ),
+                "BEAM INTERACTION/BEAM TO BEAM CONTACT/BEAMS_SEGCON": (
+                    "All-angle-beam contact with subsegment generation.  "
+                    "4C currently REQUIRES this to be true: with false "
+                    "it aborts 'only all-angle-beam contact "
+                    "(BEAMS_SEGCON) formulation tested yet in new beam "
+                    "interaction framework!'.  Setting it true also "
+                    "makes BEAMS_PERPSHIFTANGLE1/2, "
+                    "BEAMS_PARSHIFTANGLE1/2 and BEAMS_SEGANGLE "
+                    "mandatory (all in degrees, 0..90, and "
+                    "PARSHIFTANGLE2 > PERPSHIFTANGLE1)."
+                ),
+                "BEAM INTERACTION/BEAM TO BEAM CONTACT/BEAMS_PENALTYLAW": (
+                    "'LinPen' (default), 'QuadPen', 'LinNegQuadPen', "
+                    "'LinPosQuadPen', 'LinPosCubPen', "
+                    "'LinPosDoubleQuadPen', 'LinPosExpPen'.  Anything "
+                    "other than LinPen/QuadPen additionally requires "
+                    "BEAMS_PENREGPARAM_G0/_F0/_C0."
+                ),
+                "BEAM INTERACTION/BEAM TO BEAM CONTACT/BEAMS_GAPSHIFTPARAM": (
+                    "Shift of the penalty law (the real name of what is "
+                    "loosely called a gap shift).  Only permitted for "
+                    "BEAMS_PENALTYLAW: LinPosQuadPen -- a non-zero value "
+                    "with any other law aborts with 'BEAMS_GAPSHIFTPARAM "
+                    "only possible for penalty law LinPosQuadPen!'."
+                ),
+                "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING/CONTACT_DISCRETIZATION": (
+                    "'none' (default, i.e. inactive), "
+                    "'gauss_point_to_segment', 'gauss_point_cross_section', "
+                    "'mortar', 'mortar_cross_section'.  Setting this to "
+                    "anything but 'none' is what ACTIVATES the "
+                    "beam-to-solid volume meshtying model."
+                ),
+                "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING/CONSTRAINT_STRATEGY": (
+                    "'none', 'penalty' or 'lagrange'.  This is the "
+                    "beam-to-solid analogue of a 'coupling type'; there "
+                    "is no COUPLING_TYPE key in the VOLUME meshtying "
+                    "section (only the SURFACE meshtying section has one)."
+                ),
+                "BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING/PENALTY_PARAMETER": (
+                    "Penalty stiffness for beam-to-solid volume "
+                    "meshtying.  Used when CONSTRAINT_STRATEGY: penalty."
                 ),
             },
             "pitfalls": [
@@ -163,12 +219,23 @@ class BeamInteractionGenerator(BaseGenerator):
                     "[Input] BINNING STRATEGY is required for spatial "
                     "search.  BIN_SIZE_LOWER_BOUND must be at least as "
                     "large as the element sizes to ensure all "
-                    "interaction pairs are detected. Signal: "
-                    "BeamInteraction diagnostic prints "
-                    "`zero pairs found` for a geometry where "
-                    "intersections clearly exist; OR runtime warning "
-                    "`bin size smaller than max element size, search "
-                    "may miss pairs`. (Audit 2026-06-02.)"
+                    "interaction pairs are detected, and NOTHING WARNS "
+                    "you when it is not. Signal: read the pair count. "
+                    "The beam-contact submodel prints one line per step "
+                    "whose greppable core is 'currently monitors' and "
+                    "which ends in the number of beam contact pairs; a "
+                    "bin size below the element size drops that number "
+                    "to zero and the run still exits 0. Measured on the "
+                    "shipped beam_interaction_beam_contact deck: "
+                    "BIN_SIZE_LOWER_BOUND 5 monitors 3 pairs, "
+                    "BIN_SIZE_LOWER_BOUND 0.05 monitors 0, both exit 0 "
+                    "with no warning of any kind. The binning banner "
+                    "also echoes 'half min bin size', which is the "
+                    "value actually used. (Audit 2026-06-02; the quoted "
+                    "'zero pairs found' does not exist in 4C, and "
+                    "neither does 'bin size smaller than max element "
+                    "size, search may miss pairs' -- both falsified and "
+                    "replaced by execution 2026-08-09.)"
                 ),
                 (
                     "[Numerical] The penalty parameter for beam "
@@ -182,52 +249,94 @@ class BeamInteractionGenerator(BaseGenerator):
                 ),
                 (
                     "[Input] Beam-to-beam contact uses a "
-                    "POINT-TO-POINT or LINE-TO-LINE "
-                    "formulation. The search algorithm must "
-                    "be configured to detect close beam "
-                    "pairs efficiently via SEARCH_RADIUS. "
-                    "Signal: too-small SEARCH_RADIUS "
-                    "misses contact pairs — beams pass "
-                    "through each other; too-large radius "
-                    "wastes compute on O(N^2) pair "
-                    "checks. Typical SEARCH_RADIUS ~ 2-3 "
-                    "* max beam diameter. (Audit "
-                    "2026-06-02.)"
+                    "POINT-TO-POINT and LINE-TO-LINE "
+                    "formulation (BEAMS_BTBPENALTYPARAM and "
+                    "BEAMS_BTBLINEPENALTYPARAM), but there is NO "
+                    "search-radius key for it: SEARCH_RADIUS is "
+                    "legal only in FLUID BEAM INTERACTION/BEAM TO "
+                    "FLUID MESHTYING, and writing it under BEAM "
+                    "INTERACTION aborts with `Could not match this "
+                    "input ... The following data remains unused: "
+                    "SEARCH_RADIUS` from "
+                    "core/io/src/4C_io_input_spec_builders.cpp. "
+                    "The search extent is set by BINNING "
+                    "STRATEGY/BIN_SIZE_LOWER_BOUND (plus "
+                    "DOMAINBOUNDINGBOX), and the algorithm by "
+                    "BEAM INTERACTION/SEARCH_STRATEGY "
+                    "(bruteforce_with_binning or "
+                    "bounding_volume_hierarchy). Signal: too-small "
+                    "bins miss contact pairs — beams pass through "
+                    "each other; too-large bins waste compute on "
+                    "O(N^2) pair checks. (Audit 2026-06-02; "
+                    "corrected by execution 2026-08-07.)"
                 ),
                 (
                     "[Numerical] For beam-to-solid volume meshtying, "
                     "the beam elements must lie within the solid "
                     "mesh volume.  Beams outside the solid domain "
-                    "are not coupled. Signal: BeamToSolidMeshtying "
-                    "diagnostic prints `0 of N beam segments "
-                    "coupled`; the beam displaces freely as if no "
-                    "solid mesh existed. (Audit 2026-06-02.)"
+                    "are not coupled. Signal: 4C prints NOTHING — "
+                    "there is no BeamToSolidMeshtying diagnostic, "
+                    "no `N beam segments coupled` line and no "
+                    "warning of any kind, so grepping the log is "
+                    "futile. The coupled count is only visible in "
+                    "the beam-to-solid runtime VTK output, which "
+                    "you have to switch on "
+                    "(BEAM INTERACTION/BEAM TO SOLID VOLUME "
+                    "MESHTYING/RUNTIME VTK OUTPUT with "
+                    "WRITE_OUTPUT, SEGMENTATION and "
+                    "INTEGRATION_POINTS): the segmentation file's "
+                    "point count drops to zero and so does the "
+                    "integration-point count. The solid then stops "
+                    "moving altogether and the beam deforms as if "
+                    "no solid existed, but the run only fails at "
+                    "the final result test. (Audit 2026-06-02; "
+                    "corrected by execution 2026-08-06.)"
                 ),
                 (
                     "[Numerical] Beam-to-solid surface contact "
-                    "requires the beam to approach a solid surface. "
-                    " The contact detection uses the beam centerline "
-                    "distance to the surface, not the beam radius. "
-                    " The gap offset must account for the beam "
-                    "cross-section. Signal: visualize shows the beam "
-                    "centerline at the solid surface (gap = 0) "
-                    "instead of one beam-radius offset; or contact "
-                    "force first activates one element-edge later "
-                    "than expected geometrically. (Audit 2026-06-02.)"
+                    "already subtracts the beam cross-section "
+                    "radius: the gap is (r_beam - r_surface) . n "
+                    "minus the beam interaction radius, so gap = 0 "
+                    "means the beam's OUTER SURFACE touches the "
+                    "solid, not its centerline, and there is no "
+                    "offset for you to add. Signal: the radius is "
+                    "taken from INTERACTIONRADIUS in the beam "
+                    "material, or, when that is left out, derived "
+                    "from the area moment of inertia assuming a "
+                    "circular cross-section — so a wrong MOMIN2 "
+                    "silently shifts every reported gap and moves "
+                    "the contact onset. Check it against the `gap` "
+                    "point array 4C writes into "
+                    "BEAM INTERACTION/BEAM TO SOLID SURFACE/RUNTIME "
+                    "VTK OUTPUT (set OUTPUT_DATA_FORMAT: ascii to "
+                    "read it): changing the radius shifts every gap "
+                    "value by exactly the same amount. (Audit "
+                    "2026-06-02; falsified by execution "
+                    "2026-08-06.)"
                 ),
                 (
                     "[Input] Beam materials use dedicated types "
                     "(MAT_BeamReissnerElastHyper) with cross-"
                     "sectional properties (CROSSAREA, MOMINPOL, "
                     "MOMIN2, MOMIN3).  These must be geometrically "
-                    "consistent with the beam cross-section. Signal: "
-                    "the MATERIALS block parser aborts with "
-                    "`MAT_BeamReissnerElastHyper requires "
-                    "CROSSAREA` / `MOMINPOL not specified`; or "
-                    "BEAM3R bends differently from Euler-Bernoulli "
+                    "consistent with the beam cross-section. Signal: a "
+                    "missing cross-section key gets you the GENERIC "
+                    "input-spec abort and nothing beam-specific -- "
+                    "\"Failed to match specification in section "
+                    "'MATERIALS'. The error was:\" from "
+                    "global_data/4C_global_data_read.cpp, then 'Could "
+                    "not match this input', then a candidate list with "
+                    "one block per material 4C knows. The name of the "
+                    "key you dropped appears nowhere in it. Or BEAM3R "
+                    "bends differently from Euler-Bernoulli "
                     "prediction (the eigen-frequency of a "
                     "cantilever differs from sqrt(EI/(rho*A*L^4)) "
-                    "by more than 10%). (Audit 2026-06-02.)"
+                    "by more than 10%). (Audit 2026-06-02; the quoted "
+                    "'MAT_BeamReissnerElastHyper requires CROSSAREA' "
+                    "and 'MOMINPOL not specified' do not exist in 4C -- "
+                    "falsified by execution 2026-08-09, dropping each "
+                    "key in turn from beam3r_herm2line2_static_test1, "
+                    "which exits 1 with the generic abort above.)"
                 ),
                 (
                     "[Output] Use IO/RUNTIME VTK OUTPUT/BEAMS for "
@@ -241,16 +350,29 @@ class BeamInteractionGenerator(BaseGenerator):
                 (
                     "[Input] PROBLEM TYPE is 'Structure' "
                     "(NOT a dedicated beam-interaction "
-                    "type). The BEAM INTERACTION section "
-                    "activates beam contact/meshtying on "
+                    "type). The BEAM INTERACTION sub-sections "
+                    "activate beam contact/meshtying on "
                     "top of the standard structural "
                     "problem. Signal: writing "
                     "PROBLEMTYPE: 'BeamInteraction' raises "
                     "'unknown problem type' — there is no "
-                    "such enum. Use PROBLEMTYPE: "
-                    "Structure + BEAM INTERACTION/SUBMODEL "
-                    "section to enable the beam contact "
-                    "framework. (Audit 2026-06-02.)"
+                    "such enum. There is also no BEAM "
+                    "INTERACTION/SUBMODEL section (it does not "
+                    "exist anywhere in 4C's grammar). Per "
+                    "adapter/4C_adapter_str_structure_new.cpp the "
+                    "beam-interaction model is switched on by any "
+                    "of: a BEAM INTERACTION/BEAM TO BEAM CONTACT "
+                    "CONDITIONS entry; BEAM INTERACTION/BEAM TO "
+                    "SOLID {VOLUME MESHTYING, SURFACE MESHTYING, "
+                    "SURFACE CONTACT}/CONTACT_DISCRETIZATION set "
+                    "to something other than none; BEAM "
+                    "INTERACTION/BEAM TO SPHERE "
+                    "CONTACT/STRATEGY != none; BEAM "
+                    "INTERACTION/CROSSLINKING/CROSSLINKER: true; "
+                    "or BEAM INTERACTION/SPHERE BEAM "
+                    "LINK/SPHEREBEAMLINKING: true. (Audit "
+                    "2026-06-02; corrected by execution "
+                    "2026-08-07.)"
                 ),
             ],
             "typical_experiments": [
@@ -329,6 +451,8 @@ class BeamInteractionGenerator(BaseGenerator):
             #   element_block 2 = beam 2 (LINE2)
             #   node_set 1 = beam 1 clamped end
             #   node_set 2 = beam 2 clamped end
+            # Both beams belong to the SAME structure discretisation, so
+            # they are two element blocks of ONE STRUCTURE GEOMETRY block.
             # ---------------------------------------------------------------
             TITLE:
               - "3-D beam-to-beam contact -- generated template"
@@ -344,7 +468,7 @@ class BeamInteractionGenerator(BaseGenerator):
               OUTPUT_BEAMS: true
               DISPLACEMENT: true
               USE_ABSOLUTE_POSITIONS: true
-              TRIAD_VISUALISATION_POINT: true
+              TRIAD_VISUALIZATIONPOINT: true
 
             # == Structural dynamics ===========================================
             STRUCTURAL DYNAMIC:
@@ -359,17 +483,37 @@ class BeamInteractionGenerator(BaseGenerator):
               RESULTSEVERY: <results_output_interval>
 
             # == Beam interaction =============================================
+            # The top-level section only takes these two keys.  There is no
+            # STRATEGY and no SEARCH_RADIUS here; the search extent comes
+            # from BINNING STRATEGY below.
             BEAM INTERACTION:
-              STRATEGY: "beam_to_beam_contact"
-              SEARCH_RADIUS: <contact_search_radius>
+              REPARTITIONSTRATEGY: "Everydt"
+              SEARCH_STRATEGY: "bruteforce_with_binning"
             BEAM INTERACTION/BEAM TO BEAM CONTACT:
-              CONTACT_TYPE: "point_to_point"
-              PENALTY_PARAMETER: <contact_penalty_parameter>
-              GAP_SHIFT: <gap_shift>
+              # BEAMS_SEGCON must be true (4C rejects false), and it makes
+              # the four shift angles and BEAMS_SEGANGLE mandatory.
+              BEAMS_SEGCON: true
+              BEAMS_PENALTYLAW: "LinPen"
+              BEAMS_BTBPENALTYPARAM: <point_contact_penalty_parameter>
+              BEAMS_BTBLINEPENALTYPARAM: <line_contact_penalty_parameter>
+              BEAMS_PERPSHIFTANGLE1: <large_angle_fade_start_deg>
+              BEAMS_PERPSHIFTANGLE2: <large_angle_fade_end_deg>
+              BEAMS_PARSHIFTANGLE1: <small_angle_fade_start_deg>
+              BEAMS_PARSHIFTANGLE2: <small_angle_fade_end_deg>
+              BEAMS_SEGANGLE: <segmentation_angle_deg>
+            # These conditions are what actually switches the beam contact
+            # model on; E is a DLINE id, one per interacting beam, sharing
+            # the same COUPLING_ID.
+            BEAM INTERACTION/BEAM TO BEAM CONTACT CONDITIONS:
+              - E: <beam1_line_id>
+                COUPLING_ID: 1
+              - E: <beam2_line_id>
+                COUPLING_ID: 1
 
             # == Binning for spatial search ===================================
             BINNING STRATEGY:
               BIN_SIZE_LOWER_BOUND: <bin_size_lower_bound>
+              DOMAINBOUNDINGBOX: "<xmin> <ymin> <zmin> <xmax> <ymax> <zmax>"
 
             # == Solver ========================================================
             SOLVER 1:
@@ -425,22 +569,32 @@ class BeamInteractionGenerator(BaseGenerator):
                 VAL: [<load_value_1>, <load_value_2>, <load_value_3>, 0.0, 0.0, 0.0]
                 FUNCT: [<load_function>, <load_function>, <load_function>, 0, 0, 0]
 
-            # Load ramp function
+            # Load ramp function.  A POINT Neumann condition is evaluated as a
+            # FunctionOfTime, so it must be SYMBOLIC_FUNCTION_OF_TIME here --
+            # SYMBOLIC_FUNCTION_OF_SPACE_TIME aborts with "You tried to query
+            # function N as a function of type FunctionOfTime".
             FUNCT<load_function>:
-              - SYMBOLIC_FUNCTION_OF_SPACE_TIME: "<load_ramp_expression>"
+              - SYMBOLIC_FUNCTION_OF_TIME: "<load_ramp_expression>"
 
             # == Geometry ======================================================
+            # One structure discretisation: every beam is an element block of
+            # this single STRUCTURE GEOMETRY section.
             STRUCTURE GEOMETRY:
               FILE: "<beam_mesh_file>"
               ELEMENT_BLOCKS:
+                # BEAM3R needs nodal triads: either TRIADS (6 doubles for
+                # LINE2, 9 for LINE3) or NODAL_ROTATION_VECTORS naming a
+                # cell-data field in the mesh file.
                 - ID: 1
                   BEAM3R:
                     LINE2:
                       MAT: 1
+                      NODAL_ROTATION_VECTORS: "<triad_cell_field_name>"
                 - ID: 2
                   BEAM3R:
                     LINE2:
                       MAT: 2
+                      NODAL_ROTATION_VECTORS: "<triad_cell_field_name>"
 
             RESULT DESCRIPTION:
               - STRUCTURE:
@@ -462,13 +616,15 @@ class BeamInteractionGenerator(BaseGenerator):
             # solid are coupled via volume meshtying (penalty or mortar).
             # The beam acts as a reinforcement inside the solid.
             #
-            # Mesh: requires TWO meshes:
-            #   Solid mesh: "solid.e" with
-            #     element_block 1 = solid block (HEX8)
-            #     node_set 1 = fixed face
-            #     node_set 2 = loaded face
-            #   Beam mesh: "beam.e" with
-            #     element_block 1 = beam (LINE2)
+            # Mesh: ONE mesh file for the whole structure discretisation --
+            # beams and solids share it, there is no separate beam mesh
+            # section in 4C:
+            #   element_block 1 = solid block (HEX8)
+            #   element_block 2 = beam (LINE3, Hermite centerline)
+            #   node_set 1 = fixed solid face
+            #   node_set 2 = loaded solid face
+            #   side_set / node_set for the solid volume (DVOL) and the beam
+            #   line (DLINE) used by the meshtying conditions
             # ---------------------------------------------------------------
             TITLE:
               - "3-D beam-to-solid volume meshtying -- generated template"
@@ -501,17 +657,28 @@ class BeamInteractionGenerator(BaseGenerator):
               RESULTSEVERY: <results_output_interval>
 
             # == Beam interaction =============================================
+            # The top-level section only takes REPARTITIONSTRATEGY and
+            # SEARCH_STRATEGY -- no STRATEGY, no SEARCH_RADIUS.
             BEAM INTERACTION:
-              STRATEGY: "beam_to_solid_volume_meshtying"
-              SEARCH_RADIUS: <meshtying_search_radius>
+              REPARTITIONSTRATEGY: "Everydt"
             BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING:
-              COUPLING_TYPE: "<coupling_type>"
+              # CONTACT_DISCRETIZATION != none is what activates the model.
+              # There is no COUPLING_TYPE key here (only the SURFACE
+              # meshtying section has one); use CONSTRAINT_STRATEGY.
+              CONTACT_DISCRETIZATION: "<contact_discretization>"
+              CONSTRAINT_STRATEGY: "<constraint_strategy>"
               PENALTY_PARAMETER: <meshtying_penalty_parameter>
               GAUSS_POINTS: <meshtying_gauss_points>
+            BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING/RUNTIME VTK OUTPUT:
+              WRITE_OUTPUT: true
+              NODAL_FORCES: true
+              SEGMENTATION: true
+              INTEGRATION_POINTS: true
 
             # == Binning for spatial search ===================================
             BINNING STRATEGY:
               BIN_SIZE_LOWER_BOUND: <bin_size_lower_bound>
+              DOMAINBOUNDINGBOX: "<xmin> <ymin> <zmin> <xmax> <ymax> <zmax>"
 
             # == Solver ========================================================
             SOLVER 1:
@@ -560,23 +727,41 @@ class BeamInteractionGenerator(BaseGenerator):
             FUNCT<load_function>:
               - SYMBOLIC_FUNCTION_OF_SPACE_TIME: "<load_ramp_expression>"
 
+            # == Meshtying coupling conditions =================================
+            # The solid volume (DVOL) and the beam line (DLINE) that are tied
+            # together, matched by a common COUPLING_ID.
+            BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING VOLUME:
+              - E: <solid_volume_id>
+                COUPLING_ID: 1
+            BEAM INTERACTION/BEAM TO SOLID VOLUME MESHTYING LINE:
+              - E: <beam_line_id>
+                COUPLING_ID: 1
+
             # == Geometry ======================================================
+            # There is no BEAM GEOMETRY section in 4C.  Beams and solids are
+            # one discretisation, so the beam is simply another element block
+            # of STRUCTURE GEOMETRY (or another line in STRUCTURE ELEMENTS).
+            # Beam-to-solid meshtying requires a Hermite-centerline beam:
+            # BEAM3R/LINE3 with HERMITE_CENTERLINE true, or BEAM3EB.  A plain
+            # BEAM3R/LINE2 aborts with "Beam3tosolidmeshtying: beam::n_val_=2
+            # detected for beam3r element w/o Hermite centerline".
             STRUCTURE GEOMETRY:
-              FILE: "<solid_mesh_file>"
+              FILE: "<structure_mesh_file>"
               ELEMENT_BLOCKS:
                 - ID: 1
                   SOLID:
                     HEX8:
                       MAT: 2
                       KINEM: <kinematics>
-
-            BEAM GEOMETRY:
-              FILE: "<beam_mesh_file>"
-              ELEMENT_BLOCKS:
-                - ID: 1
+                - ID: 2
                   BEAM3R:
-                    LINE2:
+                    LINE3:
                       MAT: 1
+                      HERMITE_CENTERLINE: true
+                      # BEAM3R needs nodal triads: either TRIADS (9 doubles
+                      # for LINE3, 6 for LINE2) or NODAL_ROTATION_VECTORS
+                      # naming a cell-data field in the mesh file.
+                      NODAL_ROTATION_VECTORS: "<triad_cell_field_name>"
 
             RESULT DESCRIPTION:
               - STRUCTURE:
@@ -610,18 +795,24 @@ class BeamInteractionGenerator(BaseGenerator):
                     f"YOUNG must be a positive number, got {young!r}."
                 )
 
-        # Check penalty parameter
-        penalty = params.get("PENALTY_PARAMETER")
-        if penalty is not None:
+        # Check penalty parameters.  PENALTY_PARAMETER is the beam-to-solid
+        # key; beam-to-beam contact uses BEAMS_BTBPENALTYPARAM (point) and
+        # BEAMS_BTBLINEPENALTYPARAM (line, per unit length).
+        for pkey in (
+            "PENALTY_PARAMETER",
+            "BEAMS_BTBPENALTYPARAM",
+            "BEAMS_BTBLINEPENALTYPARAM",
+        ):
+            penalty = params.get(pkey)
+            if penalty is None:
+                continue
             try:
                 p = float(penalty)
-                if p <= 0:
-                    issues.append(
-                        f"PENALTY_PARAMETER must be > 0, got {p}."
-                    )
+                if p < 0:
+                    issues.append(f"{pkey} must be >= 0, got {p}.")
             except (TypeError, ValueError):
                 issues.append(
-                    f"PENALTY_PARAMETER must be a positive number, "
+                    f"{pkey} must be a non-negative number, "
                     f"got {penalty!r}."
                 )
 
@@ -640,20 +831,86 @@ class BeamInteractionGenerator(BaseGenerator):
                     f"got {crossarea!r}."
                 )
 
-        # Check search radius
-        search_r = params.get("SEARCH_RADIUS")
-        if search_r is not None:
+        # SEARCH_RADIUS is not a beam-interaction key -- it exists only in
+        # FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING.  Reject it here so
+        # it never reaches a deck.
+        if "SEARCH_RADIUS" in params:
+            issues.append(
+                "SEARCH_RADIUS is not a BEAM INTERACTION parameter; it is "
+                "legal only in FLUID BEAM INTERACTION/BEAM TO FLUID "
+                "MESHTYING.  Size the beam-interaction search via BINNING "
+                "STRATEGY/BIN_SIZE_LOWER_BOUND and choose the algorithm "
+                "with BEAM INTERACTION/SEARCH_STRATEGY."
+            )
+
+        # Check the beam-to-beam contact enum choices
+        penalty_law = params.get("BEAMS_PENALTYLAW")
+        legal_laws = (
+            "LinNegQuadPen", "LinPen", "LinPosCubPen",
+            "LinPosDoubleQuadPen", "LinPosExpPen", "LinPosQuadPen",
+            "QuadPen",
+        )
+        if penalty_law is not None and penalty_law not in legal_laws:
+            issues.append(
+                f"BEAMS_PENALTYLAW must be one of {legal_laws}, "
+                f"got {penalty_law!r}."
+            )
+
+        # BEAMS_GAPSHIFTPARAM is only permitted for the LinPosQuadPen law
+        gap_shift = params.get("BEAMS_GAPSHIFTPARAM")
+        if gap_shift is not None:
             try:
-                r = float(search_r)
-                if r <= 0:
-                    issues.append(
-                        f"SEARCH_RADIUS must be > 0, got {r}."
-                    )
+                g = float(gap_shift)
             except (TypeError, ValueError):
                 issues.append(
-                    f"SEARCH_RADIUS must be a positive number, "
-                    f"got {search_r!r}."
+                    f"BEAMS_GAPSHIFTPARAM must be a number, "
+                    f"got {gap_shift!r}."
                 )
+            else:
+                if g != 0.0 and penalty_law != "LinPosQuadPen":
+                    issues.append(
+                        "BEAMS_GAPSHIFTPARAM is only possible for "
+                        "BEAMS_PENALTYLAW: LinPosQuadPen; set the law or "
+                        "leave the shift at 0."
+                    )
+
+        # 4C currently only supports the all-angle formulation
+        segcon = params.get("BEAMS_SEGCON")
+        if segcon is not None and segcon is not True and segcon != "true":
+            issues.append(
+                "BEAMS_SEGCON must be true: 4C rejects false with 'only "
+                "all-angle-beam contact (BEAMS_SEGCON) formulation tested "
+                "yet in new beam interaction framework!'."
+            )
+
+        # Check beam-to-solid volume meshtying enums
+        disc = params.get("CONTACT_DISCRETIZATION")
+        legal_disc = (
+            "none", "gauss_point_to_segment", "gauss_point_cross_section",
+            "mortar", "mortar_cross_section",
+        )
+        if disc is not None and disc not in legal_disc:
+            issues.append(
+                f"CONTACT_DISCRETIZATION must be one of {legal_disc}, "
+                f"got {disc!r}."
+            )
+
+        strategy = params.get("CONSTRAINT_STRATEGY")
+        if strategy is not None and strategy not in (
+            "none", "penalty", "lagrange",
+        ):
+            issues.append(
+                "CONSTRAINT_STRATEGY must be 'none', 'penalty' or "
+                f"'lagrange', got {strategy!r}."
+            )
+
+        if "COUPLING_TYPE" in params:
+            issues.append(
+                "COUPLING_TYPE is not a key of BEAM INTERACTION/BEAM TO "
+                "SOLID VOLUME MESHTYING (only the SURFACE MESHTYING "
+                "section has one).  Use CONTACT_DISCRETIZATION and "
+                "CONSTRAINT_STRATEGY instead."
+            )
 
         # Check bin size
         bin_size = params.get("BIN_SIZE_LOWER_BOUND")

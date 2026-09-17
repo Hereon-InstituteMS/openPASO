@@ -5,14 +5,25 @@ Variants: 2d, 3d, l_domain, rectangle
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['poisson'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Poisson equation -kappa * laplacian(u) = f solved with FEniCSx/dolfinx",
     "weak_form": "kappa * (grad(u), grad(v)) * dx = (f, v) * dx",
     "function_space": "Lagrange order 1 or 2",
     "solver": {"ksp_type": "preonly/cg", "pc_type": "lu/hypre"},
     "pitfalls": [
         "[API] In recent dolfinx, domain.topology.create_connectivity(fdim, tdim) is no longer required as a manual step before locate_entities_boundary / locate_dofs_topological — the connectivity is built lazily on first need. Calling it eagerly is harmless and is the safer default in tutorial code, but its ABSENCE no longer triggers an exception. Signal: in older dolfinx (pre-0.7), locate_dofs_topological raised RuntimeError mentioning 'connectivity has not been computed'; current dolfinx returns the correct dof indices without that step. (Verified empirically 2026-06-01 — locate_entities_boundary + locate_dofs_topological both succeed without an explicit create_connectivity call.)",
-        "[API] Use dolfinx.default_scalar_type for Constants and Function arrays so the dtype matches the underlying PETSc build (float64 if PETSc is real, complex128 if PETSc is complex). Signal: passing a Python float into a complex-PETSc Function raises TypeError in fem.form / fem.assemble_matrix when the form expects complex coefficients; passing 0j into a real-PETSc Function raises ValueError 'cannot convert complex to float'.",
-        "[API] VTXWriter (ADIOS2 backend) supports only Lagrange / DG element families. Writing a Function defined on Nedelec or BDM raises RuntimeError. Signal: VTXWriter.write raises RuntimeError 'Cannot interpolate function ... to the VTX output basis' or 'ADIOS2 VTX only supports Lagrange elements'.",
+        "[API] Use dolfinx.default_scalar_type for Constants and Function arrays so the dtype matches the underlying PETSc build (float64 if PETSc is real, complex128 if PETSc is complex). Signal: in a COMPLEX build, a Python float reaches C++ as a float64 Constant and fem.form dies on the nanobind overload resolution — 'TypeError: __init__(): incompatible function arguments' listing only the Constant_complex128 signatures; the same mismatch through fem.petsc.assemble_matrix gives 'TypeError: create_matrix(): incompatible function arguments ... Invoked with types: dolfinx.cpp.fem.Form_float64'. In a REAL build the reverse direction is much quieter than this entry used to claim: 0j assigned ELEMENTWISE raises 'TypeError: float() argument must be a string or a real number, not \\'complex\\'' (numpy, not dolfinx), while a whole-array assignment f.x.array[:] = <complex array> and Function.interpolate of a complex callable do NOT raise at all — they drop the imaginary part behind a numpy ComplexWarning, and fem.Constant(msh, 0j) is accepted outright. The previously quoted \"ValueError 'cannot convert complex to float'\" is wrong in its exception type, wrong in its text, and wrong about the failure being loud. Assert the dtype, do not wait for a raise. (Verified by execution 2026-08-07 in both conda envs, dolfinx 0.10.0 / numpy 1.26.4.)",
+        "[API] VTXWriter (ADIOS2 backend) supports only Lagrange / DG element families. Signal: constructing the writer on a Function defined on N1curl, RT or BDM raises 'RuntimeError: Only (discontinuous) Lagrange functions are supported. Interpolate Functions before output.' — and it raises in the VTXWriter CONSTRUCTOR, before any write() call, so a guard wrapped around write() alone never sees it. Both strings this entry used to quote — 'Cannot interpolate function ... to the VTX output basis' and 'ADIOS2 VTX only supports Lagrange elements' — are absent from dolfinx, ADIOS2 and every library FEniCSx links, and neither reproduces. Interpolate into a ('Lagrange', k, (gdim,)) space first, or use XDMFFile. (Verified by execution 2026-08-07 for all three element families, dolfinx 0.10.0 / ADIOS2 2.11.)",
     ],
     "materials": {"kappa": {"range": [0.001, 1e6], "unit": "W/(m*K) or dimensionless"}},
 }

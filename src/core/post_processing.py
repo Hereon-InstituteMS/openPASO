@@ -13,7 +13,7 @@ from typing import Optional
 
 import numpy as np
 
-logger = logging.getLogger("oasis.postprocess")
+logger = logging.getLogger("openpaso.postprocess")
 
 
 @dataclass

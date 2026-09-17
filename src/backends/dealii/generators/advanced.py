@@ -6,6 +6,26 @@ program: it builds a mesh, assembles + solves the PDE, and writes a
 template was compiled and executed against deal.II 9.1.1 and confirmed
 to produce output before being committed here (overhaul 2026-06-26).
 
+RE-VERIFIED by execution against deal.II 9.8.0-pre (a Release
+build). Four templates in this module and
+one in navier_stokes.py no longer compiled: every break was an upstream
+API removal between 9.1 and 9.8, not a logic error.
+
+  * DoFTools::count_dofs_per_block -> count_dofs_per_fe_block, which
+    RETURNS the vector instead of filling an out-parameter (>= 9.2)
+    — time_dependent_ns_2d here, navier_stokes_2d there;
+  * MGTransferPrebuilt::build_matrices -> build (>= 9.2)
+    — multigrid_2d;
+  * the mapping-less MatrixFree::reinit(dof, constraints, quad, data)
+    overload was removed, a Mapping must be passed first (>= 9.3);
+    MatrixFree::n_macro_cells -> n_cell_batches; and
+    FEEvaluation::evaluate/integrate(bool, bool) ->
+    EvaluationFlags::values / ::gradients — all three in matrix_free_2d;
+  * SolutionTransfer::interpolate(in, out) was removed in favour of the
+    one-argument interpolate(out) — time_dependent_heat_2d.
+
+All five now configure, compile, run and write .vtu on 9.8.0-pre.
+
 Physics that could not be made runnable with reasonable effort on the
 supported deal.II were REMOVED rather than shipped as print-and-exit
 stubs: compressible_euler (step-33/69 shock capturing), multiphysics
@@ -303,7 +323,10 @@ int main()
 
           setup_system();
           Vector<double> interpolated(dof_handler.n_dofs());
-          soltrans.interpolate(solution, interpolated);
+          // deal.II >= 9.7: SolutionTransfer::interpolate(in, out) is gone;
+          // the one-argument form fills the NEW-mesh vector from the state
+          // captured by prepare_for_coarsening_and_refinement().
+          soltrans.interpolate(interpolated);
           solution = interpolated;
           constraints.distribute(solution);
         }
@@ -530,9 +553,10 @@ int main()
   DoFHandler<dim> dof_flow(triangulation);
   dof_flow.distribute_dofs(fe_flow);
   DoFRenumbering::component_wise(dof_flow);
-  std::vector<types::global_dof_index> dpb(2);
   std::vector<unsigned int> bc(dim + 1, 0); bc[dim] = 1;
-  DoFTools::count_dofs_per_block(dof_flow, dpb, bc);
+  // deal.II >= 9.2: count_dofs_per_block -> count_dofs_per_fe_block (returns).
+  const std::vector<types::global_dof_index> dpb =
+    DoFTools::count_dofs_per_fe_block(dof_flow, bc);
   const unsigned int n_u = dpb[0], n_p = dpb[1];
 
   // ---- Temperature system ----
@@ -777,10 +801,10 @@ private:
       {
         phi.reinit(cell);
         phi.read_dof_values(src);
-        phi.evaluate(false, true);
+        phi.evaluate(EvaluationFlags::gradients);
         for (unsigned int q = 0; q < phi.n_q_points; ++q)
           phi.submit_gradient(phi.get_gradient(q), q);
-        phi.integrate(false, true);
+        phi.integrate(EvaluationFlags::gradients);
         phi.distribute_local_to_global(dst);
       }
   }
@@ -790,7 +814,7 @@ private:
     FEEvaluation<dim, fe_degree, fe_degree + 1, 1, double> phi(data);
     AlignedVector<VectorizedArray<double>> diag(phi.dofs_per_cell);
     diagonal = 0;
-    for (unsigned int cell = 0; cell < data.n_macro_cells(); ++cell)
+    for (unsigned int cell = 0; cell < data.n_cell_batches(); ++cell)
       {
         phi.reinit(cell);
         for (unsigned int i = 0; i < phi.dofs_per_cell; ++i)
@@ -798,10 +822,10 @@ private:
             for (unsigned int j = 0; j < phi.dofs_per_cell; ++j)
               phi.begin_dof_values()[j] = VectorizedArray<double>();
             phi.begin_dof_values()[i] = make_vectorized_array<double>(1.0);
-            phi.evaluate(false, true);
+            phi.evaluate(EvaluationFlags::gradients);
             for (unsigned int q = 0; q < phi.n_q_points; ++q)
               phi.submit_gradient(phi.get_gradient(q), q);
-            phi.integrate(false, true);
+            phi.integrate(EvaluationFlags::gradients);
             diag[i] = phi.begin_dof_values()[i];
           }
         for (unsigned int i = 0; i < phi.dofs_per_cell; ++i)
@@ -837,7 +861,9 @@ int main()
   add_data.tasks_parallel_scheme = MatrixFree<dim, double>::AdditionalData::none;
   add_data.mapping_update_flags = update_gradients | update_JxW_values;
   MatrixFree<dim, double> mf_data;
-  mf_data.reinit(dof_handler, constraints, QGauss<1>(degree + 1), add_data);
+  // deal.II >= 9.3: the mapping-less MatrixFree::reinit overload was removed.
+  mf_data.reinit(MappingQ1<dim>(), dof_handler, constraints,
+                 QGauss<1>(degree + 1), add_data);
 
   LaplaceOperator<dim, degree> system(mf_data);
 
@@ -848,12 +874,12 @@ int main()
   // RHS: constant unit source f=1 -> assemble (phi_i, 1)
   {
     FEEvaluation<dim, degree, degree + 1, 1, double> phi(mf_data);
-    for (unsigned int cell = 0; cell < mf_data.n_macro_cells(); ++cell)
+    for (unsigned int cell = 0; cell < mf_data.n_cell_batches(); ++cell)
       {
         phi.reinit(cell);
         for (unsigned int q = 0; q < phi.n_q_points; ++q)
           phi.submit_value(make_vectorized_array<double>(1.0), q);
-        phi.integrate(true, false);
+        phi.integrate(EvaluationFlags::values);
         phi.distribute_local_to_global(system_rhs);
       }
   }
@@ -1038,7 +1064,7 @@ int main()
 
   // Multigrid setup
   MGTransferPrebuilt<Vector<double>> mg_transfer(mg_constrained_dofs);
-  mg_transfer.build_matrices(dof_handler);
+  mg_transfer.build(dof_handler);   // deal.II >= 9.2: build_matrices -> build
 
   FullMatrix<double> coarse_matrix;
   coarse_matrix.copy_from(mg_matrices[0]);
@@ -1808,7 +1834,7 @@ KNOWLEDGE = {
                 "produces a per-vertex flux field that does not "
                 "match the cell-face flux integral. Use "
                 "DataOutBase::DG output or interpolate to a P1 "
-                "post-processing space. (Audit 2026-06-02.)"
+                "post-processing space."
             ),
             (
                 "[Numerical] Schur complement solver for saddle-"
@@ -1819,7 +1845,7 @@ KNOWLEDGE = {
                 "preconditioner (step-20 / step-22). Without "
                 "Schur complement reformulation, MINRES (or GMRES "
                 "with a block preconditioner) is the only "
-                "robust option. (Audit 2026-06-02.)"
+                "robust option."
             ),
         ],
     },
@@ -1837,8 +1863,7 @@ KNOWLEDGE = {
                 "DoFHandler and is invalidated by refinement. "
                 "step-26 shows the canonical SolutionTransfer "
                 "(prepare_for_coarsening_and_refinement -> "
-                "refine -> interpolate) sequence. (Audit "
-                "2026-06-02.)"
+                "refine -> interpolate) sequence."
             ),
             (
                 "[Numerical] CFL for explicit; unconditionally "
@@ -1850,8 +1875,7 @@ KNOWLEDGE = {
                 "SUNDIALS::IDA are unconditionally stable but "
                 "CN can oscillate at sharp fronts. Choose "
                 "implicit for any production heat problem; use "
-                "explicit only for didactic comparisons. (Audit "
-                "2026-06-02.)"
+                "explicit only for didactic comparisons."
             ),
         ],
     },
@@ -1870,7 +1894,7 @@ KNOWLEDGE = {
                 "Newmark-beta with beta=0.25, gamma=0.5 "
                 "(step-23 demonstrates via DoFHandler + "
                 "AffineConstraints) conserve energy to "
-                "roundoff. (Audit 2026-06-02.)"
+                "roundoff."
             ),
             (
                 "[Numerical] CFL: dt < h/c for explicit schemes. "
@@ -1878,7 +1902,7 @@ KNOWLEDGE = {
                 "exponentially growing amplitude (factor of ~2 "
                 "per step) — classic explicit-wave instability. "
                 "Safety factor 0.5*h/c is conservative; CFL=1 is "
-                "the strict bound. (Audit 2026-06-02.)"
+                "the strict bound."
             ),
         ],
     },
@@ -1894,8 +1918,7 @@ KNOWLEDGE = {
                 "Computing at Ra > 1e6 without a turbulence model "
                 "produces visibly chaotic transient behaviour "
                 "that does not match a laminar DNS — switch to "
-                "LES or RANS for very-high-Ra regimes. (Audit "
-                "2026-06-02.)"
+                "LES or RANS for very-high-Ra regimes."
             ),
             (
                 "[Numerical] Requires NS + energy equation "
@@ -1908,23 +1931,132 @@ KNOWLEDGE = {
                 "the BlockVector temperature component stays "
                 "decoupled. step-35 implements via "
                 "BlockSparseMatrix and DoFTools::"
-                "make_sparsity_pattern. (Audit 2026-06-02.)"
+                "make_sparsity_pattern."
             ),
         ],
     },
     "matrix_free": {
-        "description": "Matrix-free operator evaluation — high performance FEM (step-37, step-59)",
-        "performance": "10-100x faster than sparse matrix for high-order elements",
+        "description": ("Matrix-free operator evaluation (step-37, "
+                        "step-59, step-75). Verified working in 3D on this "
+                        "catalog's supported deal.II: FE_Q(2) and FE_Q(4) "
+                        "Laplace at ~275k DoFs, CG + PreconditionChebyshev "
+                        "on the matrix-free diagonal, with EITHER "
+                        "LinearAlgebra::distributed::Vector<double> or a "
+                        "plain dealii::Vector<double> — no MPI required."),
+        "performance": ("[Performance] The honest claim is MEMORY, not a fixed speed "
+                        "factor. Measured for a 3D FE_Q(4) Laplace operator: "
+                        "SparseMatrix::memory_consumption() was tens of MB "
+                        "against under 1 MB for MatrixFree::memory_"
+                        "consumption() — nearly two orders of magnitude "
+                        "less — while the operator APPLICATION was under 4x "
+                        "faster, not the '10-100x' this field used to "
+                        "claim. The apply speed-up depends on degree, "
+                        "dimension and the SIMD width the library was built "
+                        "with (read VectorizedArray<double>::size(); it was "
+                        "2 on the machine measured, i.e. 128-bit SSE2, and "
+                        "is 4 or 8 on AVX2/AVX-512 hardware). Matrix-free "
+                        "also skips ASSEMBLY entirely: assembling the sparse "
+                        "matrix took hundreds of times longer than "
+                        "MatrixFree::reinit, so for one-shot solves the "
+                        "win is much larger than the per-apply ratio. "
+                        "Signal: print VectorizedArray<double>::size(), "
+                        "MatrixFree::memory_consumption() and "
+                        "SparseMatrix::memory_consumption() and compare "
+                        "those, rather than trusting any quoted factor."),
         "pitfalls": [
             (
-                "[API] Requires tensor-product elements (FE_Q, "
-                "FE_DGQ). Signal: instantiating MatrixFree<dim> "
-                "with FE_RaviartThomas / FE_BDM / non-tensor-"
-                "product elements raises `MatrixFree: element "
-                "type not supported` or silently disables "
-                "vectorization. The performance gain (10-100x) "
-                "depends entirely on tensor-product evaluation. "
-                "(Audit 2026-06-02.)"
+                "[API] MatrixFree needs an element whose shape "
+                "functions it knows how to evaluate with sum "
+                "factorization. The old rule of thumb 'tensor-"
+                "product elements only, so FE_Q/FE_DGQ but NOT "
+                "FE_SimplexP' is OUT OF DATE and this entry used to "
+                "repeat it. Verified on deal.II 9.8: "
+                "MatrixFree<3>::reinit SUCCEEDS on FE_SimplexP(2) "
+                "over a tetrahedral mesh built with "
+                "GridGenerator::subdivided_hyper_cube_with_"
+                "simplices, and the resulting FEEvaluation cell_loop "
+                "reproduces the assembled matrix-vector product to "
+                "round-off (relative difference ~3e-16) — with both "
+                "the runtime form FEEvaluation<3,-1,0,1,double> and "
+                "a correctly templated one. "
+                "What DOES still fail is the vector-valued "
+                "moment-based families. Signal: MatrixFree<dim>::"
+                "reinit with FE_RaviartThomas / FE_BDM ABORTS the "
+                "process — it does not silently disable "
+                "vectorization and it does NOT throw a catchable "
+                "exception. The failure is DEAL_II_NOT_IMPLEMENTED() "
+                "inside internal::MatrixFreeFunctions::get_element_"
+                "type_specific_information, which aborts rather than "
+                "throwing, so try/catch (const std::exception&) does "
+                "NOT run: the process dies with SIGABRT (exit 134) "
+                "after printing 'You are trying to use functionality "
+                "in deal.II that is currently not implemented' plus "
+                "a stacktrace. It is not gated on NDEBUG, so it "
+                "fires on a Release build too. (It is NOT the string "
+                "'MatrixFree: element type not supported', which "
+                "this entry used to quote and which does not exist.) "
+                "Because you cannot recover from an abort, decide "
+                "BEFORE reinit: test the element you intend to use "
+                "on a tiny mesh first."
+            ),
+            (
+                "[API] The FEEvaluation TEMPLATE ARGUMENTS must "
+                "match what MatrixFree was built with, and a "
+                "mismatch is SILENT in Release. FEEvaluation<dim, "
+                "fe_degree, n_q_points_1d, n_components, Number> "
+                "hard-codes the degree and the 1D quadrature count "
+                "into the sum-factorization loops. Verified on the "
+                "same MatrixFree object (FE_Q(2) with QGauss<1>(3)) "
+                "by varying only the template arguments: a matching "
+                "<3,2,3,1,double> reproduced the assembled product "
+                "to round-off; a degree too HIGH produced NaN; a "
+                "degree too LOW produced a result off by nearly an "
+                "order of magnitude; an n_q_points_1d too high "
+                "produced a result off by nearly three orders of "
+                "magnitude; too low, off by a factor of about six. "
+                "NONE of the four raised anything — every one 'ran "
+                "without error'. "
+                "On a DEBUG build the same mismatches abort with a "
+                "complete diagnosis: 'Illegal arguments in "
+                "constructor/wrong template arguments! Called --> "
+                "FEEvaluation<dim,3,4,1,Number>(data, 0, 0, 0)' "
+                "from FEEvaluation::check_template_arguments. "
+                "Signal: if you cannot build in Debug, use the "
+                "RUNTIME form FEEvaluation<dim, -1, 0, n_components, "
+                "Number>, which reads the degree from the "
+                "MatrixFree object and was bit-for-bit as accurate "
+                "as the correctly templated one (it is slower "
+                "because the loops are no longer unrolled at "
+                "compile time). Otherwise cross-check one "
+                "matrix-vector product against an assembled "
+                "SparseMatrix on a small mesh before scaling up."
+            ),
+            (
+                "[Numerical] The AffineConstraints object MUST be "
+                "passed to MatrixFree::reinit. The matrix-free "
+                "operator has no rows to eliminate, so constraints "
+                "are applied inside read_dof_values / "
+                "distribute_local_to_global; hand reinit an empty "
+                "AffineConstraints and the Dirichlet conditions "
+                "simply do not exist. Nothing is raised. Verified on "
+                "a 3D FE_Q(2) Laplace problem, changing ONLY the "
+                "constraints object handed to reinit: with the real "
+                "constraints, MatrixFree::get_constrained_dofs()"
+                ".size() was in the thousands and CG converged in "
+                "about a dozen iterations to a solution that was "
+                "exactly zero on the boundary; with an empty one, "
+                "get_constrained_dofs().size() was 0 and CG ran to "
+                "its iteration limit and threw "
+                "SolverControl::NoConvergence with the residual "
+                "BLOWN UP by many orders of magnitude ('Iterative "
+                "method reported convergence failure in step <N>. "
+                "The residual in the last step was <huge>.'). "
+                "Signal: read MatrixFree::get_constrained_dofs()"
+                ".size() straight after reinit — zero on a problem "
+                "with Dirichlet data means the constraints never "
+                "arrived. Do not wait for the solver: on a pure "
+                "Neumann-shaped operator it may converge to a "
+                "quietly wrong answer instead of diverging."
             ),
             (
                 "[Performance] No matrix assembly — operator is "
@@ -1934,7 +2066,7 @@ KNOWLEDGE = {
                 "cell_loop and FEEvaluation::evaluate / "
                 "integrate. If matrix-related calls appear, the "
                 "code accidentally falls back to a sparse "
-                "path. (Audit 2026-06-02.)"
+                "path."
             ),
             (
                 "[Numerical] Geometric multigrid essential for "
@@ -1945,39 +2077,123 @@ KNOWLEDGE = {
                 "visible in SolverControl::log_history()); "
                 "GMG keeps it at ~10-20 iterations independent "
                 "of h. step-37 / step-50 show the canonical "
-                "MatrixFree + GMG combination. (Audit "
-                "2026-06-02.)"
+                "MatrixFree + GMG combination."
             ),
         ],
     },
     "multigrid": {
-        "description": "Geometric multigrid preconditioner (step-16, step-50)",
+        "description": ("Geometric multigrid preconditioner (step-16 "
+                        "matrix-based, step-37/50 matrix-free, step-56 "
+                        "Vanka for Stokes). Verified working in 3D on this "
+                        "catalog's supported deal.II with no external "
+                        "dependencies: MGTransferPrebuilt + "
+                        "mg::SmootherRelaxation + MGCoarseGridHouseholder, "
+                        "wrapped in PreconditionMG inside an outer "
+                        "SolverCG, on both uniformly and adaptively "
+                        "refined hexahedral meshes."),
         "types": ["h-multigrid (mesh hierarchy)", "p-multigrid (polynomial degree)"],
+        "why_bother": (
+            "h-INDEPENDENCE is the whole point, and it is the thing to "
+            "check. Verified on a 3D FE_Q(2) Poisson problem over four "
+            "uniform refinement levels spanning nearly three orders of "
+            "magnitude in DoF count: the outer CG iteration count with "
+            "GMG stayed in the single digits and barely moved across all "
+            "four levels, while the same CG with PreconditionSSOR and "
+            "with no preconditioner both grew steadily and roughly "
+            "doubled per refinement. On an adaptively refined mesh with "
+            "hanging nodes the GMG count rose slightly but stayed far "
+            "below the alternatives. "
+            "Note GMG was NOT the fastest in wall-clock on the small "
+            "meshes — setup dominates there — and only won once the "
+            "problem was large. Do not judge it on a toy mesh; judge it "
+            "on the SLOPE of iterations against refinement."
+        ),
+        "required_setup_order": [
+            "REQUIRED 1. Construct the Triangulation with "
+            "Triangulation<dim>::MeshSmoothing::"
+            "limit_level_difference_at_vertices — the level hierarchy "
+            "needs it on adaptive meshes.",
+            "REQUIRED 2. dof_handler.distribute_dofs(fe) AND "
+            "dof_handler.distribute_mg_dofs(). The second call is the "
+            "one everybody forgets.",
+            "REQUIRED 3. MGConstrainedDoFs::initialize(dof_handler), "
+            "then make_zero_boundary_constraints(dof_handler, "
+            "{boundary ids}) for Dirichlet boundaries.",
+            "REQUIRED 4. Assemble one matrix per level, plus the "
+            "refinement-edge interface matrices on adaptive meshes.",
+            "REQUIRED 5. MGTransferPrebuilt<Vector> transfer("
+            "mg_constrained_dofs); transfer.build(dof_handler).",
+            "REQUIRED 6. Wrap Multigrid<Vector> in PreconditionMG and "
+            "hand THAT to the outer SolverCG.",
+        ],
         "pitfalls": [
             (
-                "[Numerical] Smoother choice: PreconditionChebyshev "
-                "for SPD, SolverGMRES for indefinite. Signal: "
-                "applying PreconditionChebyshev to an indefinite "
-                "Stokes-type system produces diverging multigrid "
-                "V-cycles (norm grows by factor ~1.5 per cycle, "
-                "visible in MGSmootherRelaxation residuals); "
-                "switching to a few smoothing steps of "
-                "SolverGMRES restores convergence. Conversely, "
-                "GMRES smoothing on SPD is slower than "
-                "PreconditionChebyshev. (Audit 2026-06-02.)"
+                "[API] Forgetting dof_handler.distribute_mg_dofs() is "
+                "the single most common multigrid bug, and what you "
+                "see depends entirely on the build type. On a DEBUG "
+                "build each of the three usual next calls aborts with "
+                "an explicit diagnosis, verified one by one: "
+                "dof_handler.n_dofs(level) gives 'n_dofs(level) can "
+                "only be called after distribute_mg_dofs()'; "
+                "MGTransferPrebuilt::build(dof_handler) gives 'The "
+                "underlying DoFHandler object has not had its "
+                "distribute_mg_dofs() function called, but this is a "
+                "prerequisite for multigrid transfers.'; "
+                "MGConstrainedDoFs::initialize(dof_handler) gives "
+                "'The level dofs are not set up properly! Did you call "
+                "distribute_mg_dofs()?'. On a RELEASE build all three "
+                "SEGFAULT (exit 139) with no message whatsoever. "
+                "Signal: call dof_handler.has_level_dofs() yourself "
+                "and require it to be true before touching any mg_* "
+                "API — it is cheap and works in both builds."
             ),
             (
-                "[Numerical] Coarse grid solver: SolverDirect "
-                "(UMFPACK / Trilinos Amesos) or iterative. "
-                "Signal: leaving the coarse-grid smoother as a "
-                "default PreconditionJacobi gives V-cycle "
-                "convergence rate proportional to coarse-grid "
-                "DOFs; TrilinosWrappers::SolverDirect or "
-                "PETScWrappers MUMPS on the coarsest level "
-                "restores h-independent multigrid convergence. "
-                "For very large meshes use an iterative coarse "
-                "solver to avoid the direct solver memory "
-                "blowup. (Audit 2026-06-02.)"
+                "[Numerical] MGConstrainedDoFs must be told about the "
+                "Dirichlet boundary, otherwise the coarse-level "
+                "operators are singular and the V-cycle is not a "
+                "valid preconditioner. Signal: after "
+                "make_zero_boundary_constraints, "
+                "MGConstrainedDoFs::have_boundary_indices() must be "
+                "TRUE and get_boundary_indices(level) must be "
+                "non-empty on EVERY level, not just the finest — "
+                "verified on a working 3D solve, where each level "
+                "carried its own boundary index set. On an "
+                "adaptively refined mesh check "
+                "get_refinement_edge_indices(level) too: it is empty "
+                "on the levels that are fully refined and non-empty "
+                "exactly on the levels where the hierarchy has a "
+                "refinement edge. If those sets are empty on a mesh "
+                "you know has hanging nodes, the interface handling "
+                "is missing and the iteration count will drift with "
+                "refinement instead of staying flat."
+            ),
+            (
+                "[Numerical] Smoother choice: PreconditionChebyshev "
+                "or a relaxation smoother (SOR/Jacobi via "
+                "mg::SmootherRelaxation) for SPD problems; a few "
+                "steps of a Krylov smoother for indefinite ones. "
+                "Signal: applying an SPD smoother to an indefinite "
+                "saddle-point system produces V-cycles whose residual "
+                "GROWS from cycle to cycle rather than shrinking — "
+                "watch SolverControl::last_value() across the outer "
+                "iterations. For Stokes use a Vanka-type smoother "
+                "(step-56), not point Jacobi: the pressure block has "
+                "a zero diagonal, so point Jacobi is undefined there."
+            ),
+            (
+                "[Numerical] Coarse-grid solver: solve the coarsest "
+                "level EXACTLY. A direct solve (MGCoarseGridHouseholder "
+                "on the dense coarse matrix, or SparseDirectUMFPACK) "
+                "keeps the iteration count h-independent; leaving a "
+                "relaxation smoother there makes the V-cycle only as "
+                "good as that smoother on the coarse problem. Keep "
+                "the coarsest level genuinely small — the working 3D "
+                "setup verified here coarsened down to a few dozen "
+                "DoFs, where a dense direct solve is free. On very "
+                "large hierarchies switch to an iterative coarse "
+                "solver to avoid the direct solver's memory. Signal: "
+                "an iteration count that grows with the COARSE-level "
+                "DoF count while the fine level is unchanged."
             ),
         ],
     },
@@ -1996,8 +2212,7 @@ KNOWLEDGE = {
                 "step-41's active-set strategy iterates "
                 "(IndexSet constraint-detection -> linear solve) "
                 "until two consecutive active sets are identical, "
-                "typically 3-10 outer iterations. (Audit "
-                "2026-06-02.)"
+                "typically 3-10 outer iterations."
             ),
         ],
     },
@@ -2014,8 +2229,7 @@ KNOWLEDGE = {
                 "effectivity index (estimated / true error) is "
                 "typically O(1) to 10x off without the dual. "
                 "step-14 / step-74 show the canonical DWR "
-                "(residual * weighted-dual) loop. (Audit "
-                "2026-06-02.)"
+                "(residual * weighted-dual) loop."
             ),
             (
                 "[Numerical] Higher-order dual solution needed "
@@ -2026,7 +2240,7 @@ KNOWLEDGE = {
                 "index is trivially 1 but the estimator gives "
                 "zero refinement information. Use one order "
                 "higher (or a patch-wise enrichment) for the "
-                "dual. (Audit 2026-06-02.)"
+                "dual."
             ),
         ],
     },
@@ -2044,7 +2258,7 @@ KNOWLEDGE = {
                 "tau * (b . grad phi) * (b . grad u - source) "
                 "inside the FEValues quadrature loop; "
                 "oscillations disappear. step-63 demonstrates "
-                "this stabilisation. (Audit 2026-06-02.)"
+                "this stabilisation."
             ),
             (
                 "[Numerical] Peclet number determines "
@@ -2054,8 +2268,7 @@ KNOWLEDGE = {
                 "by ~20% even in clearly resolved regions, "
                 "diagnosable via KellyErrorEstimator). Use "
                 "tau = h/(2*|b|) * f(Pe_h) where f(Pe) is the "
-                "doubly-asymptotic switch (coth(Pe) - 1/Pe). "
-                "(Audit 2026-06-02.)"
+                "doubly-asymptotic switch (coth(Pe) - 1/Pe)."
             ),
         ],
     },
@@ -2070,7 +2283,7 @@ KNOWLEDGE = {
                 "solution amplitude grows like ~exp(t) regardless "
                 "of mesh size. Use upwind: u_hat = u^- (downstream "
                 "cell takes upstream value); stability is "
-                "recovered. (Audit 2026-06-02.)"
+                "recovered."
             ),
             (
                 "[Numerical] DG + multigrid in step-39. Signal: a "
@@ -2082,7 +2295,7 @@ KNOWLEDGE = {
                 "PreconditionBlock (block-Jacobi over the DG "
                 "block + DoFRenumbering::downstream) restores "
                 "h-independent convergence; see step-39 / "
-                "step-50. (Audit 2026-06-02.)"
+                "step-50."
             ),
         ],
     },

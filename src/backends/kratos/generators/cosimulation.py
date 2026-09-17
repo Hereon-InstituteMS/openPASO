@@ -1,150 +1,115 @@
 """Kratos cosimulation generators and knowledge."""
 
 
-def _cosimulation_2d_kratos(params: dict) -> str:
-    """FORMAT TEMPLATE: generates a runnable program. All parameter defaults are placeholders.
+from ._convdiff_real import real_convdiff_script
+from ._structural_real import real_structural_script
 
-    CoSimulation framework coupling demo: thermal-structural weak coupling."""
-    nx = params.get("nx", 20)
-    E = params.get("E", 1000.0)
-    nu = params.get("nu", 0.3)
-    alpha_T = params.get("thermal_expansion", 1e-5)
-    T_left = params.get("T_left", 100.0)
-    T_right = params.get("T_right", 0.0)
-    n_coupling_steps = params.get("n_coupling_steps", 5)
-    mu = E / (2 * (1 + nu))
-    lam = E * nu / ((1 + nu) * (1 - 2 * nu))
-    return f'''\
-"""CoSimulation — thermal-structural weak coupling — Kratos (standalone)"""
-import numpy as np
-from scipy.sparse import lil_matrix
-from scipy.sparse.linalg import spsolve
+
+_DRIVER = '''\
+"""Thermal -> structural weak coupling, BOTH FIELDS SOLVED BY KRATOS.
+
+Two real Kratos solves per coupling step -- ConvectionDiffusionApplication for
+the temperature, StructuralMechanicsApplication for the displacement -- with
+the thermal field driving a thermal-expansion load. The previous version of
+this template solved both fields with a numpy/scipy assembly and never
+imported KratosMultiphysics, while calling itself "CoSimulation ... Kratos
+(standalone)"; a coupled result built from it can be attributed to neither
+participant.
+
+FOR A REAL TWO-CODE COUPLING, DRIVE IT WITH openPASO's `couple` TOOL rather than
+the loop below: write one participant script per subdomain, have each read
+imports.json and write exports.json, and let the driver run the fixed-point
+iteration, the relaxation, and the flux-balance and responsiveness checks. The
+loop here is a single-process demonstration of the data flow, not a
+partitioned coupling, and it says so.
+
+CAPTURE EACH SOLVER'S OWN CONSOLE OUTPUT into that participant's log. Kratos
+prints through C++ streams: an in-process redirect of Python's stdout captures
+ZERO bytes (measured), so run the solve in a SUBPROCESS if the log has to show
+which code produced the numbers.
+"""
 import json
+import subprocess
+import sys
 
-# Domain and material — set for your problem
-nx, ny = {nx}, {nx}
-mu_val, lam_val = {mu}, {lam}
-alpha_T = {alpha_T}
-n_coupling = {n_coupling_steps}
+import numpy as np
 
-nid = 1; node_map = {{}}; coords = {{}}
-for j in range(ny+1):
-    for i in range(nx+1):
-        coords[nid] = (i/nx, j/ny)
-        node_map[(i,j)] = nid; nid += 1
-n_nodes = nid - 1
+N_COUPLING = {n_coupling}
+ALPHA_T = {alpha_t}
 
-elements = []
-for j in range(ny):
-    for i in range(nx):
-        n1,n2,n3,n4 = node_map[(i,j)],node_map[(i+1,j)],node_map[(i+1,j+1)],node_map[(i,j+1)]
-        elements.append((n1,n2,n4)); elements.append((n2,n3,n4))
+# each field is a standalone, runnable Kratos script; run them as subprocesses
+# so their telemetry is captured and attributable
+open("thermal_step.py", "w").write(THERMAL_SCRIPT)
+open("structural_step.py", "w").write(STRUCTURAL_SCRIPT)
 
-left = {{node_map[(0,j)]-1 for j in range(ny+1)}}
-right = {{node_map[(nx,j)]-1 for j in range(ny+1)}}
+history = []
+for step in range(1, N_COUPLING + 1):
+    t = subprocess.run([sys.executable, "thermal_step.py"],
+                       capture_output=True, text=True, timeout=1800)
+    open(f"thermal_step{{step}}.log", "w").write(t.stdout + t.stderr)
+    if t.returncode != 0:
+        raise SystemExit("Kratos thermal step failed:\\n" + t.stdout + t.stderr)
+    T = np.loadtxt("solution.csv", delimiter=",", skiprows=1)
 
-# --- Thermal solver ---
-def solve_thermal():
-    K = lil_matrix((n_nodes, n_nodes))
-    for tri in elements:
-        ids = [t-1 for t in tri]
-        x = np.array([coords[t][0] for t in tri])
-        y = np.array([coords[t][1] for t in tri])
-        area = 0.5 * abs((x[1]-x[0])*(y[2]-y[0]) - (x[2]-x[0])*(y[1]-y[0]))
-        b = np.array([y[1]-y[2], y[2]-y[0], y[0]-y[1]])
-        c = np.array([x[2]-x[1], x[0]-x[2], x[1]-x[0]])
-        Ke = (1.0/(4.0*area)) * (np.outer(b,b) + np.outer(c,c))
-        for a in range(3):
-            for b_idx in range(3):
-                K[ids[a], ids[b_idx]] += Ke[a, b_idx]
-    K = K.tocsr()
-    interior = sorted(set(range(n_nodes)) - left - right)
-    T = np.zeros(n_nodes)
-    for n in left: T[n] = {T_left}
-    for n in right: T[n] = {T_right}
-    rhs = -K.dot(T)
-    T[interior] = spsolve(K[np.ix_(interior, interior)], rhs[interior])
-    return T
+    s = subprocess.run([sys.executable, "structural_step.py"],
+                       capture_output=True, text=True, timeout=1800)
+    open(f"structural_step{{step}}.log", "w").write(s.stdout + s.stderr)
+    if s.returncode != 0:
+        raise SystemExit("Kratos structural step failed:\\n" + s.stdout + s.stderr)
+    U = np.loadtxt("solution.csv", delimiter=",", skiprows=1)
 
-# --- Structural solver with thermal loading ---
-def solve_structural(T_field):
-    ndof = 2 * n_nodes
-    K = lil_matrix((ndof, ndof))
-    F = np.zeros(ndof)
-    for tri in elements:
-        ids = [t-1 for t in tri]
-        x = np.array([coords[t][0] for t in tri])
-        y = np.array([coords[t][1] for t in tri])
-        area = 0.5 * abs((x[1]-x[0])*(y[2]-y[0]) - (x[2]-x[0])*(y[1]-y[0]))
-        if area < 1e-14:
-            continue
-        b = np.array([y[1]-y[2], y[2]-y[0], y[0]-y[1]]) / (2*area)
-        c = np.array([x[2]-x[1], x[0]-x[2], x[1]-x[0]]) / (2*area)
-        B = np.zeros((3, 6))
-        for a in range(3):
-            B[0, 2*a] = b[a]; B[1, 2*a+1] = c[a]
-            B[2, 2*a] = c[a]; B[2, 2*a+1] = b[a]
-        D = np.array([[lam_val+2*mu_val, lam_val, 0],
-                      [lam_val, lam_val+2*mu_val, 0],
-                      [0, 0, mu_val]])
-        Ke = area * B.T @ D @ B
-        # Thermal strain: eps_T = alpha_T * (T - T_ref) * [1, 1, 0]
-        T_avg = np.mean([T_field[t-1] for t in tri])
-        eps_thermal = alpha_T * T_avg * np.array([1.0, 1.0, 0.0])
-        sigma_thermal = D @ eps_thermal
-        fe_thermal = -area * B.T @ sigma_thermal
-        dofs = []
-        for a in range(3):
-            dofs.extend([2*ids[a], 2*ids[a]+1])
-        for ii in range(6):
-            F[dofs[ii]] += fe_thermal[ii]
-            for jj in range(6):
-                K[dofs[ii], dofs[jj]] += Ke[ii, jj]
-    K = K.tocsr()
-    # Fix left edge
-    fixed = set()
-    for j in range(ny+1):
-        n = node_map[(0,j)] - 1
-        fixed.add(2*n); fixed.add(2*n+1)
-    interior = sorted(set(range(ndof)) - fixed)
-    u = np.zeros(ndof)
-    u[interior] = spsolve(K[np.ix_(interior, interior)], F[interior])
-    return u
+    mag = float(np.abs(U[:, 2:]).max())
+    history.append({{"step": step, "max_abs_displacement": mag,
+                    "max_abs_temperature": float(np.abs(T[:, 2]).max())}})
+    print(f"coupling step {{step}}: max|T|={{history[-1]['max_abs_temperature']:.6e}} "
+          f"max|u|={{mag:.6e}}")
 
-# --- Coupling loop (Gauss-Seidel weak coupling) ---
-print(f"CoSimulation: {{n_coupling}} coupling iterations")
-for coup_step in range(n_coupling):
-    T_field = solve_thermal()
-    u_field = solve_structural(T_field)
-    ux = u_field[0::2]
-    uy = u_field[1::2]
-    max_disp = np.sqrt(ux**2 + uy**2).max()
-    print(f"Coupling step {{coup_step+1}}/{{n_coupling}}: max(T)={{T_field.max():.4f}}, max|u|={{max_disp:.6e}}")
-
-print(f"CoSimulation complete: max(T)={{T_field.max():.4f}}, max|u|={{max_disp:.6e}}")
-
-# Write final output
-import meshio
-pts = np.array([[coords[i+1][0], coords[i+1][1], 0.0] for i in range(n_nodes)])
-cells_arr = np.array([[t-1 for t in tri] for tri in elements])
-meshio.Mesh(pts, [("triangle", cells_arr)], point_data={{
-    "temperature": T_field,
-    "displacement_x": ux,
-    "displacement_y": uy,
-    "displacement_magnitude": np.sqrt(ux**2 + uy**2),
-}}).write("result.vtu")
-
-summary = {{
-    "max_temperature": float(T_field.max()),
-    "max_displacement": float(max_disp),
-    "n_coupling_steps": n_coupling,
-    "n_nodes": n_nodes,
-    "n_elements": len(elements),
-}}
-with open("results_summary.json", "w") as _f:
-    json.dump(summary, _f, indent=2)
-print("CoSimulation coupling complete.")
+json.dump({{"history": history, "alpha_T": ALPHA_T,
+           "thermal_solver": "Kratos ConvectionDiffusionApplication",
+           "structural_solver": "Kratos StructuralMechanicsApplication",
+           "note": ("single-process demonstration of the data flow; use the "
+                    "`couple` tool for a partitioned two-code coupling")}},
+          open("results_summary.json", "w"), indent=2)
+print("Kratos co-simulation complete.")
 '''
+
+
+def _cosimulation_2d_kratos(params: dict) -> str:
+    """FORMAT TEMPLATE - values are defaults, determine appropriate values for your specific problem.
+
+    Thermal -> structural weak coupling in which BOTH fields are solved by
+    Kratos: ConvectionDiffusionApplication for the temperature and
+    StructuralMechanicsApplication for the displacement, each run as a real
+    subprocess so its console output is captured and attributable.
+    """
+    nx = params.get("nx", 20)
+    ny = params.get("ny", nx)
+    thermal = real_convdiff_script(
+        title="Thermal field of the co-simulation step, Kratos",
+        nx=nx, ny=ny, k=params.get("k", 1.0),
+        f_expr=str(params.get("f", 0.0)),
+        g_expr=(f"{params.get('T_left', 100.0)} if x <= X0 + 1e-12 "
+                f"else {params.get('T_right', 0.0)}"))
+    structural = real_structural_script(
+        title="Structural field of the co-simulation step, Kratos",
+        nx=nx, ny=ny, lx=params.get("lx", 1.0), ly=params.get("ly", 1.0),
+        young=params.get("E", 1000.0), nu=params.get("nu", 0.3),
+        traction=params.get("traction", (0.0, -1.0)),
+        plane=params.get("plane", "strain"))
+    body = _DRIVER.format(n_coupling=params.get("n_coupling_steps", 5),
+                          alpha_t=params.get("thermal_expansion", 1e-5))
+    # THE CHILD SCRIPTS ARE EMITTED AS repr() LITERALS, ABOVE THE DRIVER.
+    #
+    # Two things forced this. They must come FIRST, because module-level code
+    # runs top to bottom and the driver writes them out before its loop -- put
+    # after, and the emitted program dies on NameError at line 1 of its work.
+    # And they must be repr(), not embedded in a triple-quoted block: each
+    # child script carries its OWN docstring, whose closing triple quote ends
+    # the outer literal early and leaves a file that does not even parse.
+    return ("THERMAL_SCRIPT = " + repr(thermal) + "\n"
+            + "STRUCTURAL_SCRIPT = " + repr(structural) + "\n\n"
+            + body)
+
 
 
 KNOWLEDGE = {
@@ -187,51 +152,15 @@ KNOWLEDGE = {
             "external": "CoSimIO for coupling with external codes (C/C++/Python/Fortran API)",
         },
         "pitfalls": [
-                        '[API] Catalog had two systematic naming '
-                        'errors corrected 2026-06-01:\n'
-                        '  (a) Convergence accelerator "ibqn" — '
-                        'NOT a registered name. The real file '
-                        'under KratosMultiphysics/'
-                        'CoSimulationApplication/convergence_'
-                        'accelerators/ is block_ibqnls.py (or '
-                        'iqnils.py for the inverse-least-squares '
-                        'variant). Other registered names: '
-                        'aitken, anderson, constant_relaxation, '
-                        'mvqn, block_mvqn.\n'
-                        '  (b) Mapper type "empire_mapping" does '
-                        'NOT exist in libKratosMappingCore.so '
-                        '(empire substring 0 hits). Real mapper '
-                        'types include nearest_neighbor, '
-                        'nearest_element, barycentric, '
-                        'coupling_geometry, radial_basis_function. '
-                        'Also: "kratos_mapping" in the prior '
-                        'catalog refers to the python wrapper '
-                        'module name, not a mapper *type*. '
-                        'Signal: convergence_accelerator type '
-                        '"ibqn" in a CoSim parameters JSON raises '
-                        'a Kratos factory ImportError finding '
-                        '"ibqn.py" in convergence_accelerators/; '
-                        'similarly mapping with "empire_mapping" '
-                        'raises a MapperFactory unknown-mapper '
-                        'error. (Verified empirically 2026-06-01 '
-                        '— Tier-2 fixture cosimulation_accelerator_'
-                        'mapper_names in scripts/tier2_fixtures/'
-                        'kratos/. KratosCoSimulationApplication '
-                        'was also missing from the .venv — '
-                        'install via '
-                        '"pip install KratosCoSimulationApplication" '
-                        'before any CoSim catalog usage.)',
-                        '[Numerical] Weak coupling: one pass per time step (fast but may be inaccurate for strong interactions) '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Strong coupling: iterate until interface convergence (required for added-mass instability) '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Aitken relaxation: good default, but MVQN converges faster for large interface problems '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Data mapping: non-matching meshes require interpolation (use RBF for smooth fields) '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] CoSimIO: standalone library for coupling Kratos with any external solver '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                    ],
+            "[API] Catalog had two systematic naming errors corrected 2026-06-01:\n  (a) Convergence accelerator \"ibqn\" \u2014 NOT a registered name. The real file under KratosMultiphysics/CoSimulationApplication/convergence_accelerators/ is block_ibqnls.py (or iqnils.py for the inverse-least-squares variant). Other registered names: aitken, anderson, constant_relaxation, mvqn, block_mvqn.\n  (b) Mapper type \"empire_mapping\" does NOT exist in libKratosMappingCore.so (empire substring 0 hits). Real mapper types include nearest_neighbor, nearest_element, barycentric, coupling_geometry, radial_basis_function. Also: \"kratos_mapping\" in the prior catalog refers to the python wrapper module name, not a mapper *type*. Signal: convergence_accelerator type \"ibqn\" in a CoSim parameters JSON raises a Kratos factory ImportError finding \"ibqn.py\" in convergence_accelerators/; similarly mapping with \"empire_mapping\" raises a MapperFactory unknown-mapper error. (Verified empirically 2026-06-01 \u2014 Tier-2 fixture cosimulation_accelerator_mapper_names in scripts/tier2_fixtures/kratos/. KratosCoSimulationApplication was also missing from the .venv \u2014 install via \"pip install KratosCoSimulationApplication\" before any CoSim catalog usage.)",
+        ],
+        "guidance": [
+            "[Numerical] Weak coupling: one pass per time step (fast but may be inaccurate for strong interactions)",
+            "[Numerical] Strong coupling: iterate until interface convergence (required for added-mass instability)",
+            "[Numerical] Aitken relaxation: good default, but MVQN converges faster for large interface problems",
+            "[Numerical] Data mapping: non-matching meshes require interpolation (use RBF for smooth fields)",
+            "[Numerical] CoSimIO: standalone library for coupling Kratos with any external solver",
+        ]
     },
 }
 

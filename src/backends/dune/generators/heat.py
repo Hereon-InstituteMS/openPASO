@@ -46,6 +46,7 @@ gridView.writeVTK("result", pointdata={{"temperature": uh}})
 summary = {{"max_value": float(vals.max()), "n_dofs": len(vals)}}
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -54,6 +55,37 @@ KNOWLEDGE = {
         "description": "Heat conduction: steady and transient (backward Euler, Crank-Nicolson)",
         "solver": "Same galerkin scheme; for transient, use time-stepping loop",
         "time_stepping": "Backward Euler, Crank-Nicolson, DIRK23, DIRK34, SDIRK22, Heun",
+        "required_vs_optional": {
+            "REQUIRED": [
+                "a mass term u*v/dt on the LEFT and the old solution "
+                "u_n*v/dt on the RIGHT — a steady form with a time "
+                "loop around it just re-solves the steady problem",
+                "ONE scheme built OUTSIDE the loop; rebuilding it "
+                "inside costs a C++ compile per step",
+                "solve into a function that is NOT the one appearing "
+                "in the right-hand side, then copy back",
+            ],
+            "OPTIONAL": [
+                "dune.ufl.Constant for dt — then changing dt does NOT "
+                "trigger a JIT rebuild, whereas a bare float literal "
+                "in the form does",
+                "solver='cg' — the implicit-Euler heat matrix is SPD",
+            ],
+            "NOT AVAILABLE": [
+                "the DIRK/SDIRK/SSP-RK families named in older catalog "
+                "text: they live in dune-fem-dg, which is NOT "
+                "importable from a plain dune-fem install (executed "
+                "2026-08-03). Write the stepper yourself.",
+            ],
+        },
+        "verification_you_can_run": (
+            "Implicit Euler is unconditionally stable and first order "
+            "in time. Two checks that need no reference solution: with "
+            "zero source and zero Dirichlet data the maximum must "
+            "DECAY monotonically and never change sign; and halving dt "
+            "must change the answer by about half as much again. If "
+            "the answer does not move at all when you change dt, the "
+            "mass term is missing."),
         "pitfalls": [
             (
                 "[API] Non-homogeneous Dirichlet via "

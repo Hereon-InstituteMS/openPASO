@@ -44,33 +44,14 @@ KNOWLEDGE = {
         ],
         "wall_treatment": ["wall_functions (log law)", "low_Re (resolve boundary layer)"],
         "pitfalls": [
-                        '[API] RANSApplication element names DROP the '
-                        '"Element" suffix and ADD an AFC / CWD / RFC '
-                        'stabilization-scheme tag in the middle. '
-                        'Examples: RansKEpsilonKAFC2D3N, '
-                        'RansKEpsilonEpsilonCWD2D3N, '
-                        'RansKOmegaSSTKRFC2D3N. The catalog '
-                        'previously listed RansKEpsilonKElement2D3N '
-                        '/ RansKOmegaSSTKElement2D3N — none of '
-                        'those names are registered. '
-                        "Signal: model_part.CreateNewElement("
-                        "\"RansKEpsilonKElement2D3N\", ...) raises "
-                        "'is not registered' from kratos/python/"
-                        "add_model_part_to_python.cpp:173; dropping "
-                        "'Element' and inserting AFC / CWD / RFC "
-                        "lets the call succeed. (Verified "
-                        "empirically 2026-06-01 — Tier-2 fixture "
-                        "rans_shallowwater_element_naming in "
-                        "scripts/tier2_fixtures/kratos/.)",
-                        '[Integration] Requires FluidDynamicsApplication as dependency '
-                        "Signal: RuntimeError 'KeyError' from JSON parsing OR 'SubModelPart not found' / 'Property ID ... missing' during AnalysisStage.Initialize.",
-                        '[Numerical] Wall distance computation needed for SST model '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Physics] Inlet turbulence: specify k and epsilon/omega from turbulence intensity '
-                        'Signal: the post-processed VtkOutput .post.bin shows the integrated_flux / max_displacement / PRESSURE channels disagreeing with analytic / textbook reference by 10-100%.',
-                        '[Numerical] y+ must be appropriate for chosen wall treatment (30-300 for wall functions) '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                    ],
+            "[API] RANSApplication element names DROP the \"Element\" suffix and ADD an AFC / CWD / RFC stabilization-scheme tag in the middle. Examples: RansKEpsilonKAFC2D3N, RansKEpsilonEpsilonCWD2D3N, RansKOmegaSSTKRFC2D3N. The catalog previously listed RansKEpsilonKElement2D3N / RansKOmegaSSTKElement2D3N \u2014 none of those names are registered. Signal: calling model_part.CreateNewElement with the unregistered name RansKEpsilonKElement2D3N raises 'is not registered' from kratos/python/add_model_part_to_python.cpp:173; dropping the Element suffix and inserting AFC / CWD / RFC lets the call succeed. (Verified empirically 2026-06-01 \u2014 Tier-2 fixture rans_shallowwater_element_naming in scripts/tier2_fixtures/kratos/.)",
+            "[Integration] Requires FluidDynamicsApplication as dependency Signal: RANSApplication needs FluidDynamicsApplication: the application's Python loader imports its dependencies first, so a build missing one fails on that inner import line rather than on the user's own import statement.",
+        ],
+        "guidance": [
+            "[Numerical] Wall distance computation needed for SST model",
+            "[Physics] Inlet turbulence: specify k and epsilon/omega from turbulence intensity",
+            "[Numerical] y+ must be appropriate for chosen wall treatment (30-300 for wall functions)",
+        ]
     },
 }
 

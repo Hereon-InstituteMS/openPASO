@@ -14,7 +14,8 @@ from core.backend import JobHandle
 _jobs: dict[str, JobHandle] = {}
 
 # Output directory
-_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "simulation_outputs"
+from core.output_paths import output_dir as _output_dir  # noqa: E402
+_OUTPUT_DIR = _output_dir("simulation_outputs")
 
 
 def register_simulation_tools(mcp: FastMCP):
@@ -267,17 +268,30 @@ def register_simulation_tools(mcp: FastMCP):
 
         # Output configuration check
         if solver == "fourc":
-            if "IO/RUNTIME VTK OUTPUT" not in input_content:
+            # A particle deck is exempt: see directly below. Warning it to add the section told a
+            # correct deck to go and look for one (found by Copilot review, Hereon PR #55).
+            # NOTE: register_simulation_tools is not called by the server, and this tool imports
+            # quality-check helpers that no longer exist, so it is unreachable as shipped.
+            if ("IO/RUNTIME VTK OUTPUT" not in input_content
+                    and "PARTICLE DYNAMIC" not in input_content):
                 warnings.append(
                     "No IO/RUNTIME VTK OUTPUT section found in 4C input. "
                     "Add this section to get ParaView-readable VTU/VTP output files."
                 )
-            if "Particle" in input_content and "PARTICLES" not in input_content.upper().split("IO/RUNTIME VTK OUTPUT")[-1] if "IO/RUNTIME VTK OUTPUT" in input_content else True:
-                if "Particle" in input_content:
-                    warnings.append(
-                        "Particle simulation detected but IO/RUNTIME VTK OUTPUT/PARTICLES "
-                        "section may be missing. Without it, no particle VTP files are produced."
-                    )
+            # A Particle deck needs NO output section: 4C writes the
+            # particle .pvd/.vtu series unconditionally at RESULTSEVERY.
+            # The failure mode runs the other way — the section some
+            # sources recommend does not exist, and writing it aborts the
+            # run before the first step.
+            if "IO/RUNTIME VTK OUTPUT/PARTICLES" in input_content:
+                warnings.append(
+                    "IO/RUNTIME VTK OUTPUT/PARTICLES is not a valid 4C "
+                    "section. The run will abort at input parsing with "
+                    "\"Section 'IO/RUNTIME VTK OUTPUT/PARTICLES' is not "
+                    "a valid section name.\" Delete it: particle output "
+                    "is unconditional and its interval is RESULTSEVERY "
+                    "in PARTICLE DYNAMIC."
+                )
 
         if not warnings:
             return "All quality checks passed. Simulation is ready to run."

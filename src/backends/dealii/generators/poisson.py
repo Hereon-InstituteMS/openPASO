@@ -11,6 +11,10 @@ def _poisson_2d(params: dict) -> str:
     appropriate to the specific problem being solved.
     Based on deal.II step-3.
     """
+    degree = int(params.get("degree", params.get("order", 1)))
+    if degree < 1:
+        raise ValueError(
+            f"_poisson_2d: degree must be >= 1, got {degree!r}")
     refinements = params.get("refinements", 5)
     return f'''\
 /* Poisson equation on unit square — based on deal.II step-3
@@ -43,7 +47,7 @@ int main()
   GridGenerator::hyper_cube(triangulation);
   triangulation.refine_global({refinements});
 
-  FE_Q<2> fe(1);
+  FE_Q<2> fe({degree});
   DoFHandler<2> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
 
@@ -144,6 +148,10 @@ def _poisson_3d(params: dict) -> str:
     appropriate to the specific problem being solved.
     Based on deal.II step-3.
     """
+    degree = int(params.get("degree", params.get("order", 1)))
+    if degree < 1:
+        raise ValueError(
+            f"_poisson_3d: degree must be >= 1, got {degree!r}")
     refinements = params.get("refinements", 3)
     return f'''\
 /* Poisson equation on unit cube — based on deal.II step-3
@@ -176,7 +184,7 @@ int main()
   GridGenerator::hyper_cube(triangulation);
   triangulation.refine_global({refinements});
 
-  FE_Q<3> fe(1);
+  FE_Q<3> fe({degree});
   DoFHandler<3> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
 
@@ -277,6 +285,10 @@ def _poisson_l_domain(params: dict) -> str:
     appropriate to the specific problem being solved.
     Uses deal.II built-in GridGenerator::hyper_L.
     """
+    degree = int(params.get("degree", params.get("order", 1)))
+    if degree < 1:
+        raise ValueError(
+            f"_poisson_l_domain: degree must be >= 1, got {degree!r}")
     refinements = params.get("refinements", 5)
     return f'''\
 /* Poisson on L-shaped domain — deal.II
@@ -311,7 +323,7 @@ int main()
   GridGenerator::hyper_L(triangulation, -1, 1);
   triangulation.refine_global({refinements});
 
-  FE_Q<2> fe(1);
+  FE_Q<2> fe({degree});
   DoFHandler<2> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
   std::cout << "L-domain DOFs: " << dof_handler.n_dofs() << std::endl;
@@ -388,6 +400,10 @@ def _poisson_rectangle(params: dict) -> str:
     All parameter defaults are placeholders. The user/agent must set values
     appropriate to the specific problem being solved.
     """
+    degree = int(params.get("degree", params.get("order", 1)))
+    if degree < 1:
+        raise ValueError(
+            f"_poisson_rectangle: degree must be >= 1, got {degree!r}")
     refinements = params.get("refinements", 5)
     lx = params.get("lx", 2.0)
     ly = params.get("ly", 1.0)
@@ -424,7 +440,7 @@ int main()
     Point<2>(0, 0), Point<2>({lx}, {ly}));
   triangulation.refine_global({refinements});
 
-  FE_Q<2> fe(1);
+  FE_Q<2> fe({degree});
   DoFHandler<2> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
   std::cout << "DOFs: " << dof_handler.n_dofs() << std::endl;
@@ -502,6 +518,15 @@ def _poisson_adaptive_2d(params: dict) -> str:
     """
     cycles = params.get("cycles", 6)
     order = params.get("order", 2)
+    # Pre-refinement before the adaptive loop. Must be >= 1: a
+    # fixed-FRACTION refinement strategy flags floor(fraction *
+    # n_active_cells) cells, which is zero on a 3-cell coarse mesh.
+    pre_refinements = int(params.get("pre_refinements", 2))
+    if pre_refinements < 1:
+        raise ValueError(
+            "poisson_2d_adaptive: pre_refinements must be >= 1, "
+            "otherwise refine_and_coarsen_fixed_number flags zero "
+            f"cells on the 3-cell coarse mesh (got {pre_refinements!r})")
     return f'''\
 /* Poisson with AMR — step-6 based — deal.II */
 #include <deal.II/grid/tria.h>
@@ -531,6 +556,13 @@ int main() {{
   const int dim = 2;
   Triangulation<dim> tria;
   GridGenerator::hyper_L(tria, -1, 1);
+  // REQUIRED: refine at least once before the adaptive loop.
+  // hyper_L gives 3 cells, and refine_and_coarsen_fixed_number(0.3, ...)
+  // computes 0.3*3 = 0.9 -> floors to ZERO cells flagged, so
+  // execute_coarsening_and_refinement() is a no-op and every cycle
+  // recomputes the identical answer without any warning. Verified:
+  // 3 cells -> 0 flagged; after one refine_global, 12 cells -> 3 flagged.
+  tria.refine_global({pre_refinements});
 
   FE_Q<dim> fe({order});
   DoFHandler<dim> dof_handler(tria);
@@ -627,40 +659,97 @@ KNOWLEDGE = {
     #    is the Poisson-relevant subset only.
     "elements": {
         "FE_Q":
-            "Canonical Poisson choice. degree=1 default; degree=2 "
-            "smoother solutions; higher degree for spectral "
-            "convergence on smooth problems.",
+            "Canonical Poisson choice. The poisson_* and heat_* "
+            "templates take degree=<k> (or order=<k>) and emit "
+            "FE_Q<dim>(k); degree=1 is the default, degree=2 is the "
+            "cheapest real accuracy gain, and higher degrees pay off "
+            "on smooth problems. Verified by running the generated "
+            "programs at degree 1, 2 and 3 in 2D and 3D: all "
+            "compile, solve, and approach the analytic peak value of "
+            "the reference problem more closely as the degree rises. "
+            "NOTE the CG iteration count grows with degree at fixed "
+            "refinement (the condition number does), so raise the "
+            "SolverControl budget or precondition better when you "
+            "raise k.",
         "FE_Q_Hierarchical":
-            "Required for p-adaptive refinement on Poisson — "
-            "coarse-level DoFs survive a degree change.",
+            "Hierarchical basis, so coarse-level modes survive a "
+            "degree change — the usual choice for p-adaptive "
+            "Poisson. WARNING, verified by execution: "
+            "has_support_points() is FALSE for degree >= 2, and "
+            "VectorTools::interpolate_boundary_values then SEGFAULTS "
+            "(exit 139 on Release; a Debug build aborts with 'You "
+            "are trying to access the support points of a finite "
+            "element that either has no support points at all...'). "
+            "At degree 1 it coincides with FE_Q and the call is "
+            "fine, which is exactly why the bug hides in a "
+            "first-order test and appears when you raise the degree. "
+            "Use VectorTools::project_boundary_values instead, or "
+            "guard on fe.has_support_points().",
         "FE_Bernstein":
-            "For high-p Poisson where mass-matrix conditioning "
-            "matters (modal analysis, transient diffusion).",
+            "Positive, partition-of-unity basis; for high-p Poisson "
+            "where mass-matrix conditioning matters (modal analysis, "
+            "transient diffusion). SAME WARNING as "
+            "FE_Q_Hierarchical, verified by execution: "
+            "has_support_points() is FALSE for degree >= 2 (and it "
+            "has no generalized support points either), so "
+            "interpolate_boundary_values SEGFAULTS. Use "
+            "project_boundary_values.",
         "FE_Q_iso_Q1":
             "Cheap multi-linear-on-sub-cells alternative to "
             "FE_Q(p); diagonal lumped mass matrix.",
         "FE_DGQ":
             "Discontinuous Galerkin Poisson via interior-penalty "
             "formulation; needed when coefficients are "
-            "discontinuous across cells (heterogeneous media).",
+            "discontinuous across cells (heterogeneous media). Two "
+            "consequences you must handle, both verified: the "
+            "sparsity pattern has to come from "
+            "DoFTools::make_flux_sparsity_pattern (the cell-only "
+            "builder drops every face coupling), and "
+            "interpolate_boundary_values is a silent NO-OP on it — "
+            "it returns an EMPTY map — so Dirichlet data must be "
+            "imposed weakly through the penalty term.",
         "FE_DGP":
             "Monomial DG basis; alternative to FE_DGQ for higher-"
             "order accurate Poisson on hyper-cube meshes.",
         "FE_SimplexP":
             "Lagrange on simplex (triangle / tet) cells — needed "
-            "when the mesh comes from unstructured Gmsh / "
-            "Triangle / TetGen. (Available in deal.II ≥ 9.3; "
-            "the canonical element-catalog has the version gate.)",
+            "when the mesh comes from unstructured Gmsh / Triangle / "
+            "TetGen. Available in deal.II >= 9.3. It is NOT a "
+            "drop-in for FE_Q: the quadrature must become "
+            "QGaussSimplex and an explicit "
+            "MappingFE(FE_SimplexP(1)) must be passed to FEValues, "
+            "VectorTools::*, KellyErrorEstimator and DataOut. See "
+            "the simplex section of the essentials block for the "
+            "one check (summed JxW against the domain volume) that "
+            "catches all three mistakes.",
     },
     "mesh_generators": {
         "hyper_cube": "Classic Poisson on the unit square / cube.",
         "hyper_rectangle": "Non-square aspect ratio.",
         "subdivided_hyper_cube": "Pre-subdivided to avoid repeated refine_global() calls.",
         "hyper_L": "Re-entrant-corner singularity; canonical adaptive-refinement test.",
-        "hyper_ball": "Curved boundary; tests boundary-conforming refinement.",
-        "hyper_shell": "Annulus; layered radial Poisson problems.",
+        "hyper_ball": ("Curved boundary. The generator attaches a "
+                       "SphericalManifold for you - do NOT call "
+                       "reset_all_manifolds(), and raise the mapping "
+                       "degree (MappingQ<dim>(2) or (3)) or the "
+                       "geometry error dominates the FE error. "
+                       "Verified: with no manifold the integrated "
+                       "volume is stuck at the straight-edged value "
+                       "and refinement does not change it at all."),
+        "hyper_shell": ("Annulus / spherical shell for layered radial "
+                        "problems. Same manifold and mapping-degree "
+                        "caveat as hyper_ball. Its colorize argument "
+                        "gives inner boundary_id 0 and outer 1, which "
+                        "is what a two-sided radial BC needs."),
         "cheese": "Heterogeneous-coefficient demos.",
-        "torus": "3D periodic-boundary studies.",
+        "torus": ("GridGenerator::torus is dimension-overloaded and "
+                  "both forms were verified to build: "
+                  "Triangulation<3> gives a SOLID torus of hexes, "
+                  "Triangulation<2,3> gives its SURFACE as a 2D mesh "
+                  "embedded in 3D. Pick deliberately - the surface "
+                  "variant needs spacedim-aware FEValues and suits "
+                  "Laplace-Beltrami style problems, not a volume "
+                  "PDE."),
     },
     "solvers": [
         "SolverCG<>                   — Poisson is symmetric positive-definite; CG is the default",
@@ -668,42 +757,134 @@ KNOWLEDGE = {
         "MatrixFree + FEEvaluation    — step-37 matrix-free; needed for matrix-storage-bound problems past ~10^7 DoFs",
     ],
     "preconditioners": [
-        "PreconditionSSOR             — serial default; cheap on SPD systems",
+        "PreconditionSSOR             — serial default; cheap on SPD systems. "
+        "The SYMMETRIC sweep, so it is legal with SolverCG. Its one-sided "
+        "sibling PreconditionSOR is NOT: verified, SolverCG + PreconditionSOR "
+        "runs to its iteration limit and throws SolverControl::NoConvergence "
+        "on an SPD Poisson system that SolverGMRES + PreconditionSOR solves "
+        "in a few tens of steps",
+        "PreconditionBlockSSOR / BlockJacobi — only when the diagonal blocks "
+        "are genuine sub-problems, i.e. a DISCONTINUOUS element with "
+        "block_size = fe.n_dofs_per_cell(). On a continuous FE_Q Poisson "
+        "system a block of constrained rows can be exactly SINGULAR; "
+        "initialize() then returns silently and the preconditioner is worse "
+        "than none (verified: one of 72 blocks singular, one-application "
+        "relative residual above 1)",
+        "SparseILU / SparseMIC        — incomplete LU / modified incomplete "
+        "Cholesky, both verified to work with SolverCG on Poisson; SparseMIC "
+        "is the class the name 'PreconditionICC' refers to",
         "PreconditionAMG / BoomerAMG  — parallel; via TrilinosWrappers, scales to 10^7 DoFs",
         "PreconditionChebyshev        — used inside multigrid as smoother, also as a standalone for matrix-free",
         "MGSmootherRelaxation         — geometric multigrid smoother (step-16, step-50)",
     ],
     "pitfalls": [
-        "[Syntax] Must call triangulation.refine_global() before "
-        "distributing DOFs. Calling distribute_dofs on a 1-cell "
-        "triangulation runs but gives a useless 4-DoF system. "
-        "Signal: SolverControl reports 'Convergence step 0 value "
-        "X.XXe-16' (already converged), `dof_handler.n_dofs()` "
-        "returns 4, and KellyErrorEstimator output is a single "
-        "cell-wise scalar.",
-        "[Syntax] Boundary IDs on hyper_cube: ALL faces have "
-        "boundary_id=0. To distinguish faces you must iterate "
-        "the cells and re-tag faces after the mesh exists. Signal: "
-        "`GridTools::get_boundary_ids(tria)` returns `{0}` "
+        "[Syntax] Do all refinement BEFORE distribute_dofs(). "
+        "Calling distribute_dofs on an unrefined one-cell "
+        "triangulation succeeds and produces a system with no "
+        "interior at all. Verified on a one-cell unit square with "
+        "FE_Q(1) and Dirichlet data on every face: n_dofs() == 4 "
+        "and n_constraints() == 4 — EVERY degree of freedom is a "
+        "boundary DoF — so the assembled right-hand side is exactly "
+        "0, CG 'converges' at step 0, and the solution is "
+        "identically zero. Nothing is raised. "
+        "Signal: strongest first, compare "
+        "constraints.n_constraints() against "
+        "dof_handler.n_dofs() — equal means there is no unknown left "
+        "to solve for; then system_rhs.l2_norm() == 0 exactly; then "
+        "SolverControl::last_step() == 0 with last_value() == 0; and "
+        "KellyErrorEstimator returns a vector of length "
+        "n_active_cells(), i.e. 1. The solver log line, if you "
+        "enable it with log_history(true) + "
+        "deallog.depth_console(2), reads literally "
+        "'DEAL:cg::Convergence step 0 value 0.00000' — deal.II "
+        "prints that value in FIXED point, not the scientific "
+        "'X.XXe-16' this entry used to quote.",
+        "[Syntax] Boundary IDs on hyper_cube: with the DEFAULT "
+        "colorize=false ALL faces have boundary_id=0. The fix is NOT "
+        "to re-tag faces by hand — pass colorize=true: "
+        "GridGenerator::hyper_cube(tria, 0, 1, /*colorize=*/true) "
+        "assigns 0:x=0, 1:x=1, 2:y=0, 3:y=1 (3D adds 4:z=0, 5:z=1). "
+        "Signal: `tria.get_boundary_ids()` returns `{0}` "
         "(a single id, not the 4-6 expected for a cube), and "
         "VectorTools::interpolate_boundary_values applied to "
         "different boundary_ids produces the same Dirichlet "
-        "values across all faces of the cube.",
-        "[Syntax] For hyper_rectangle: left=0, right=1 "
-        "(in 2D: bottom=2, top=3; in 3D: front=4, back=5). The "
-        "rectangle has them auto-assigned. Always check via "
-        "GridTools::get_boundary_ids(tria) after creating the "
-        "mesh. Signal: GridTools::get_boundary_ids(tria) returns "
-        "`{0, 1, 2, 3}` not the assumed `{0}` — if your "
-        "Dirichlet code applies the BC only to boundary_id=0 you "
-        "will see DataOut with that BC value only on the LEFT "
-        "face and zero (homogeneous Neumann) on the other three.",
-        "[Numerical] For AMR: MUST apply hanging-node constraints "
-        "after assembly via constraints.condense(system_matrix, "
-        "system_rhs). Forgetting this gives a non-symmetric matrix "
-        "and CG breaks down. Signal: SolverCG reports 'breakdown' "
-        "on iteration 2-3 on a refined mesh, but works on the "
-        "globally-refined version of the same problem.",
+        "values across all faces of the cube. Measured on deal.II "
+        "deal.II 9.x: colorize=false -> {0}; colorize=true "
+        "-> {0,1,2,3} in 2D and {0,1,2,3,4,5} in 3D. (This entry "
+        "used to prescribe manual re-tagging, contradicting the "
+        "poisson_mixed_bc catalog which already documented "
+        "colorize=true.)",
+        "[Syntax] hyper_rectangle and subdivided_hyper_rectangle do "
+        "NOT auto-assign per-face ids: their colorize argument also "
+        "defaults to false, so every face lands on boundary_id=0. "
+        "With colorize=true you get left=0, right=1, bottom=2, "
+        "top=3 (3D adds front=4, back=5). Always check via "
+        "tria.get_boundary_ids() after creating the mesh. "
+        "Signal: tria.get_boundary_ids() returns `{0}`, not the "
+        "assumed `{0,1,2,3}` — a Dirichlet loop keyed on "
+        "boundary_id=1..3 then matches no faces and those sides "
+        "silently become homogeneous Neumann. Measured on deal.II "
+        "deal.II 9.x: hyper_rectangle<2> default -> {0}, "
+        "colorize=true -> {0,1,2,3}; subdivided_hyper_rectangle<3> "
+        "colorize=true -> {0,...,5}. (This entry previously stated "
+        "the ids were auto-assigned and printed the OPPOSITE "
+        "signal.)",
+                "[Numerical] A fixed-FRACTION refinement strategy can flag "
+        "ZERO cells on a coarse mesh, and the adaptive loop then runs "
+        "to completion producing the identical answer every cycle with "
+        "no warning at all. GridRefinement::"
+        "refine_and_coarsen_fixed_number(tria, error, top_fraction, "
+        "bottom_fraction) flags floor(top_fraction * n_active_cells) "
+        "cells. Verified on GridGenerator::hyper_L, which starts with "
+        "3 cells: with top_fraction = 0.3 that is 0.9, which floors to "
+        "0, so no cell was flagged and "
+        "execute_coarsening_and_refinement() left the mesh untouched; "
+        "after a single refine_global the same call flagged 3 of 12 "
+        "cells and the mesh grew normally. Always refine_global at "
+        "least once (twice is safer) before an adaptive loop — every "
+        "deal.II tutorial does. "
+        "Signal: print n_active_cells() and n_dofs() EVERY cycle and "
+        "require them to increase. A cycle count that rises while the "
+        "DoF count stands still is this bug; so is an error estimate "
+        "that is bit-identical between cycles. The alternative "
+        "strategy refine_and_coarsen_fixed_fraction (which flags "
+        "cells until a fraction of the total ERROR is covered) does "
+        "not have this failure mode, but can flag almost every cell "
+        "on a mesh with a flat error distribution.",
+        "[Numerical] For AMR: hanging-node constraints are "
+        "MANDATORY — build them with "
+        "DoFTools::make_hanging_node_constraints and apply them "
+        "either through AffineConstraints::"
+        "distribute_local_to_global during assembly (preferred) or "
+        "with the still-supported constraints.condense(sparsity) + "
+        "constraints.condense(system_matrix, system_rhs) pair. "
+        "But do NOT expect a loud failure if you forget. Verified by "
+        "running the same adaptive Poisson problem with and without "
+        "the constraints: the unconstrained system stayed EXACTLY "
+        "symmetric, CG converged in essentially the same number of "
+        "iterations at every cycle, and nothing was raised in either "
+        "build — the ONLY difference was in the answer, where the "
+        "error against the reference solution stopped improving and "
+        "then got worse under refinement while the constrained run "
+        "kept improving. "
+        "TWO DIAGNOSTICS THAT DO NOT WORK, both checked: "
+        "(1) matrix symmetry. max|A_ij - A_ji| was bitwise 0.0 with "
+        "AND without the constraints, so it cannot distinguish them. "
+        "(2) solver health. The iteration counts of the two runs "
+        "tracked each other cycle for cycle; there is no blow-up to "
+        "wait for, and this entry's old claim of a 'SolverCG "
+        "breakdown on iteration 2-3' never reproduced (nor can it — "
+        "see the essentials block on why deal.II cannot report a CG "
+        "breakdown in a Release build at all). "
+        "ONE MATRIX-LEVEL DIAGNOSTIC THAT DOES: max|A| rises when "
+        "the constraints are condensed in, because condensation adds "
+        "the eliminated rows onto the diagonal. If your two runs "
+        "produce the identical maximum entry, the constraints never "
+        "reached the matrix. "
+        "Signal: an error against a reference (manufactured "
+        "solution, richer discretisation, or a globally refined run) "
+        "that stops decreasing — or increases — under refinement, "
+        "while the solver looks perfectly healthy.",
         "[API] AffineConstraints<double> handles both Dirichlet BCs "
         "and hanging nodes — interpolate_boundary_values + the "
         "hanging-node closure on the SAME constraints object. Using "
@@ -725,13 +906,55 @@ KNOWLEDGE = {
         "max/min ratio of the coefficient (e.g. 50 iterations at "
         "contrast 1e2, 500 at contrast 1e3); switching to "
         "PreconditionAMG drops it back to O(log(ndof)).",
-        "[Integration] Mixing the 2D and 3D template instantiations "
-        "in the same translation unit at unrelated polynomial orders "
-        "(FE_Q<2>(2) plus FE_Q<3>(1)) does NOT explicitly instantiate "
-        "the lower-degree 3D version unless it appears somewhere in "
-        "the program. Signal: link errors like "
-        "'undefined reference to FE_Q<3>::FE_Q(unsigned int)' even "
-        "though FE_Q<3> appears to be used elsewhere.",
+                "[Integration] BEFORE trusting any 'raises Exc...' claim in "
+        "this or any deal.II catalog, determine the build type of "
+        "the library you are compiling against — the same misuse "
+        "produces a full diagnostic on one build and silence or a "
+        "segfault on the other. How to check: run grep CMAKE_BUILD_TYPE "
+        "over $DEAL_II_DIR/CMakeCache.txt, and list $DEAL_II_DIR/lib — "
+        "libdeal_II.so is the Release library, libdeal_II.g.so is "
+        "the Debug one; an install may ship one, the other, or both. "
+        "On a Release-only install you cannot opt back in: "
+        "`cmake -DCMAKE_BUILD_TYPE=Debug` on YOUR project prints "
+        "'#  WARNING: ... CMAKE_BUILD_TYPE was forced to \"Release\"' "
+        "and still compiles with -DNDEBUG. "
+        "WHY IT MATTERS: deal.II's argument checking is mostly "
+        "Assert(...), which exists ONLY in a Debug build. In Release "
+        "those checks vanish and the misuse returns silently with a "
+        "wrong answer or segfaults. Signal: grep CMAKE_BUILD_TYPE over "
+        "$DEAL_II_DIR/CMakeCache.txt and list $DEAL_II_DIR/lib — a "
+        "libdeal_II.g.so means the Assert-based diagnostics exist, "
+        "only libdeal_II.so means they do not. "
+        "Verified pairs, same program, "
+        "both builds: SparseMatrix::add() outside the sparsity "
+        "pattern — Debug aborts with 'You are trying to access the "
+        "matrix entry with index <i,j>, but this entry does not "
+        "exist in the sparsity pattern of this matrix.', Release "
+        "silently DROPS the value; an active_fe_index beyond "
+        "hp::FECollection::size() — Debug aborts with 'The mesh "
+        "contains a cell with an active FE index of <N>, but the "
+        "finite element collection only has <M> elements', Release "
+        "SEGFAULTS (exit 139) with no message; "
+        "FEValues::get_function_gradients with a scalar-shaped "
+        "container on a vector-valued FESystem — Debug aborts with "
+        "'Two sizes or dimensions were supposed to be equal, but "
+        "aren't. They are <n_components> and 1.', Release returns "
+        "normally with a mixture of different components' "
+        "derivatives. "
+        "PARTIAL WORKAROUND on a Release-only install: adding "
+        "-DDEBUG to your own translation unit re-activates the "
+        "Asserts that live in deal.II HEADERS (SparseMatrix, "
+        "FEValues accessors, SolverCG, FEEvaluation) — verified: the "
+        "out-of-pattern write starts aborting with the full report. "
+        "It does NOT re-activate Asserts compiled into the library "
+        "(DoFHandler::distribute_dofs and most of source/*.cc), so "
+        "the hp-index case still segfaults. Use it as a cheap triage "
+        "step, not as a substitute for a Debug build. "
+        "(This slot previously held a claim that FE_Q<2>(2) plus "
+        "FE_Q<3>(1) in one translation unit produces 'undefined "
+        "reference to FE_Q<3>::FE_Q(unsigned int)'. It does not: "
+        "deal.II pre-instantiates FE_Q<1>, FE_Q<2> and FE_Q<3>, and "
+        "the two-dimension program compiled, linked and ran.)",
     ],
 }
 
@@ -834,12 +1057,116 @@ GENERAL_KNOWLEDGE = {
         "merge_triangulations, extrude_triangulation",
         "Import: Gmsh, UCD, VTK, ExodusII, ABAQUS, OpenCASCADE",
     ],
+    # ── Cross-physics gaps. Every entry below was reproduced by
+    #    compiling and running a program on deal.II 9.8.0-pre; none
+    #    of them was covered anywhere in this catalog before.
+    "install_and_build_gotchas": [
+        "[Build] Determine the build type before you rely on ANY "
+        "diagnostic. `grep CMAKE_BUILD_TYPE "
+        "$DEAL_II_DIR/CMakeCache.txt`; list $DEAL_II_DIR/lib "
+        "(libdeal_II.so = Release, libdeal_II.g.so = Debug; an "
+        "install may ship one, the other, or both). A Release-only "
+        "install cannot be talked into Debug from your side: "
+        "`cmake -DCMAKE_BUILD_TYPE=Debug` on your project prints "
+        "'#  WARNING: / CMAKE_BUILD_TYPE \"Debug\" unsupported by "
+        "current installation! / deal.II was configured with "
+        "\"Release\". / CMAKE_BUILD_TYPE was forced to \"Release\".' "
+        "and still emits -DNDEBUG. CONSEQUENCE: every deal.II "
+        "`Assert(...)` is compiled out in Release and only "
+        "`AssertThrow(...)` survives, so a pitfall whose Signal is "
+        "'raises Exc...' describes the DEBUG behaviour; in Release "
+        "the same mistake returns silently with a wrong answer or "
+        "segfaults. Signal: grep CMAKE_BUILD_TYPE over "
+        "$DEAL_II_DIR/CMakeCache.txt and list $DEAL_II_DIR/lib — a "
+        "libdeal_II.g.so means the Assert-based diagnostics exist, "
+        "only libdeal_II.so means they do not. Verified on the SAME "
+        "programs in both builds: "
+        "(a) SparseMatrix::add() outside the sparsity pattern — "
+        "Debug aborts with 'You are trying to access the matrix "
+        "entry with index <i,j>, but this entry does not exist in "
+        "the sparsity pattern of this matrix.', Release drops the "
+        "value; (b) FEValues::get_function_gradients() with a "
+        "scalar-shaped std::vector<Tensor<1,dim>> on a vector-valued "
+        "FESystem — Debug aborts with 'Two sizes or dimensions were "
+        "supposed to be equal, but aren\'t.', Release returns a "
+        "mixture of components; (c) an active_fe_index >= "
+        "hp::FECollection::size() — Debug aborts with 'The mesh "
+        "contains a cell with an active FE index of <N>, but the "
+        "finite element collection only has <M> elements', Release "
+        "segfaults (exit 139) with no message. On a Release-only "
+        "install, adding -DDEBUG to YOUR translation unit revives "
+        "(a) and (b) — the Asserts that live in deal.II headers — "
+        "but not (c), whose Assert is compiled into the library.",
+
+        "[API] Non-interpolatory elements have no support points, "
+        "and VectorTools::interpolate_boundary_values must not be "
+        "used on them. Guard with "
+        "FiniteElement::has_support_points(). It is FALSE for far "
+        "more elements than the usual H(div)/H(curl) suspects: "
+        "verified by instantiation, it is false for "
+        "FE_Q_Hierarchical, FE_Bernstein, FE_Hermite, FE_DGP, "
+        "FE_DGPMonomial, FE_DGPNonparametric, FE_DGQLegendre, "
+        "FE_DGQHermite, FE_FaceP, FE_P1NC, FE_RannacherTurek, "
+        "FE_NedelecSZ, and for FE_RaviartThomas / FE_BDM / FE_ABF / "
+        "FE_Nedelec / FE_BernardiRaugel / FE_RT_Bubbles, whose DoFs "
+        "are moments rather than point values. On a CONTINUOUS "
+        "element without support points the call SEGFAULTS (exit "
+        "139) on Release — verified for FE_Q_Hierarchical, "
+        "FE_Bernstein and FESystem(FE_RannacherTurek<dim>(), dim) — "
+        "while a Debug build aborts with 'You are trying to access "
+        "the support points of a finite element that either has no "
+        "support points at all, or for which the corresponding "
+        "tables have not been implemented.' On a DISCONTINUOUS "
+        "element (FE_DGQ, FE_DGP) the same call is instead a silent "
+        "no-op that leaves the boundary-value map EMPTY. The working "
+        "replacement in every case is "
+        "VectorTools::project_boundary_values(dof_handler, "
+        "{{id, &function}}, QGauss<dim-1>(fe.degree + 2), "
+        "boundary_values); it returned a populated map on the same "
+        "setups where interpolate crashed.",
+
+        "[API] deal.II 9.1 -> 9.8 removed several APIs that older "
+        "templates still use. Each of these is a hard compile error, "
+        "which is the good case — but they are easy to mistake for a "
+        "broken install. Verified by compiling this catalog's own "
+        "generators on deal.II 9.8: "
+        "DoFTools::count_dofs_per_block -> count_dofs_per_fe_block "
+        "(now RETURNS the vector, no out-parameter); "
+        "MGTransferPrebuilt::build_matrices -> build; "
+        "MatrixFree::reinit(dof, constraints, quad, data) -> the "
+        "mapping must be the first argument; "
+        "MatrixFree::n_macro_cells -> n_cell_batches; "
+        "FEEvaluation::evaluate/integrate(bool, bool) -> "
+        "EvaluationFlags::values / EvaluationFlags::gradients; "
+        "SolutionTransfer::interpolate(in, out) -> interpolate(out). "
+        "DoFTools::extract_locally_relevant_dofs still accepts BOTH "
+        "the modern returning form and the old (dof, IndexSet&) "
+        "out-parameter form on 9.8.",
+
+        "[Integration] Availability probes that only check whether a "
+        "header includes are WRONG on a SOURCE build. A source install "
+        "ships every header regardless of which optional dependencies "
+        "were enabled, and the bodies sit behind `#ifdef "
+        "DEAL_II_WITH_<FEATURE>`. Verified on a source build with "
+        "MPI, P4EST, PETSC, SLEPC, TRILINOS, SUNDIALS, ADOLC, "
+        "SYMENGINE and COMPLEX_VALUES all undefined: "
+        "`#include <deal.II/lac/slepc_solver.h>` compiles and links "
+        "fine, and only naming SLEPcWrappers fails "
+        "(\"'dealii::SLEPcWrappers' has not been declared\"); "
+        "`#include <deal.II/distributed/tria.h>` also compiles, and "
+        "constructing parallel::distributed::Triangulation fails at "
+        "COMPILE time with 'use of deleted function'; "
+        "Utilities::MPI::MPI_InitFinalize constructs happily and "
+        "reports n_mpi_processes == 1. The only reliable probe is to "
+        "grep $DEAL_II_DIR/include/deal.II/base/config.h for the "
+        "'/* #undef DEAL_II_WITH_<X> */' lines.",
+    ],
     "parallel": "MPI (p4est) + TBB/Taskflow + CUDA/Kokkos GPU",
     "amr": "KellyErrorEstimator, DWR (step-14), hp-adaptivity (step-27/75)",
     "matrix_free": "MatrixFree + FEEvaluation, sum factorization (step-37/48/59/64/66/67/75/76/95)",
     "output": "VTU (DataOut), higher-order VTU cells, PVTU (parallel), PVD (time series)",
     "unique_features": [
-        "97 tutorial programs covering almost every FEM topic",
+        "~88 tutorial programs covering almost every FEM topic. The numbering runs past step-90 but HAS GAPS, so the highest number is not the count — enumerate examples/step-* in the source checkout if you need the real list (a package prefix ships none)",
         "hp-adaptive FEM with automatic smoothness estimation",
         "Matrix-free methods with sum factorization (10x faster than sparse)",
         "GPU support via CUDA and Kokkos",
@@ -879,7 +1206,7 @@ GENERAL_KNOWLEDGE = {
                 "strings — any -O3 / -march=native / etc. set BEFORE the "
                 "macro is lost. To customise flags, set them AFTER calling "
                 "the macro. (File walk macro_deal_ii_initialize_cached_variables.cmake "
-                "2026-06-02.)"
+                ".)"
             ),
         },
         "DEAL_II_SETUP_TARGET": {
@@ -941,7 +1268,7 @@ GENERAL_KNOWLEDGE = {
                 "_cxx_flags LEAK into the caller scope and can "
                 "shadow user-set variables of the same names. "
                 "(File walk macro_deal_ii_setup_target.cmake "
-                "2026-06-03.)"),
+                ".)"),
         },
         "DEAL_II_INVOKE_AUTOPILOT": {
             "signature": "DEAL_II_INVOKE_AUTOPILOT()",
@@ -979,7 +1306,7 @@ GENERAL_KNOWLEDGE = {
                 "clean`. Default CLEAN_UP_FILES glob may delete unrelated "
                 "*.log / *.vtk files the user produced manually in the "
                 "build dir. (File walk "
-                "macro_deal_ii_invoke_autopilot.cmake 2026-06-03.)"
+                "macro_deal_ii_invoke_autopilot.cmake.)"
             ),
         },
         "DEAL_II_PICKUP_TESTS": {
@@ -1028,7 +1355,7 @@ GENERAL_KNOWLEDGE = {
                 "(neither DEAL_II_WITH_<F> nor DEAL_II_<F> defined) silently "
                 "drops the test from ctest's discovery — easy way to lose "
                 "tests after a dealii config option rename. (File walk "
-                "macro_deal_ii_pickup_tests.cmake 2026-06-03.)"
+                "macro_deal_ii_pickup_tests.cmake.)"
             ),
         },
         "DEAL_II_QUERY_GIT_INFORMATION": {
@@ -1071,7 +1398,7 @@ GENERAL_KNOWLEDGE = {
                 "even though .git/HEAD exists — common in CI runs "
                 "that checkout a tag or specific commit. "
                 "(File walk macro_deal_ii_query_git_information.cmake "
-                "2026-06-03.)"),
+                ".)"),
         },
     },
 }

@@ -237,7 +237,9 @@ KNOWLEDGE = {
                         '"pip install KratosContactStructuralMechanicsApplication" '
                         'is required before any contact catalog usage. '
                         "Signal: mp.CreateNewCondition(\"ALMFrictionlessMortarContact\", ...) "
-                        "raises 'Error: The Condition X is not registered!' "
+                        "raises 'is not registered!' — Error:, the word "
+                        "Condition and the name are all inserted around "
+                        "that literal at runtime — "
                         "from kratos/python/add_model_part_to_python.cpp:173; "
                         "appending 'Condition2D2N' lets the call succeed. "
                         "(Verified empirically 2026-06-01 — Tier-2 fixture "

@@ -5,6 +5,17 @@ Variants: 2d, 3d, plate_hole, thick_beam
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['linear_elasticity'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Linear elasticity with Lame parameters, solved with FEniCSx/dolfinx",
     "weak_form": "inner(sigma(u), epsilon(v)) * dx = dot(f, v) * dx",
     "function_space": "Vector Lagrange order 1, shape=(gdim,)",
@@ -25,12 +36,23 @@ KNOWLEDGE = {
         "function' does not match current dolfinx output.)",
         "[Syntax] Dirichlet BC value for a vector-valued elasticity "
         "space must be np.array([0.0]*gdim, dtype=default_scalar_type) "
-        "— not scalar 0. dolfinx broadcasts the BC value against "
-        "the function space shape; a scalar passed to a vector "
-        "space raises ValueError. Signal: numpy raises ValueError "
-        "'could not broadcast input array from shape () into "
-        "shape (gdim,)' when dirichletbc is constructed with a "
-        "scalar value on a vector space.",
+        "— not scalar 0. Signal: 'Rank mismatch between Constant "
+        "and function space in DirichletBC', a RuntimeError from "
+        "dolfinx, on every scalar form of the value — plain 0.0, "
+        "default_scalar_type(0.0), np.array(0.0) and "
+        "fem.Constant(msh, default_scalar_type(0.0)) all give it. "
+        "A one-element array on a 2-component space is a different "
+        "complaint: 'Creating a DirichletBC using a Constant is not "
+        "supported when the Constant size is not equal to the block "
+        "size'. An integer 0 does not reach either check and raises "
+        "NotImplementedError instead. The earlier wording here said "
+        "numpy raises ValueError 'could not broadcast input array "
+        "from shape () into shape (gdim,)'; numpy is never reached, "
+        "no ValueError is raised at any of these calls, and numpy "
+        "holds that text only as the format string 'could not "
+        "broadcast %s from shape %S into shape %S' with the words "
+        "'input array' substituted in. (Re-measured by execution "
+        "2026-08-13, dolfinx 0.10.0 / numpy 1.26.4.)",
         "[Physics] Plane strain vs plane stress: adjust the Lame "
         "lambda accordingly. Plane stress uses lambda_star = "
         "2*lambda*mu/(lambda+2*mu); using plane strain lambda for "

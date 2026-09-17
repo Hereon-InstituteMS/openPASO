@@ -1,5 +1,5 @@
 """
-Comprehensive Kratos Multiphysics domain knowledge for the Open FEM Agent.
+Comprehensive Kratos Multiphysics domain knowledge for openPASO.
 
 This module encodes deep domain knowledge about ALL major Kratos applications,
 their Python API patterns, element types, constitutive laws, solver configuration,
@@ -1322,10 +1322,15 @@ DEM = {
     "application": "DEMApplication",
     "description": "Discrete Element Method for granular and particle mechanics",
 
+    # Registered element names, confirmed by ModelPart.CreateNewElement against an
+    # installed DEMApplication 10.4.3 (2026-08-07). The bare stems previously listed
+    # here ("SphericParticle", "Cluster") are NOT registered names.
     "particle_types": {
-        "SphericParticle": "Standard spherical particle",
-        "SphericContinuumParticle": "Bonded spheres (cohesive materials, concrete, rock)",
-        "Cluster": "Non-spherical particle (composed of multiple spheres)",
+        "SphericParticle3D": "Standard spherical particle (3D)",
+        "SphericContinuumParticle3D": "Bonded spheres (cohesive materials, concrete, rock)",
+        "CylinderParticle2D": "Genuine 2D particle (disk). Kratos DEM is not 3D-only",
+        "CylinderContinuumParticle2D": "Bonded 2D disk",
+        "Cluster3D": "Non-spherical particle (composed of multiple spheres)",
     },
 
     "contact_laws": {
@@ -1345,8 +1350,11 @@ DEM = {
     ],
 
     "main_variables": {
-        "RADIUS": "Particle radius",
+        "RADIUS": "Particle radius. Core Kratos variable, per NODE, the one mandatory nodal input",
+        "PARTICLE_DENSITY": "Density, per PROPERTIES. NOT 'DENSITY' — that spelling is accepted and never read",
         "PARTICLE_MATERIAL": "Material ID for contact law selection",
+        "STATIC_FRICTION": "Friction, per material_relations pair. 'PARTICLE_FRICTION' is not a Kratos variable",
+        "DYNAMIC_FRICTION": "Friction, per material_relations pair",
         "VELOCITY": "Particle velocity",
         "ANGULAR_VELOCITY": "Particle angular velocity",
         "TOTAL_FORCES": "Total force on particle",
@@ -1355,6 +1363,8 @@ DEM = {
     "pitfalls": [
         "DEM uses explicit time integration (conditionally stable; dt ~ R/v_sound)",
         "Time step is VERY small compared to FEM (order of 1e-5 to 1e-7 seconds)",
+        "MaxTimeStep is the only key that sets dt and it is used verbatim; Kratos DEM "
+        "performs no stability check and prints no critical-time-step warning",
         "Particle overlap should be small (<5% of radius) for accurate results",
         "Contact stiffness must be calibrated against bulk material properties",
         "DEM is computationally expensive; use coarsest particles possible",
@@ -1371,34 +1381,60 @@ MPM_APPLICATION = {
     "description": "Material Point Method for large deformation problems",
     "import": "from KratosMultiphysics.MPMApplication.mpm_analysis import MPMAnalysis",
 
+    # solver_type takes a SHORT LABEL, not a solver class name. Confirmed by
+    # execution against MPMApplication 10.4.3 (2026-08-07): the class-name
+    # spellings previously listed here all raise
+    # 'The requested solver type "..." is not in the python solvers wrapper'.
     "solver_types": {
-        "MPMStaticSolver": "Static equilibrium (no inertia)",
-        "MPMQuasiStaticSolver": "Quasi-static (slow loading, neglect inertia)",
-        "MPMImplicitDynamicSolver": "Implicit time integration (Newmark)",
-        "MPMExplicitSolver": "Explicit time integration (central difference, no system solve)",
+        "static": "Static equilibrium (no inertia). Also accepted: 'Static'",
+        "quasi_static": "Quasi-static (slow loading). Also accepted: 'Quasi-static'",
+        "dynamic": ("Transient. Also accepted: 'Dynamic'. Requires a second key "
+                    "time_integration_method: 'implicit' or 'explicit'"),
     },
 
+    # Registered element names, confirmed by ModelPart.CreateNewElement against an
+    # installed MPMApplication 10.4.3 (2026-08-07). Every name carries the literal
+    # MPM prefix; the un-prefixed spellings previously listed here are NOT
+    # registered and raise 'The Element "..." is not registered!'.
     "element_types": {
-        "UpdatedLagrangianUP2D3N": "Mixed U-P triangle (stabilized, incompressible)",
-        "UpdatedLagrangian2D3N": "Standard displacement triangle",
-        "UpdatedLagrangian2D4N": "Standard displacement quad",
-        "UpdatedLagrangian3D4N": "Standard displacement tetrahedron",
-        "UpdatedLagrangian3D8N": "Standard displacement hexahedron",
-        "UpdatedLagrangianAxisymmetry2D3N": "Axisymmetric triangle",
+        "MPMUpdatedLagrangianUP2D3N": "Mixed U-P triangle (stabilized, incompressible)",
+        "MPMUpdatedLagrangian2D3N": "Standard displacement triangle",
+        "MPMUpdatedLagrangian2D4N": "Standard displacement quad",
+        "MPMUpdatedLagrangian3D4N": "Standard displacement tetrahedron",
+        "MPMUpdatedLagrangian3D8N": "Standard displacement hexahedron",
+        "MPMUpdatedLagrangianAxisymmetry2D3N": "Axisymmetric triangle",
     },
 
-    "quadrature_types": {
-        "MP": "Standard material point (1 point per original cell)",
-        "MP_16": "16 material points per cell (higher accuracy)",
-        "Gauss_Legendre": "Standard Gauss quadrature",
+    # The number of material points per element is an integer in the MATERIALS json
+    # (properties[i].Material.Variables.MATERIAL_POINTS_PER_ELEMENT), drawn from a
+    # fixed per-geometry set. There is no "quadrature_types" concept in Kratos MPM;
+    # the labels "MP", "MP_16" and "Gauss_Legendre" previously listed here appear in
+    # zero files of the installed distribution and have been removed.
+    # Allowed sets read back from the installed libKratosMPMCore 10.4.3 and
+    # confirmed by execution (2026-08-07). They differ per geometry.
+    "material_points_per_element": {
+        "key": "MATERIAL_POINTS_PER_ELEMENT (int, in the materials json)",
+        "Triangular": [1, 3, 4, 6, 12],
+        "Quadrilateral": [1, 4, 9, 16, 25],
+        "Tetrahedral": [1, 4, 8, 14, 24],
+        "Hexahedral": [1, 8, 27, 64, 125],
     },
 
+    # Registered law names, confirmed with KratosGlobals.HasConstitutiveLaw against
+    # an installed MPMApplication 10.4.3 (2026-08-07). The family labels previously
+    # listed here ("LinearElastic", "NeoHookean", "MohrCoulomb", "DruckerPrager",
+    # "Johnson-Cook") all return False and fail with 'Kratos components missing'.
     "constitutive_laws": [
-        "LinearElastic",
-        "HyperElastic (Neo-Hookean, Mooney-Rivlin)",
-        "MohrCoulomb",
-        "DruckerPrager",
-        "Johnson-Cook (rate-dependent plasticity)",
+        "LinearElasticIsotropic3DLaw / LinearElasticIsotropicPlaneStrain2DLaw / "
+        "LinearElasticIsotropicPlaneStress2DLaw / LinearElasticIsotropicAxisym2DLaw",
+        "HyperElasticNeoHookean3DLaw / HyperElasticNeoHookeanPlaneStrain2DLaw / "
+        "HyperElasticNeoHookeanAxisym2DLaw / HyperElasticNeoHookeanUP3DLaw",
+        "HenckyMCPlastic3DLaw / HenckyMCPlasticPlaneStrain2DLaw / "
+        "HenckyMCPlasticAxisym2DLaw (Mohr-Coulomb; there is no DruckerPrager law "
+        "registered by MPMApplication)",
+        "HenckyBorjaCamClayPlastic3DLaw / HenckyBorjaCamClayPlasticPlaneStrain2DLaw",
+        "JohnsonCookThermalPlastic3DLaw / JohnsonCookThermalPlastic2DPlaneStrainLaw / "
+        "JohnsonCookThermalPlastic2DAxisymLaw",
     ],
 
     "applications": [
@@ -1410,10 +1446,19 @@ MPM_APPLICATION = {
     ],
 
     "pitfalls": [
-        "Background mesh must be LARGER than the material domain (particles can move!)",
+        "Background grid must cover the whole TRAJECTORY of the body, not just its "
+        "initial position — material points that leave the grid are ERASED and the "
+        "mass they carry leaves the simulation, logged only as "
+        "'MaterialPointEraseProcess: N particle elements have been erased.'",
         "Material points carry all history; the grid is rebuilt each step",
-        "Cell-crossing instability: use FLIP or PIC blending to mitigate",
+        "Boundary conditions attach to sub model parts of 'Background_Grid'; materials "
+        "attach to sub model parts of 'Initial_MPM_Material'. Both names are fixed",
+        "Cell-crossing instability: Kratos MPM implements neither FLIP/PIC blending "
+        "nor GIMP/CPDI (none of those strings occurs in MPMApplication). The "
+        "mitigation it does offer is PQMPM, enabled with \"is_pqmpm\": true",
         "Explicit MPM: dt limited by CFL condition on background grid",
+        "Gravity is opt-in: with no assign_gravity_to_material_point_process the body "
+        "does not fall and the run still succeeds",
         "For geomechanics: initialize stress state before loading",
     ],
 }

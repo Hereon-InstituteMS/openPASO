@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+
+from core.user_dirs import desktop_dirs as _desktop_dirs
 import shutil
 import subprocess
 import sys
@@ -26,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-logger = logging.getLogger("oasis.autodiscovery")
+logger = logging.getLogger("openpaso.autodiscovery")
 
 CONFIG_PATH = Path(__file__).parent.parent.parent / "data" / "discovered_config.json"
 
@@ -257,12 +259,12 @@ def discover_backends() -> list[ProbeResult]:
             "~/4c/build/4C",
             "/opt/4c/build/4C",
             "/opt/4C/build/4C",
-            # ── Non-standard source-tree builds (verified
-            #    empirically 2026-06-01 on the development
-            #    machine — keep these last so canonical
-            #    locations win). ──
-            "~/Schreibtisch/4C-src/4C/build/4C",
+            # ── Non-standard source-tree builds, including the user's
+            #    desktop folder in their own language — keep these
+            #    last so canonical locations win. ──
             "~/4C-src/4C/build/4C",
+            *(str(d / sub) for d in _desktop_dirs()
+              for sub in ("4C/build/4C", "4C-src/4C/build/4C")),
         ],
     ))
     # deal.II is often installed via conda-forge (env layout
@@ -292,8 +294,20 @@ def discover_backends() -> list[ProbeResult]:
         # a newer 9.3.2 one and the saved discovered_config.json
         # then pinned every compile to the old headers.
         try:
-            from backends.dealii.backend import _find_dealii
-            root = _find_dealii()
+            from backends.dealii.backend import (
+                DealiiRootOverrideError, _find_dealii)
+            try:
+                root = _find_dealii()
+            except DealiiRootOverrideError as exc:
+                # DEAL_II_DIR / DEALII_ROOT is set and is not deal.II.
+                # Do NOT fall back to some other install and record it as
+                # discovered — that is exactly the substitution the
+                # resolver now refuses. Report not-found with the reason.
+                root = None
+                dealii_result = ProbeResult(
+                    backend="dealii", found=False,
+                    confidence="definite", location="",
+                    details={"source": "resolver", "error": str(exc)})
             if root is not None:
                 dealii_result = ProbeResult(
                     backend="dealii", found=True,
@@ -306,9 +320,9 @@ def discover_backends() -> list[ProbeResult]:
 
     # Check for source roots (developer mode)
     source_roots = {
-        "fourc": ("FOURC_ROOT", ["~/4C", "/opt/4C",
-                                 "~/Schreibtisch/4C-src/4C",
-                                 "~/4C-src/4C"]),
+        "fourc": ("FOURC_ROOT", ["~/4C", "/opt/4C", "~/4C-src/4C",
+                                 *(str(d / sub) for d in _desktop_dirs()
+                                   for sub in ("4C", "4C-src/4C"))]),
         "fenics": ("FENICS_ROOT", ["~/dolfinx", "~/fenics"]),
         "dealii": ("DEALII_ROOT", ["~/dealii", "/opt/dealii"]),
         "ngsolve": ("NGSOLVE_ROOT", ["~/ngsolve"]),

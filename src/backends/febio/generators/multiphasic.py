@@ -30,6 +30,7 @@ def _multiphasic_3d_diffusion(params: dict) -> str:
     <step_size>1.0</step_size>
     <solver type="multiphasic">
       <symmetric_stiffness>non-symmetric</symmetric_stiffness>
+      <linear_solver type="bicgstab"/>
     </solver>
   </Control>
   <Globals>
@@ -47,7 +48,7 @@ def _multiphasic_3d_diffusion(params: dict) -> str:
     </Solutes>
   </Globals>
   <Material>
-    <material id="1" type="multiphasic">
+    <material id="1" name="Material1" type="multiphasic">
       <phi0>0.2</phi0>
       <fixed_charge_density>0.0</fixed_charge_density>
       <solid type="neo-Hookean">
@@ -83,29 +84,25 @@ def _multiphasic_3d_diffusion(params: dict) -> str:
       <node id="7">1,1,1</node>
       <node id="8">0,1,1</node>
     </Nodes>
-    <Elements type="hex8" mat="1" name="Part1">
+    <Elements type="hex8" mat="Material1" name="Part1">
       <elem id="1">1,2,3,4,5,6,7,8</elem>
     </Elements>
-    <NodeSet name="bottom">
-      <n id="1"/><n id="2"/><n id="3"/><n id="4"/>
-    </NodeSet>
-    <NodeSet name="top">
-      <n id="5"/><n id="6"/><n id="7"/><n id="8"/>
-    </NodeSet>
+    <NodeSet name="bottom">1,2,3,4</NodeSet>
+    <NodeSet name="top">5,6,7,8</NodeSet>
   </Mesh>
   <MeshDomains>
-    <SolidDomain name="Part1" mat="1"/>
+    <SolidDomain name="Part1" mat="Material1"/>
   </MeshDomains>
   <Boundary>
     <bc name="fix" type="zero displacement" node_set="bottom">
       <x_dof>1</x_dof><y_dof>1</y_dof><z_dof>1</z_dof>
     </bc>
     <bc name="c_bot" type="prescribed concentration" node_set="bottom">
-      <sol>1</sol>
+      <dof>c1</dof>
       <value lc="1">0.0</value>
     </bc>
     <bc name="c_top" type="prescribed concentration" node_set="top">
-      <sol>1</sol>
+      <dof>c1</dof>
       <value lc="1">{c_top}</value>
     </bc>
     <bc name="drain" type="zero fluid pressure" node_set="top"/>
@@ -150,20 +147,16 @@ KNOWLEDGE = {
         },
         "pitfalls": [
             (
-                "[Input] Globals/Solutes section is MANDATORY for "
-                "multiphasic — declare every solute (charge_number, "
-                "molar_mass, density) BEFORE referencing it as "
-                "<solute sol=N>. Signal: FEBio parser aborts with "
-                "`unknown solute reference sol=1` or `Globals/Solutes "
-                "missing` at input-parse time. (Audit 2026-06-02.)"
+                "[Input] <Globals><Solutes> is REQUIRED: it is what creates the concentration degrees of freedom c1, c2, ... Without it the solutes do not exist, and the failure surfaces on the first thing that REFERENCES one. "
+                "WRONG: omitting the <Globals><Solutes> block while a <bc type=\"prescribed concentration\"> uses <dof>c1</dof>. "
+                "RIGHT: <Globals><Solutes><solute id=\"1\" name=\"Na\"><charge_number>1</charge_number><molar_mass>22.99</molar_mass><density>1.0</density></solute></Solutes></Globals> BEFORE the <Material> section. "
+                "Signal: tag \"dof\" (line N) : invalid value: c1 and `Reading file ...FAILED!` — the line number points at the BOUNDARY CONDITION, not at the missing Globals block, so the message sends you to the wrong section. The same message with a different suffix appears for a solute index that was never declared, e.g. invalid value: c9. (Executed 2026-08-05, FEBio 4.12.0.86045466d.)"
             ),
             (
-                "[Input] Module type MUST be 'multiphasic' (NOT "
-                "'biphasic'). The biphasic solver does not understand "
-                "<solute> children inside the material; FEBio rejects "
-                "the input. Signal: stderr contains `unknown material "
-                "child: solute` or `biphasic does not support "
-                "solutes`. (Audit 2026-06-02.)"
+                "[Syntax] A `biphasic` material does not accept <solute> children; solutes require the `multiphasic` material and the `multiphasic` module. "
+                "WRONG: a <material type=\"biphasic\"> with a <solute> child. "
+                "RIGHT: <Module type=\"multiphasic\"/> with <material type=\"multiphasic\"> holding <phi0>, <solid>, <permeability>, <osmotic_coefficient> and one <solute> per species. "
+                "Signal: tag \"solute\" (line N) : `unrecognized tag` and `Reading file ...FAILED!`. It is reported as an unknown TAG rather than as an unsupported feature, so nothing in the message mentions multiphasic. (Executed 2026-08-05, FEBio 4.12.0.86045466d.)"
             ),
             (
                 "[Numerical] For charged tissue, set "
@@ -176,14 +169,10 @@ KNOWLEDGE = {
                 "swell strain) is absent. (Audit 2026-06-02.)"
             ),
             (
-                "[Input] Concentration BCs use 'prescribed "
-                "concentration' type WITH a <sol>N</sol> child "
-                "indicating which solute is constrained. Forgetting "
-                "<sol> defaults to solute 1 silently. Signal: in a "
-                "two-solute problem, the second solute shows the "
-                "(unintended) BC of the first; parser warning "
-                "`prescribed concentration without sol= defaults to "
-                "1`. (Audit 2026-06-02.)"
+                "[Input] A `prescribed concentration` BC selects its species with a <dof> child naming the concentration DOF — c1 for the first declared solute, c2 for the second — NOT with a <sol> child and not by position. "
+                "WRONG: <bc type=\"prescribed concentration\" node_set=\"top\"><sol>1</sol><value lc=\"1\">1.0</value></bc>. "
+                "RIGHT: <bc name=\"c_top\" type=\"prescribed concentration\" node_set=\"top\"><dof>c1</dof><value lc=\"1\">1.0</value></bc>. "
+                "Signal: tag \"sol\" (line N) : `unrecognized tag`, and for an undeclared species tag \"dof\" (line N) : invalid value: c9. Both are parse-time and both name the offending tag. (Executed 2026-08-05, FEBio 4.12.0.86045466d.)"
             ),
         ],
     },

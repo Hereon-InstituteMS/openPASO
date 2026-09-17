@@ -116,6 +116,59 @@ KNOWLEDGE = {
                 "refinement around the cylinder. (Audit "
                 "2026-06-02.)"
             ),
+            (
+                "[Validation] The unsteady DFG 2D-2 case "
+                "(Re=100) published set, which the Re=20 "
+                "entry above does not cover: Cd_max 3.22-"
+                "3.24, Cl_max 0.98-1.02, Strouhal 0.295-"
+                "0.305, pressure difference across the "
+                "cylinder 2.46-2.50. Umax=1.5 gives "
+                "Ubar=1.0 and Re = Ubar*D/nu = 100. "
+                "(Measured 2026-09-16.)"
+            ),
+            (
+                "[Validation] TWO DIFFERENT STROUHAL NUMBERS "
+                "EXIST FOR 'Re=100 flow past a cylinder' and "
+                "picking the wrong one makes a correct run "
+                "look wrong. The confined DFG channel "
+                "(2.2 x 0.41, blockage 0.1/0.41) sheds at St "
+                "around 0.30. An UNBOUNDED cylinder at the "
+                "same Re sheds at St around 0.164 "
+                "(Williamson 1996). Signal: a measured St "
+                "near 0.30 reported as a 45% error against "
+                "0.164, or vice versa. Check which geometry "
+                "the reference belongs to before comparing. "
+                "(Measured 2026-09-16.)"
+            ),
+            (
+                "[Numerical] ON DFG 2D-2 THE STROUHAL NUMBER "
+                "CONVERGES MUCH FASTER THAN THE DRAG, so one "
+                "quantity landing inside its published band "
+                "is not evidence the run is resolved. "
+                "Measured on this install with Taylor-Hood "
+                "P2/P1 and IMEX at three refinements: "
+                "NDOF 4172 -> St 0.2695, Cd_max 2.13; "
+                "NDOF 11611 -> St 0.2950 (already inside the "
+                "published 0.295-0.305), Cd_max 2.39, still "
+                "26% below the published 3.22. Signal: a "
+                "report that cites St agreement as proof of "
+                "mesh independence. Check every reported "
+                "quantity against refinement, not one. "
+                "(Measured 2026-09-16.)"
+            ),
+            (
+                "[Numerical] AN EXPLICIT-CONVECTION IMEX STEP "
+                "THAT IS STABLE ON A COARSE MESH DIVERGES "
+                "WHEN THE MESH IS REFINED, because the CFL "
+                "limit follows the smallest cell. Measured "
+                "on this install: dt=1e-3 runs to completion "
+                "at cylinder spacing 0.01 and blows up at "
+                "t=1.86 at spacing 0.005. Signal: a run that "
+                "worked at one refinement returning NaN or "
+                "non-finite forces at the next. Reduce dt "
+                "with the mesh; 4e-4 was stable at 0.005. "
+                "(Measured 2026-09-16.)"
+            ),
         ],
     },
 }

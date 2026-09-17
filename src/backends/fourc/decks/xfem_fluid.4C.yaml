@@ -1,0 +1,87 @@
+TITLE:
+  - "XFEM fluid: incompressible flow on a fixed background mesh cut by an"
+  - "implicitly (level-set) described circular interface. Neumann traction is"
+  - "imposed on the embedded interface with inflow stabilisation."
+PROBLEM TYPE:
+  PROBLEMTYPE: "Fluid_XFEM"
+IO:
+  STRUCT_STRESS: "2PK"
+  FLUID_STRESS: true
+FLUID DYNAMIC:
+  LINEAR_SOLVER: 1
+  NONLINITER: Newton
+  LIFTDRAG: true
+  RESTARTEVERY: 100
+  NUMSTEP: 3
+  TIMESTEP: 0.1
+  MAXTIME: 0.3
+  THETA: 1
+FLUID DYNAMIC/NONLINEAR SOLVER TOLERANCES:
+  TOL_VEL_RES: 1e-08
+  TOL_VEL_INC: 1e-08
+  TOL_PRES_RES: 1e-08
+  TOL_PRES_INC: 1e-08
+FLUID DYNAMIC/RESIDUAL-BASED STABILIZATION:
+  STABTYPE: "edge_based"
+FLUID DYNAMIC/EDGE-BASED STABILIZATION:
+  EOS_PRES: "std_eos"
+  EOS_CONV_STREAM: "std_eos"
+  EOS_DIV: "div_jump_std_eos"
+  PRES_KRYLOV_2Dz: true
+SOLVER 1:
+  SOLVER: "UMFPACK"
+  NAME: "Fluid_Solver"
+XFEM GENERAL:
+  VOLUME_GAUSS_POINTS_BY: "DirectDivergence"
+XFLUID DYNAMIC/STABILIZATION:
+  VISC_STAB_HK: "ele_vol_div_by_cut_surf"
+  MASS_CONSERVATION_COMBO: "sum"
+  MASS_CONSERVATION_SCALING: "full"
+  GHOST_PENALTY_STAB: true
+  GHOST_PENALTY_TRANSIENT_STAB: true
+  GHOST_PENALTY_2nd_STAB: true
+  IS_PSEUDO_2D: true
+MATERIALS:
+  - MAT: 1
+    MAT_fluid:
+      DYNVISCOSITY: 0.1
+      DENSITY: 10
+      GAMMA: 1
+# FUNCT2 is the level-set field: phi(x,y) = x^2 + y^2 - 0.0625, i.e. a circle
+# of radius 0.25 centred at the origin. Edit this to move/resize the interface.
+FUNCT1:
+  - COMPONENT: 0
+    SYMBOLIC_FUNCTION_OF_SPACE_TIME: "1"
+FUNCT2:
+  - COMPONENT: 0
+    SYMBOLIC_FUNCTION_OF_SPACE_TIME: "x*x+y*y-0.0625"
+DESIGN VOL DIRICH CONDITIONS:
+  - E: 1
+    NUMDOF: 4
+    ONOFF: [0, 0, 1, 0]
+    VAL: [0, 0, 0, 0]
+    FUNCT: [0, 0, 0, 0]
+DESIGN XFEM LEVELSET NEUMANN VOL CONDITIONS:
+  - E: 1
+    COUPLINGID: 1
+    LEVELSETFIELDNO: 2
+    BOOLEANTYPE: "none"
+    COMPLEMENTARY: false
+    NUMDOF: 6
+    ONOFF: [1, 1, 1, 1, 1, 1]
+    VAL: [-5, -5, 0, 0, 0, 0]
+    FUNCT: [0, 0, 0, 0, 0, 0]
+    INFLOW_STAB: true
+DVOL-NODE TOPOLOGY:
+  - "VOLUME fluid DVOL 1"
+FLUID DOMAIN:
+  bottom_corner_point: [-0.5, -0.5, -0.03]
+  top_corner_point: [0.5, 0.5, 0.03]
+  subdivisions: [16, 16, 1]
+  rotation_angle: [0, 0, 0]
+  elements:
+    FLUID:
+      HEX8:
+        MAT: 1
+        NA: Euler
+  auto_partition: false

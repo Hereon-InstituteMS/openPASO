@@ -107,7 +107,7 @@ int main()
 
   // Declared OUTSIDE the cycle loop: the final DataOut block after
   // the loop reads it — an in-loop declaration leaves 'solution'
-  // out of scope there (compile error caught by probe 2026-06-12).
+  // out of scope there (compile error).
   Vector<double> solution;
 
   for (unsigned int cycle = 0; cycle < {n_cycles}; ++cycle)
@@ -268,11 +268,75 @@ KNOWLEDGE = {
         "Fourier": "FESeries::Fourier — decay of Fourier coefficients indicates regularity",
         "Legendre": "FESeries::Legendre — expansion in Legendre polynomials",
         "decay_rate": "Fast decay → smooth → increase p, slow decay → singular → refine h",
+        "_api_that_compiles_today": (
+            "The hp API moved repeatedly across the 9.x line, so the "
+            "spellings below are the ones verified to compile and run "
+            "on deal.II 9.8 in 3D. Header: "
+            "<deal.II/numerics/smoothness_estimator.h>. Build the "
+            "series object from the collection rather than by hand: "
+            "FESeries::Legendre<dim> legendre = "
+            "SmoothnessEstimator::Legendre::default_fe_series("
+            "fe_collection); then "
+            "SmoothnessEstimator::Legendre::coefficient_decay("
+            "legendre, dof_handler, solution, smoothness_indicators). "
+            "default_fe_series() sizes the series for THAT collection, "
+            "which is what removes the usual mismatch bug."
+        ),
     },
     "hp_decision": {
-        "p_adaptivity_from_reference": "Compare smoothness to reference values",
-        "choose_p_over_h": "Prefer p-refinement when both flagged",
+        "_required_order": (
+            "Verified working 3D sequence, in this order: "
+            "(1) KellyErrorEstimator::estimate -> per-cell error; "
+            "(2) GridRefinement::refine_and_coarsen_fixed_number on "
+            "those errors -> sets the h-flags; "
+            "(3) SmoothnessEstimator::Legendre::coefficient_decay -> "
+            "per-cell smoothness; "
+            "(4) hp::Refinement::p_adaptivity_from_relative_threshold("
+            "dof_handler, smoothness, ...) -> sets FUTURE FE indices "
+            "on top of the h-flags; "
+            "(5) hp::Refinement::choose_p_over_h(dof_handler); "
+            "(6) hp::Refinement::limit_p_level_difference(dof_handler); "
+            "(7) triangulation.execute_coarsening_and_refinement()."
+        ),
+        "choose_p_over_h": (
+            "[Numerical] REQUIRED whenever both h- and p-flags can be set on the "
+            "same cell, which is exactly what steps (2) and (4) above "
+            "produce. Without it a cell flagged for BOTH is refined in "
+            "h AND raised in p at once, which is not what the "
+            "smoothness estimate asked for and inflates the DoF count. "
+            "Verified on a 3D hp run: before the call a large number "
+            "of cells carried an h-flag and a comparable number "
+            "carried a p-flag with a substantial overlap; after the "
+            "call the h-flag count dropped sharply, the p-flag count "
+            "was untouched, and the both-flagged count was exactly "
+            "zero. Signal: count cells with (refine_flag_set() AND "
+            "future_fe_index_set()) before and after — it must be 0 "
+            "after."
+        ),
+        "limit_p_level_difference": (
+            "Caps the polynomial-degree jump across a face. Skipping "
+            "it is legal but produces large p-jumps at interfaces, "
+            "where the hanging-node projection is least accurate."
+        ),
+        "p_adaptivity_from_relative_threshold": (
+            "Sets FUTURE fe indices from the smoothness indicator "
+            "relative to the range on the current mesh. Note it acts "
+            "on future_fe_index, not active_fe_index — the change "
+            "takes effect at execute_coarsening_and_refinement()."
+        ),
         "fixed_number": "Refine fraction of cells with largest error",
+        "verified_in_3d": (
+            "A complete 3D hp-adaptive Poisson solver on a re-entrant "
+            "domain (GridGenerator::hyper_L<3>, which yields hexes) "
+            "with hp::FECollection of FE_Q(1..4), matched "
+            "hp::QCollection, KellyErrorEstimator + Legendre "
+            "smoothness and the sequence above ran for several cycles: "
+            "the active_fe_index histogram spread from all-p1 on cycle "
+            "0 to a mixture across p1..p4, the constraint count grew "
+            "with the mixture, and every cycle's CG solve converged. "
+            "hp-adaptivity in 3D is not exotic; it works out of the "
+            "box with no optional dependencies."
+        ),
     },
     "pitfalls": [
         "[API] Do NOT execute_coarsening_and_refinement() after the "
@@ -293,20 +357,65 @@ KNOWLEDGE = {
         "non-final cycles. Signal: rc=-11 or 'the request was for "
         "8514397436244672512 bytes' immediately after the final "
         "cycle's output line, with all earlier cycles clean.",
-        "[Syntax] hp::FECollection must include all FE_Q degrees "
-        "you want to use, registered before distribute_dofs(). "
-        "Missing degrees give an active_fe_index that points at "
-        "nothing. Signal: `dof_handler.distribute_dofs(fe_"
-        "collection)` raises ExcMessage('Index in FECollection "
-        "out of range') or, worse, returns silently with "
-        "n_dofs() = 0 on cells with the missing degree.",
-        "[Syntax] hp::QCollection must match: each FE_Q(p) needs "
-        "QGauss(p+1). A single QGauss(2) used across all degrees "
-        "is the most common bug — under-integrates higher p and "
-        "the assembly produces a non-symmetric stiffness. Signal: "
-        "SolverCG reports 'breakdown' because the assembled K is "
-        "not SPD; FECollection::size() and QCollection::size() "
-        "differ.",
+        "[Syntax] hp::FECollection must contain every element you "
+        "will point an active_fe_index at, and must be complete "
+        "BEFORE distribute_dofs(). An index past the end of the "
+        "collection behaves COMPLETELY DIFFERENTLY in the two build "
+        "types, and the Release behaviour is the dangerous one. "
+        "Debug: DoFHandler::distribute_dofs checks it with "
+        "Assert(cell->active_fe_index() < ff.size(), "
+        "ExcInvalidFEIndex(...)) and ABORTS (exit 134) printing "
+        "'The mesh contains a cell with an active FE index of <N>, "
+        "but the finite element collection only has <M> elements' "
+        "— a complete diagnosis. "
+        "Release: that Assert is compiled out and the program "
+        "SEGFAULTS (exit 139) with no message at all — neither an "
+        "exception nor n_dofs() == 0. "
+        "Both verified on the same program (a 2-entry collection "
+        "with one cell set to index 5). Note this Assert lives in "
+        "the COMPILED library (source/dofs/dof_handler.cc), so "
+        "adding -DDEBUG to your own translation unit does not bring "
+        "it back — you need a deal.II built with "
+        "CMAKE_BUILD_TYPE=Debug. On a Release-only install, guard it "
+        "yourself: check every index you set is < "
+        "fe_collection.size() before calling distribute_dofs. "
+        "Signal: in Debug, the abort message 'The mesh contains a cell "
+        "with an active FE index of <N>, but the finite element "
+        "collection only has <M> elements'; in Release, a SIGSEGV "
+        "(exit 139) inside distribute_dofs with no output at all. "
+        "(This entry used to quote ExcMessage('Index in "
+        "FECollection out of range'); no such string exists.)",
+        "[Numerical] hp::QCollection must carry one rule per element "
+        "in the FECollection, each sized for ITS element: FE_Q(p) "
+        "wants QGauss(p+1) for a Laplace-type form. Pushing a single "
+        "low-order rule is the usual bug, and the damage is graded, "
+        "not binary. Verified on an hp mesh mixing FE_Q(1..4) with a "
+        "variable coefficient, comparing a single rule against the "
+        "matched collection: a rule far too coarse for the highest "
+        "degree makes the element matrices RANK-DEFICIENT, the global "
+        "operator loses positive-definiteness, and SolverCG runs to "
+        "its iteration limit and throws SolverControl::NoConvergence "
+        "with a residual that has GROWN by orders of magnitude; a "
+        "moderately coarse rule converges normally but shifts a "
+        "computed energy functional by a visible percentage; only "
+        "the matched collection reproduces it. "
+        "TWO WIDESPREAD MYTHS ABOUT THIS ENTRY, both refuted by "
+        "execution: (1) it does NOT break symmetry. max|A_ij - A_ji| "
+        "stayed at round-off (order 1e-15) for every rule tried, "
+        "matched or not — a Galerkin form is symmetric under ANY "
+        "quadrature because the same rule evaluates (i,j) and (j,i). "
+        "Do not use symmetry as the tell. (2) 'SolverCG reports "
+        "breakdown' is not something deal.II can print (see the "
+        "essentials block). "
+        "Signal: compare fe_collection.size() against "
+        "q_collection.size() — a QCollection of size 1 is broadcast "
+        "to every element and is the usual form of the bug; then "
+        "recompute one scalar functional (the discrete energy "
+        "0.5 u^T A u - u^T b, or an integral of the solution) with "
+        "the matched collection and compare. A visible change means "
+        "the coarse rule was under-integrating; a "
+        "SolverControl::NoConvergence with a growing residual means "
+        "it was coarse enough to make the operator singular.",
         "[API] Smoothness estimator needs FESeries::Fourier or "
         "FESeries::Legendre object — the smoothness decay rate "
         "drives p- vs h-refinement choice. Without it, "
@@ -324,15 +433,27 @@ KNOWLEDGE = {
         "where the neighbours have different FE_Q degree; "
         "VectorTools::integrate_difference reports O(1) error "
         "along those interfaces and ~O(h^p) elsewhere.",
-        "[API] For matrix-free hp: use the step-75 pattern with "
-        "MatrixFree<dim,number,VectorizedArray>. The standard "
-        "MatrixFree pattern from step-37 assumes uniform p and "
-        "ExcMessage('all cells must have same active_fe_index') "
-        "fires on a mixed-p triangulation. Signal: MatrixFree::"
-        "reinit raises ExcMessage('hp-FEValues requires hp::"
-        "MappingCollection') or compiles but produces zero "
-        "stiffness contribution on cells with the non-default "
-        "active_fe_index.",
+        "[API] Matrix-free DOES support hp — this entry used to say "
+        "the opposite and it is false on deal.II 9.x. "
+        "MatrixFree<dim, Number>::reinit(mapping, dof_handler, "
+        "constraints, hp::QCollection<1>, additional_data) accepts a "
+        "DoFHandler with hp capabilities and a MIXED set of "
+        "active_fe_indices, and returns normally: verified on a "
+        "DoFHandler whose cells alternate between FE_Q(1) and "
+        "FE_Q(2), where reinit reported a populated cell-batch list "
+        "and n_active_fe_indices() == 2. Neither "
+        "ExcMessage('all cells must have same active_fe_index') nor "
+        "ExcMessage('hp-FEValues requires hp::MappingCollection') "
+        "exists in the library; do not wait for either. "
+        "What IS true: you must pass a QUADRATURE COLLECTION "
+        "(hp::QCollection<1>) rather than a single Quadrature, and "
+        "on the evaluation side FEEvaluation has to be told which "
+        "active_fe_index / quadrature index a cell batch belongs to "
+        "— that is what the step-75 pattern is for. Signal: after "
+        "reinit, read back MatrixFree::n_active_fe_indices(); if it "
+        "is 1 on a mesh you believe is mixed-p, the indices never "
+        "reached the DoFHandler (set_active_fe_index must be called "
+        "BEFORE distribute_dofs).",
         "[Numerical] Transfer solution between p-levels: use "
         "SolutionTransfer or VectorTools::interpolate. Setting "
         "solution values directly across a p-change discards "

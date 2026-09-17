@@ -56,39 +56,14 @@ KNOWLEDGE = {
                          "penalty_coupling", "Nitsche_coupling"],
         "geometry_formats": ["NURBS from CAD (IGES/STEP)", "B-spline patches"],
         "pitfalls": [
-                        '[API] "SurfaceLoadCondition" (bare name) is '
-                        'NOT registered as either an Element or a '
-                        'Condition in either IgaApplication or '
-                        'StructuralMechanicsApplication. The catalog '
-                        'previously listed it in the "elements" '
-                        'field, which is doubly wrong: (a) it is a '
-                        'Condition, not an Element; (b) it needs a '
-                        'shape suffix ("SurfaceLoadCondition3D3N" / '
-                        '"SurfaceLoadCondition3D4N"), and (c) the '
-                        'suffixed form comes from '
-                        'StructuralMechanicsApplication, not IGA. '
-                        'For IGA-internal surface integration use '
-                        'SurfaceCondition3D{3,4,6,8,9}N (no "Load" '
-                        'in the name) instead. '
-                        "Signal: mp.CreateNewCondition("
-                        "\"SurfaceLoadCondition\", ...) raises "
-                        "'Error: The Condition X is not registered!' "
-                        "from kratos/python/add_model_part_to_python."
-                        "cpp:173. Appending the 3D{3,4}N shape "
-                        "suffix and loading StructuralMechanics"
-                        "Application lets it register. "
-                        "(Verified empirically 2026-06-01 — Tier-2 "
-                        "fixture iga_surface_condition_naming in "
-                        "scripts/tier2_fixtures/kratos/.)",
-                        '[Numerical] Requires NURBS geometry definition (control points, knot vectors, weights) '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Trimmed surfaces need special integration rules '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Multi-patch coupling via penalty or Nitsche method '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Higher continuity (C^p-1) vs C^0 FEM — different error behavior '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                    ],
+            "[API] \"SurfaceLoadCondition\" (bare name) is NOT registered as either an Element or a Condition in either IgaApplication or StructuralMechanicsApplication. The catalog previously listed it in the \"elements\" field, which is doubly wrong: (a) it is a Condition, not an Element; (b) it needs a shape suffix (\"SurfaceLoadCondition3D3N\" / \"SurfaceLoadCondition3D4N\"), and (c) the suffixed form comes from StructuralMechanicsApplication, not IGA. For IGA-internal surface integration use SurfaceCondition3D{3,4,6,8,9}N (no \"Load\" in the name) instead. Signal: mp.CreateNewCondition(\"SurfaceLoadCondition\", ...) raises 'is not registered!' \u2014 Error:, the word Condition and the name are all inserted around that literal at runtime, so the line reads Error: The Condition SurfaceLoadCondition is not registered! \u2014 from kratos/python/add_model_part_to_python.cpp:173. Appending the 3D{3,4}N shape suffix and loading StructuralMechanicsApplication lets it register. (Verified empirically 2026-06-01 \u2014 Tier-2 fixture iga_surface_condition_naming in scripts/tier2_fixtures/kratos/.)",
+            "[Numerical] Requires NURBS geometry definition (control points, knot vectors, weights) Signal: the NURBS geometry types are core KratosMultiphysics classes (NurbsSurfaceGeometry3D, NurbsCurveGeometry3D) and are NOT attributes of IgaApplication; dotting them off the IGA module raises AttributeError before any analysis is set up.",
+        ],
+        "guidance": [
+            "[Numerical] Trimmed surfaces need special integration rules",
+            "[Numerical] Multi-patch coupling via penalty or Nitsche method",
+            "[Numerical] Higher continuity (C^p-1) vs C^0 FEM \u2014 different error behavior",
+        ]
     },
 }
 

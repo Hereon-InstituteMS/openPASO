@@ -1,0 +1,127 @@
+TITLE:
+  - "Large-eddy simulation of turbulent channel flow (Smagorinsky, height 2)"
+PROBLEM TYPE:
+  PROBLEMTYPE: "Fluid"
+FLUID DYNAMIC:
+  LINEAR_SOLVER: 1
+  TIMEINTEGR: "Af_Gen_Alpha"
+  ALPHA_M: 0.83333333333333
+  ALPHA_F: 0.66666666666666
+  GAMMA: 0.66666666666666
+  TIMESTEP: 0.005
+  NUMSTEP: 10
+  MAXTIME: 100
+  ITEMAX: 3
+  INITIALFIELD: "field_by_function"
+  STARTFUNCNO: 1
+  RESULTSEVERY: 5
+  RESTARTEVERY: 0
+FLUID DYNAMIC/RESIDUAL-BASED STABILIZATION:
+  CHARELELENGTH_U: "volume_equivalent_diameter"
+  DEFINITION_TAU: "Codina_convscaled"
+  EVALUATION_TAU: "integration_point"
+FLUID DYNAMIC/TURBULENCE MODEL:
+  TURBULENCE_APPROACH: "CLASSICAL_LES"
+  PHYSICAL_MODEL: "Smagorinsky"
+  CANONICAL_FLOW: "channel_flow_of_height_2"
+  HOMDIR: "xz"
+  CHA_NUMSUBDIVISIONS: 16
+  SAMPLING_START: 5
+  SAMPLING_STOP: 10
+  DUMPING_PERIOD: 0
+FLUID DYNAMIC/SUBGRID VISCOSITY:
+  C_SMAGORINSKY: 0.1
+SOLVER 1:
+  SOLVER: "UMFPACK"
+  NAME: "Fluid_Solver"
+IO/RUNTIME VTK OUTPUT:
+  INTERVAL_STEPS: 5
+IO/RUNTIME VTK OUTPUT/FLUID:
+  OUTPUT_FLUID: true
+  VELOCITY: true
+  PRESSURE: true
+MATERIALS:
+  - MAT: 1
+    MAT_fluid:
+      DYNVISCOSITY: 0.002531646
+      DENSITY: 1
+FUNCT1:
+  - COMPONENT: 0
+    SYMBOLIC_FUNCTION_OF_SPACE_TIME: "(1-y*y)*21.3*(1.0+0.2*cos(10*y+3*z))"
+  - COMPONENT: 1
+    SYMBOLIC_FUNCTION_OF_SPACE_TIME: "0"
+  - COMPONENT: 2
+    SYMBOLIC_FUNCTION_OF_SPACE_TIME: "(1-y*y)*0.5*(1.0+cos(17*y+3+11*x))"
+  - COMPONENT: 3
+    SYMBOLIC_FUNCTION_OF_SPACE_TIME: "0"
+DESIGN SURF DIRICH CONDITIONS:
+  - E: 3
+    NUMDOF: 4
+    ONOFF: [1, 1, 1, 0]
+    VAL: [0, 0, 0, 0]
+    FUNCT: [0, 0, 0, 0]
+  - E: 4
+    NUMDOF: 4
+    ONOFF: [1, 1, 1, 0]
+    VAL: [0, 0, 0, 0]
+    FUNCT: [0, 0, 0, 0]
+DESIGN SURF PERIODIC BOUNDARY CONDITIONS:
+  - E: 1
+    ID: 1
+    MASTER_OR_SLAVE: "Master"
+    PLANE: "yz"
+    LAYER: 1
+    ANGLE: 0
+    ABSTREETOL: 1e-09
+  - E: 2
+    ID: 1
+    MASTER_OR_SLAVE: "Slave"
+    PLANE: "yz"
+    LAYER: 1
+    ANGLE: 0
+    ABSTREETOL: 1e-09
+  - E: 5
+    ID: 2
+    MASTER_OR_SLAVE: "Master"
+    PLANE: "xy"
+    LAYER: 1
+    ANGLE: 0
+    ABSTREETOL: 1e-09
+  - E: 6
+    ID: 2
+    MASTER_OR_SLAVE: "Slave"
+    PLANE: "xy"
+    LAYER: 1
+    ANGLE: 0
+    ABSTREETOL: 1e-09
+DESIGN VOL NEUMANN CONDITIONS:
+  - E: 1
+    NUMDOF: 4
+    ONOFF: [1, 0, 0, 0]
+    VAL: [1, 0, 0, 0]
+    FUNCT: [0, 0, 0, 0]
+    TYPE: "Dead"
+DESIGN VOL MODE FOR KRYLOV SPACE PROJECTION:
+  - E: 1
+    DIS: "fluid"
+    NUMMODES: 4
+    ONOFF: [0, 0, 0, 1]
+    WEIGHTVECDEF: "integration"
+DSURF-NODE TOPOLOGY:
+  - "SIDE fluid x- DSURFACE 1"
+  - "SIDE fluid x+ DSURFACE 2"
+  - "SIDE fluid y- DSURFACE 3"
+  - "SIDE fluid y+ DSURFACE 4"
+  - "SIDE fluid z- DSURFACE 5"
+  - "SIDE fluid z+ DSURFACE 6"
+DVOL-NODE TOPOLOGY:
+  - "VOLUME fluid DVOL 1"
+FLUID DOMAIN:
+  bottom_corner_point: [0, -1, 0]
+  top_corner_point: [2, 1, 1]
+  subdivisions: [8, 8, 8]
+  elements:
+    FLUID:
+      HEX8:
+        MAT: 1
+        NA: Euler

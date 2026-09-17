@@ -1,0 +1,338 @@
+===========================================================================
+openPASO — Logopaket
+open Platform for Agentic Simulation and Optimization
+===========================================================================
+
+Alles kommt aus demselben Renderer. Das Standbild ist exakt ein Einzelbild
+der Animation — der Moment, in dem die Naht als S steht. Die Kugel ist
+blickdicht: keine Linien der Rückseite. Die Perspektive ist so gewählt,
+dass die Mittelachse des S genau auf dem Kugeläquator und der Bildmitte
+liegt.
+
+
+---------------------------------------------------------------------------
+1  Welches Format wofür
+---------------------------------------------------------------------------
+  animierte SVG   Webseiten, GitHub Pages, Vollbild im Browser.
+                  Zeichnet die Kugel in jedem Bild neu, in der Pixeldichte
+                  des Bildschirms — in jeder Größe scharf, echter
+                  Alphakanal, 36 bis 54 KB.
+  MP4             PowerPoint, Word, Schnittprogramme. In zwei Stufen,
+                  0,47 bis 2,3 MB — siehe Punkt 4.
+  GIF             GitHub-README. Dort läuft ausschließlich GIF: kein
+                  JavaScript, keine animierte SVG, kein <video>, kein
+                  <iframe> — GitHub filtert all das heraus.
+  statische SVG   Druck, Folien, Favicon.
+
+  Kein WebM: transparentes Video bräuchte man nur dort, wo auch die
+  animierte SVG ginge, und aus derselben Quelle wäre es in wenigen Minuten
+  erzeugt. Vorhalten lohnt sich nicht.
+
+
+---------------------------------------------------------------------------
+2  Die fünf Fassungen
+---------------------------------------------------------------------------
+  koralle_dunkel        #FF6B4A auf #0D1117 — dasselbe Dunkel wie das
+                        dunkle GitHub-Design, fügt sich dort nahtlos ein
+  koralle_weiss         #FF6B4A auf Weiß
+  koralle_transparent   #FF6B4A, transparent
+  graphit_weiss         #64748B auf Weiß
+  graphit_transparent   #64748B, transparent
+
+  MP4 kennt keinen Alphakanal, die transparenten Fassungen gibt es dort
+  also nicht — dafür koralle_dunkel, koralle_weiss und graphit_weiss.
+
+
+---------------------------------------------------------------------------
+3  Zwei Detailgrade
+---------------------------------------------------------------------------
+  fine     178 Knoten, 352 finite Elemente   ab etwa 220 px aufwärts
+  coarse    44 Knoten,  82 finite Elemente   darunter
+
+  Das sind keine herunterskalierten Fassungen, sondern eigene Geometrien.
+  Strichstärken und Neuronenpunkte skalieren mit der Wurzel des
+  Knotenverhältnisses mit, der relative Detailgrad bleibt also derselbe —
+  das Bild sieht aus wie dieselbe Zeichnung, nur größer. Die S-Naht
+  skaliert bewusst nicht mit: sie gehört zur Logo-Identität und behält
+  ihre Proportion zur Kugel.
+
+  Wozu: bei kleiner Darstellung ist die feine Struktur nicht mehr
+  auflösbar und wird zu Grauschleier. Die grobe Fassung bleibt lesbar.
+  Sie dreht außerdem 30 % schneller — auf kleiner Fläche passiert dadurch
+  sichtbar mehr. Das gilt in jedem Format gleich: Schleife 12,3 s statt
+  16 s, in der animierten SVG ebenso wie im MP4 und im GIF.
+
+  Die grobe Fassung ist dabei nicht einfach eine dünner besetzte Kugel.
+  Sie wird in dieser Reihenfolge gebaut: Punkte verteilen, Pole besetzen,
+  nahtnahe Punkte auf die Naht legen — und ERST DANACH eine gebundene
+  Lloyd-Relaxation, bei der die freien Punkte in den Schwerpunkt ihrer
+  Voronoi-Zelle wandern, die Nahtpunkte nur entlang der Naht rutschen und
+  die Pole stehen bleiben. Die Dreiecksvernetzung entsteht anschließend
+  aus den endgültigen Punkten. Dadurch ist sie dort, wo sie gezeichnet
+  wird, eine echte Delaunay-Vernetzung: kreuzungsfrei und gleichmäßig,
+  auch direkt an der Trennlinie.
+
+
+---------------------------------------------------------------------------
+4  Was wo liegt
+---------------------------------------------------------------------------
+  statisch/svg/    10 Dateien: 5 Fassungen x 2 Detailgrade, 26 und 91 KB
+  statisch/png/    1024 x 1024, für Programme ohne SVG
+  statisch/png/openPASO_social_preview.png
+                   1280 x 640 für die Repository-Vorschau
+  animiert/svg/    10 Dateien: 5 Fassungen x 2 Detailgrade, 36 und 54 KB
+  animiert/mp4/    H.264, nahtlose Schleife, 30 Bilder/s, für PowerPoint
+                   und Word. Je Fassung und Detailgrad zwei Stufen:
+
+                     Datei                  Bild      Größe (gra./kor.)
+                     _fine                1440²       1,4  / 1,7 MB
+                     _fine_highres        2160²       1,9  / 2,2 MB
+                     _coarse               960²       0,47 / 0,54 MB
+                     _coarse_highres      1440²       0,62 / 0,72 MB
+
+                   Für Folien und Dokumente genügt die erste Stufe;
+                   _highres lohnt, wenn das Video formatfüllend läuft,
+                   auf großen Projektionen und auf 4K-Schirmen.
+  animiert/gif/    400 x 400, 16,7 Bilder/s, 12,3 s, grobe Geometrie
+  web/             openPASO_logo_animiert.js + index.html
+
+
+---------------------------------------------------------------------------
+5  Die animierte SVG richtig einbinden
+---------------------------------------------------------------------------
+  Wichtig: als  <img src="...svg">  eingebunden führen Browser das Skript
+  in der SVG NICHT aus — dann steht das Bild still. Es gibt drei Wege, auf
+  denen sie läuft:
+
+  a) Als eigenes Objekt:
+
+         <object data="openPASO_graphit_transparent_animiert_fine.svg"
+                 type="image/svg+xml" width="220"></object>
+
+  b) Den SVG-Code direkt in die HTML-Seite kopieren (inline).
+
+  c) Die Datei direkt im Browser öffnen — praktisch für Vorträge: im
+     Vollbild läuft sie in jeder Auflösung scharf.
+
+  Für eine Webseite ist die JS-Fassung unter Punkt 7 meist bequemer.
+
+
+---------------------------------------------------------------------------
+6  GitHub — README auf github.com
+---------------------------------------------------------------------------
+  a) Im Repository einen Ordner  logo/  anlegen (so macht es auch OASiS)
+     und hineinlegen:
+
+         logo/openPASO_koralle_dunkel.gif
+         logo/openPASO_graphit_transparent.gif
+         logo/openPASO_koralle_dunkel_fine.svg     (statisch, als Reserve)
+
+  b) Ganz oben in die README.md — Koralle im dunklen, Graphit im hellen
+     GitHub-Design:
+
+         <p align="center">
+           <picture>
+             <source media="(prefers-color-scheme: dark)"
+                     srcset="logo/openPASO_koralle_dunkel.gif">
+             <source media="(prefers-color-scheme: light)"
+                     srcset="logo/openPASO_graphit_transparent.gif">
+             <img src="logo/openPASO_koralle_dunkel.gif"
+                  alt="openPASO" width="220">
+           </picture>
+         </p>
+
+         <h1 align="center">openPASO</h1>
+         <p align="center"><b>open Platform for Agentic Simulation
+         and Optimization</b></p>
+
+     Die Breitenangabe ist wichtig: ohne sie zeigt GitHub das Bild in
+     voller Pixelbreite. Eine fertige README liegt als README_Vorlage.md
+     bei. Der dunkle Grund der Koralle-Fassung ist exakt GitHubs #0D1117,
+     die Kante ist im dunklen Design deshalb nicht zu sehen.
+
+  c) Repository-Vorschau: Settings > General > Social preview > Edit >
+     Upload an image, dann statisch/png/openPASO_social_preview.png.
+     GitHub nimmt PNG, JPG oder GIF bis 1 MB, empfohlen 1280 x 640.
+     Bewusst mit dunklem Grund — wie eine transparente Fläche in fremden
+     Vorschauen (Slack, Mastodon, LinkedIn) aussieht, hat man nicht in
+     der Hand.
+
+
+---------------------------------------------------------------------------
+7  GitHub Pages und eigene Webseiten
+---------------------------------------------------------------------------
+  a) Pages aktivieren: Settings > Pages > Source "Deploy from a branch",
+     Branch  main , Ordner  /docs .
+
+  b) web/openPASO_logo_animiert.js und web/index.html nach  docs/
+     kopieren, committen. Nach ein bis zwei Minuten liegt die Seite unter
+         https://<benutzer>.github.io/openPASO/
+
+  c) Einbinden in eine eigene Seite:
+
+         <div id="logo" style="max-width:320px"></div>
+         <script src="openPASO_logo_animiert.js"></script>
+         <script>
+           openPASOLogo.mount('#logo', { farbe: '#FF6B4A' });
+         </script>
+
+     Optionen:
+         farbe  : '#FF6B4A' (Koralle, Vorgabe) oder '#64748B' (Graphit)
+         tempo  : 1 = Normalgeschwindigkeit, 0.5 = halb so schnell
+         dichte : 'fine' (Vorgabe) | 'coarse'
+
+     mount() liefert ein Objekt mit .pause() und .play(). Bei aktiver
+     Systemeinstellung "Bewegung reduzieren" zeigt das Logo automatisch
+     ein Standbild.
+
+
+---------------------------------------------------------------------------
+8  Präsentationen, Word, Druck
+---------------------------------------------------------------------------
+  PowerPoint und Word:   MP4 einfügen (Einfügen > Video > Auf meinem PC),
+                         _fine für große Darstellung, _coarse für ein
+                         Logo in Folienecke oder Titelzeile; läuft das
+                         Video formatfüllend oder auf einer großen
+                         Projektion, die Stufe _highres nehmen.
+                         Braucht es transparenten
+                         Grund, geht nur das GIF — MP4 hat keinen
+                         Alphakanal. Für ein formatfüllendes Vollbild ist
+                         die animierte SVG im Browser die beste Wahl, die
+                         bleibt in jeder Größe scharf.
+  Statisch auf Folien:   SVG einfügen (PowerPoint kann SVG seit 2016),
+                         sonst das PNG.
+  Druck:                 SVG, beliebig skalierbar.
+  Favicon:               die _coarse-SVG, sie bleibt bis 16 px lesbar:
+                             <link rel="icon" href="openPASO_..._coarse.svg">
+
+
+---------------------------------------------------------------------------
+9  Wie die MP4-Dateien entstehen
+---------------------------------------------------------------------------
+  Strichgrafik ist für einen Videocodec ein ungünstiger Fall: dünne, harte
+  Kanten auf großer ruhiger Fläche. Vier Dinge machen dabei den
+  Unterschied — alle vier kosten keine Dateigröße.
+
+  a) Farbe bis zuletzt in RGB. Die naheliegende Kette legt die Kugel über
+     den Hintergrund und rechnet dabei schon nach YUV 4:2:0 um; die
+     Farbanteile der Linien werden also halbiert, bevor überhaupt skaliert
+     wird. Genau daher kamen das Flirren und die Farbsäume bei Koralle auf
+     Dunkel. Jetzt wird in RGB zusammengesetzt und skaliert, die
+     Farbunterabtastung passiert als allerletzter Schritt.
+
+  b) Feste Farbmatrix (BT.709), mitgeschrieben in die Datei. Ohne diese
+     Angabe wählt sie jedes Programm nach Bildgröße selbst — daher die
+     leichten Farbverschiebungen zwischen den Größen.
+
+  c) Volle Auflösung statt Herunterskalieren. Bisher wurde in doppelter
+     Größe gerendert und dann auf die halbe geschrumpft. Bei gleicher
+     Dateigröße ist es messbar besser, die volle Auflösung zu behalten:
+     die Farbebene liegt dann in der Auflösung des alten Bildes, und die
+     Linien bleiben scharf, auch wenn das Video groß läuft.
+
+  d) 30 statt 25 Bilder/s. Bildschirme laufen fast immer mit 60 Hz. 25
+     geht darin nicht auf, jedes vierte Bild steht einen Takt länger —
+     das ist das leichte Stocken bei einer gleichmäßigen Drehung. 30
+     teilt 60 glatt.
+
+  Dazu abgeschaltetes Deblocking (auf Film abgestimmt, weicht feine Linien
+  auf), gleichmäßige statt dunkelbetonter Bitverteilung und eine sehr
+  genaue Bewegungssuche. Codiert wird in zwei Durchgängen, damit die
+  Dateigröße genau getroffen und über die ganze Umdrehung gleichmäßig
+  verteilt wird.
+
+  Alle Dateien bleiben H.264 High Profile in 4:2:0 — das ist es, was
+  PowerPoint, Word und QuickTime abspielen. 4:4:4 wäre für Strichgrafik
+  deutlich besser, wird von diesen Programmen aber nicht unterstützt.
+
+
+---------------------------------------------------------------------------
+10  Wie die GIF-Dateien entstehen
+---------------------------------------------------------------------------
+  205 Einzelbilder statt bisher 154 — ein Drittel mehr Zwischenschritte,
+  daher die ruhigere Bewegung. GIF misst die Standzeit in
+  Hundertstelsekunden; 6 davon je Bild ergeben 16,7 Bilder/s und eine
+  Schleife von genau 12,30 s.
+
+  400 x 400 statt 520 x 520. In der README steht das Logo 220 px breit,
+  400 ist also immer noch knapp die doppelte Auflösung — und nur so passt
+  das ganze Paket in eine Datei.
+
+  Die transparenten Fassungen sind der schwierige Fall: GIF kennt nur
+  "ganz durchsichtig" oder "ganz deckend", keine Zwischenstufen. Schneidet
+  man die weich auslaufenden Kanten der Linien hart ab, bleiben Treppchen
+  übrig, die beim Drehen von Bild zu Bild springen — das war das Pixelige
+  und Flimmernde. Jetzt werden die Kantenpixel vorher gegen den Grund
+  gerechnet, für den die Datei gedacht ist, und nur der wirklich leere
+  Hintergrund bleibt durchsichtig:
+
+      openPASO_graphit_transparent.gif    Kanten für hellen Grund
+      openPASO_koralle_transparent.gif    Kanten für dunklen Grund
+
+  Auf diesem Grund sind sie von der deckenden Fassung nicht zu
+  unterscheiden; auf dem jeweils anderen zeichnet sich ein feiner Saum ab.
+  Für einen klar bekannten Untergrund ist die deckende Fassung ohnehin die
+  bessere Wahl.
+
+  12 bzw. 16 Farben statt 64, ohne Rasterung (dither=none): bei einer
+  Zeichnung aus einem einzigen Farbton ist das mit bloßem Auge nicht zu
+  unterscheiden und hält die Dateien trotz eines Drittels mehr
+  Einzelbilder bei 2,4 bis 2,9 MB.
+
+
+---------------------------------------------------------------------------
+11  Die S-Trennlinie
+---------------------------------------------------------------------------
+  Der Übergang zwischen neuronaler und FE-Hälfte ist eigens ausgearbeitet:
+
+  - In beiden Polen sitzt ein Knoten. Dort endet die S-Naht; der Knoten
+    fasst das Ende als runde Kappe ein, statt es stumpf abzuschneiden.
+  - Knoten, die ohnehin dicht an der Naht saßen, liegen jetzt genau auf
+    ihr. Aus so einem Knoten laufen die Verbindungen der neuronalen Hälfte
+    und die Kanten des FE-Netzes gemeinsam heraus, beide beginnen exakt
+    auf der Linie. Genau auf der Naht liegen 19 Knoten (fine) bzw. 11
+    (coarse); verlegt wurde dabei um höchstens 0,38 Knotenabstände.
+  - Diese Knoten werden genau so breit und so kräftig gezeichnet wie das
+    S-Band. Vorher saß dort ein hellerer, etwas breiterer Fleck im Band.
+  - Für jede Linie, die auf die Naht trifft, gilt streng: entweder sie
+    setzt sich dort geradlinig in die andere Hälfte fort, oder sie endet
+    in einem Knoten, der auf der Naht liegt. Dafür wird jede querende
+    Kante auf beiden Seiten gezeichnet — beide Teilstücke liegen auf
+    demselben Großkreis und treffen sich exakt im selben Punkt. Wo das
+    im FE-Netz eine Kreuzung erzeugt hätte, ist die Verbindung stattdessen
+    auf den nächsten Nahtknoten umgebogen worden.
+    In der groben Fassung wird dafür grundsätzlich keine Verbindung als
+    Sehne ins Dreiecksnetz übernommen — genau das hatte dort vorher den
+    unordentlichen Eindruck erzeugt.
+  - Kanten, die über ihre ganze Länge dicht neben der Naht und nahezu
+    parallel zu ihr verliefen, sind entfernt — sie lasen sich wie eine
+    zweite, dünne Naht — und keine davon so, dass ein Knoten
+    dadurch in einer Sackgasse endet.
+  - Reststücke, die kaum unter dem S-Band hervorschauen, entfallen.
+  - Ein Teil der Punkte, an denen Linien die Naht queren, ist als Neuron
+    ausgeführt statt als bloßer Durchstoßpunkt: fine 17, coarse 6.
+    Ausgewählt nach dem Maximin-Prinzip — es kommt immer der Punkt dazu,
+    der am weitesten von allen bisherigen Neuronen entfernt liegt, mit
+    Mindestabständen von 0,95 Knotenabständen untereinander und 0,75 zu
+    jedem vorhandenen Neuron. Ein Umkreis von 0,45 Knotenabständen um die
+    Pole bleibt frei: dort läge ein Neuron auf der Silhouette und ragte
+    über den Kugelrand hinaus.
+
+  Nachgerechnet für beide Detailgrade: kein Knoten der FE-Hälfte hängt an
+  nur einer Kante, kein Neuron an nur einer Verbindung, kein Verstoß gegen
+  die Durchgangsregel, und im FE-Netz kein einziger Kreuzungspunkt. Die
+  Liniendichte bleibt dabei praktisch unverändert.
+
+
+---------------------------------------------------------------------------
+Vorschlag für die Ordnerstruktur im Repository
+---------------------------------------------------------------------------
+  openPASO/
+    README.md
+    logo/
+      openPASO_koralle_dunkel.gif          <- dunkles GitHub-Design
+      openPASO_graphit_transparent.gif     <- helles GitHub-Design
+      openPASO_koralle_dunkel_fine.svg
+    docs/                                  <- GitHub Pages
+      index.html
+      openPASO_logo_animiert.js

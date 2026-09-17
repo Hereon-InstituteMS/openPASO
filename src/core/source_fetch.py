@@ -2,7 +2,7 @@
 
 Counterpart to source_discovery: when discovery reports MISSING or
 INSTALLED_BINARY (no source on disk), this module clones the canonical
-repo into ~/Schreibtisch/Open-FEM-agent/upstream_sources/<backend>/.
+repo into <repository>/upstream_sources/<backend>/.
 
 Design points:
   * Idempotent: clones only if destination doesn't exist.

@@ -24,20 +24,46 @@ def _parallel_poisson_2d(params: dict) -> str:
 #include <deal.II/base/mpi.h>
 #include <deal.II/lac/generic_linear_algebra.h>
 
-// Hard precondition with ONE actionable diagnostic instead of 200
-// lines of template errors from inside generic_linear_algebra.h:
-// conda-forge deal.II builds ship WITHOUT MPI and WITHOUT PETSc in
-// every version (config.h: '#undef DEAL_II_WITH_MPI' / '..._PETSC',
-// verified 9.1.1 + 9.3.2 on 2026-06-12), so the step-40 distributed
-// pattern cannot compile there at all.
-#if !defined(DEAL_II_WITH_MPI) || !defined(DEAL_II_WITH_PETSC)
-#  error "parallel_poisson_2d requires a deal.II build with MPI + PETSc (+ p4est). conda-forge deal.II ships without them - use the serial poisson_2d template instead, or build deal.II from source with -DDEAL_II_WITH_MPI=ON -DDEAL_II_WITH_PETSC=ON."
+// ── FEATURE DISPATCH ─────────────────────────────────────────────
+// step-40's distributed mesh + PETSc/Trilinos linear algebra exist
+// ONLY if the library was built with MPI + PETSc (or Trilinos) +
+// p4est. This template therefore compiles in TWO modes from the SAME
+// source, chosen by the flags in deal.II/base/config.h:
+//
+//   DISTRIBUTED  (MPI + PETSc + p4est ON) — the real step-40 program:
+//                parallel::distributed::Triangulation, LA::MPI types,
+//                PreconditionAMG, one .vtu per rank plus a .pvtu.
+//   SERIAL-SHAPED (any of them OFF) — the identical algorithm on a
+//                plain Triangulation with deal.II's built-in linear
+//                algebra. It really runs, on one rank. Every MPI
+//                IDIOM is kept (MPI_InitFinalize, locally_owned /
+//                locally_relevant IndexSets, is_locally_owned()
+//                gating, compress(), write_vtu_with_pvtu_record) so
+//                the code is a correct starting point for a build
+//                that does have MPI; it simply does not decompose.
+//
+// It used to be a hard #error. That was wrong: the serial-shaped
+// variant below was compiled and run against a deal.II with MPI,
+// PETSc, Trilinos and p4est all OFF and solved the problem.
+#if defined(DEAL_II_WITH_MPI) && defined(DEAL_II_WITH_P4EST) && \
+    (defined(DEAL_II_WITH_PETSC) || defined(DEAL_II_WITH_TRILINOS))
+#  define OFA_DEALII_DISTRIBUTED 1
+#else
+#  define OFA_DEALII_DISTRIBUTED 0
 #endif
 
-// Choose LA backend: PETSc or Trilinos
 namespace LA
 {{
+#if OFA_DEALII_DISTRIBUTED
+#  if defined(DEAL_II_WITH_PETSC)
   using namespace dealii::LinearAlgebraPETSc;
+#  else
+  using namespace dealii::LinearAlgebraTrilinos;
+#  endif
+#else
+  // Built-in serial linear algebra. Same class names, no MPI:: layer.
+  using namespace dealii::LinearAlgebraDealII;
+#endif
 }}
 
 #include <deal.II/lac/vector.h>
@@ -56,8 +82,11 @@ namespace LA
 #include <deal.II/numerics/vector_tools.h>
 #include <deal.II/numerics/data_out.h>
 #include <deal.II/numerics/error_estimator.h>
-#include <deal.II/distributed/tria.h>
-#include <deal.II/distributed/grid_refinement.h>
+#include <deal.II/lac/precondition.h>
+#if OFA_DEALII_DISTRIBUTED
+#  include <deal.II/distributed/tria.h>
+#  include <deal.II/distributed/grid_refinement.h>
+#endif
 #include <fstream>
 #include <iostream>
 
@@ -91,8 +120,13 @@ int main(int argc, char *argv[])
         << Utilities::MPI::n_mpi_processes(mpi_communicator)
         << " MPI rank(s)" << std::endl;
 
+#if OFA_DEALII_DISTRIBUTED
   // Distributed triangulation via p4est
   parallel::distributed::Triangulation<dim> triangulation(mpi_communicator);
+#else
+  // Serial-shaped fallback: same API, one rank, no decomposition.
+  Triangulation<dim> triangulation;
+#endif
   GridGenerator::hyper_cube(triangulation);
   triangulation.refine_global({refinements});
 
@@ -106,7 +140,12 @@ int main(int argc, char *argv[])
     DoFTools::extract_locally_relevant_dofs(dof_handler);
 
   pcout << "Parallel Poisson: " << dof_handler.n_dofs() << " DOFs, "
-        << triangulation.n_global_active_cells() << " cells" << std::endl;
+#if OFA_DEALII_DISTRIBUTED
+        << triangulation.n_global_active_cells()
+#else
+        << triangulation.n_active_cells()
+#endif
+        << " cells" << std::endl;
 
   // Constraints
   AffineConstraints<double> constraints;
@@ -117,23 +156,27 @@ int main(int argc, char *argv[])
                                             constraints);
   constraints.close();
 
-  // Distributed sparsity pattern
+  // Sparsity pattern
   DynamicSparsityPattern dsp(locally_relevant_dofs);
   DoFTools::make_sparsity_pattern(dof_handler, dsp, constraints, false);
+#if OFA_DEALII_DISTRIBUTED
   SparsityTools::distribute_sparsity_pattern(dsp,
                                               dof_handler.locally_owned_dofs(),
                                               mpi_communicator,
                                               locally_relevant_dofs);
-
-  // System matrix and vectors
   LA::MPI::SparseMatrix system_matrix;
   system_matrix.reinit(locally_owned_dofs, locally_owned_dofs, dsp, mpi_communicator);
-
   LA::MPI::Vector solution;
   solution.reinit(locally_owned_dofs, mpi_communicator);
-
   LA::MPI::Vector system_rhs;
   system_rhs.reinit(locally_owned_dofs, mpi_communicator);
+#else
+  SparsityPattern sparsity_pattern;
+  sparsity_pattern.copy_from(dsp);
+  LA::SparseMatrix system_matrix(sparsity_pattern);
+  LA::Vector solution(dof_handler.n_dofs());
+  LA::Vector system_rhs(dof_handler.n_dofs());
+#endif
 
   // Assembly
   const QGauss<dim> quadrature(degree + 1);
@@ -178,14 +221,19 @@ int main(int argc, char *argv[])
   system_matrix.compress(VectorOperation::add);
   system_rhs.compress(VectorOperation::add);
 
-  // Solve with PETSc CG + AMG preconditioner
-  SolverControl solver_control(dof_handler.n_dofs(), 1e-12);
+  // Solve. Tolerance RELATIVE to ||b||: an absolute 1e-12 is
+  // unreachable noise on a large problem.
+  SolverControl solver_control(1000, 1e-10 * system_rhs.l2_norm());
+#if OFA_DEALII_DISTRIBUTED
   LA::SolverCG  solver(solver_control, mpi_communicator);
-
   LA::MPI::PreconditionAMG preconditioner;
   LA::MPI::PreconditionAMG::AdditionalData amg_data;
   preconditioner.initialize(system_matrix, amg_data);
-
+#else
+  SolverCG<LA::Vector> solver(solver_control);
+  PreconditionSSOR<LA::SparseMatrix> preconditioner;
+  preconditioner.initialize(system_matrix);
+#endif
   solver.solve(system_matrix, solution, system_rhs, preconditioner);
 
   pcout << "Solved in " << solver_control.last_step() << " iterations"
@@ -193,21 +241,26 @@ int main(int argc, char *argv[])
 
   constraints.distribute(solution);
 
-  // Output: each process writes its part, DataOut merges via PVTU
+  // Output: each rank writes its part, the .pvtu indexes them all.
+  // ParaView must open the .pvtu, not a per-rank .vtu.
+  DataOut<dim> data_out;
+  data_out.attach_dof_handler(dof_handler);
+#if OFA_DEALII_DISTRIBUTED
   LA::MPI::Vector locally_relevant_solution;
   locally_relevant_solution.reinit(locally_owned_dofs,
                                     locally_relevant_dofs,
                                     mpi_communicator);
   locally_relevant_solution = solution;
-
-  DataOut<dim> data_out;
-  data_out.attach_dof_handler(dof_handler);
   data_out.add_data_vector(locally_relevant_solution, "solution");
-
-  // Partition visualization
   Vector<float> subdomain(triangulation.n_active_cells());
   for (auto &val : subdomain)
     val = static_cast<float>(triangulation.locally_owned_subdomain());
+#else
+  data_out.add_data_vector(solution, "solution");
+  Vector<float> subdomain(triangulation.n_active_cells());
+  subdomain = static_cast<float>(
+    Utilities::MPI::this_mpi_process(mpi_communicator));
+#endif
   data_out.add_data_vector(subdomain, "subdomain");
 
   data_out.build_patches();
@@ -235,12 +288,44 @@ KNOWLEDGE = {
         "output": "DataOut::write_vtu_with_pvtu_record for parallel VTU",
     },
     "pitfalls": [
-        "[Integration] Requires deal.II compiled with MPI + p4est + "
-        "PETSc (or Trilinos). Without these the parallel:: classes "
-        "are not instantiated. Signal: link error 'undefined "
-        "reference to parallel::distributed::Triangulation<dim>::"
-        "Triangulation' or `ExcMessage('parallel::distributed::"
-        "Triangulation needs deal.II compiled with p4est')`.",
+        "[Integration] The step-40 distributed pattern requires the "
+        "LIBRARY to have been built with MPI + p4est + PETSc (or "
+        "Trilinos). Probe it in "
+        "$DEAL_II_DIR/include/deal.II/base/config.h, NOT by trying "
+        "an include: on a source install every header ships anyway. "
+        "Signal: with p4est OFF the failure is a COMPILE-time error "
+        "and nothing else — parallel::distributed::Triangulation's "
+        "constructor is `= delete`d, so what you see is the "
+        "COMPILER's own wording — g++ says use of deleted function, "
+        "then reprints the signature it resolved to, e.g. "
+        "dealii::parallel::distributed::Triangulation<dim, spacedim>"
+        "::Triangulation(dealii::MPI_Comm, ...). None of that text "
+        "is deal.II's and none of it is in the library. "
+        "There is no link error and no runtime "
+        "exception to catch. Two things that still WORK with MPI off "
+        "and will fool a naive probe: "
+        "'#include <deal.II/distributed/tria.h>' compiles cleanly, "
+        "and Utilities::MPI::MPI_InitFinalize constructs and reports "
+        "n_mpi_processes == 1. "
+        "YOU DO NOT NEED TO ABANDON THE PATTERN. Verified by "
+        "compiling and running on a library with MPI, PETSc, "
+        "Trilinos and p4est ALL OFF: the same source solves the "
+        "problem if you (a) swap parallel::distributed::"
+        "Triangulation for a plain Triangulation and (b) swap "
+        "'namespace LA { using namespace "
+        "dealii::LinearAlgebraPETSc; }' for "
+        "'namespace LA { using namespace "
+        "dealii::LinearAlgebraDealII; }'. Everything else — "
+        "MPI_InitFinalize, locally_owned_dofs(), "
+        "DoFTools::extract_locally_relevant_dofs, "
+        "cell->is_locally_owned() gating, compress(), "
+        "DataOut::write_vtu_with_pvtu_record — compiles and runs "
+        "unchanged on one rank. Guard the two swaps with "
+        "'#if defined(DEAL_II_WITH_MPI) && defined(DEAL_II_WITH_P4EST) "
+        "&& (defined(DEAL_II_WITH_PETSC) || "
+        "defined(DEAL_II_WITH_TRILINOS))' and one source serves both "
+        "builds; this catalog's parallel_poisson template does "
+        "exactly that.",
         "[Syntax] Only locally-owned cells are assembled. Use "
         "`cell->is_locally_owned()` to gate the assembly loop. "
         "Signal: assembly runs on every rank but "
@@ -249,13 +334,42 @@ KNOWLEDGE = {
         "to double-counted entries; Triangulation::n_locally_"
         "owned_active_cells() returns the full count instead of "
         "the per-rank partition.",
-        "[API] Locally-relevant DoFs needed for ghosted vectors "
-        "(AffineConstraints::distribute on parallel vectors). "
-        "Forgetting `DoFTools::extract_locally_relevant_dofs` "
-        "gives an empty IndexSet and constraints fail to apply. "
-        "Signal: `AffineConstraints::distribute(solution)` raises "
-        "ExcMessage('ghost entries not consistent') because the "
-        "ghost layer is empty.",
+        "[API] Locally-relevant DoFs are needed for the GHOSTED "
+        "vector you read from (output, error estimation, nonlinear "
+        "residuals); the vector you SOLVE into must be "
+        "non-ghosted. Build the index sets with "
+        "dof_handler.locally_owned_dofs() and "
+        "DoFTools::extract_locally_relevant_dofs(dof_handler), and "
+        "reinit the read-only copy with BOTH. "
+        "Signal: this entry used to quote "
+        "ExcMessage('ghost entries not consistent'); that string "
+        "does not exist in deal.II — checked against the library's "
+        "own string table. The real diagnostics are: writing into a "
+        "vector that HAS ghost elements trips "
+        "Assert(..., ExcGhostsPresent()), declared at "
+        "base/exceptions.h:665-668 in three adjacent literals of "
+        "which the first is 'You are trying an operation on a vector "
+        "that is only' and the last 'vector you are operating on "
+        "does have ghost elements.', reading as: You are trying an "
+        "operation on a vector that is only allowed if the vector "
+        "has no ghost elements, but the vector you are operating on "
+        "does have ghost elements. And reading an element a "
+        "fully-distributed vector does not hold gives 'You tried to "
+        "access element <i> of a distributed vector, but this "
+        "element is not stored on the current processor.', followed "
+        "by the locally-owned range and the advice, streamed piece "
+        "by piece at lac/la_parallel_vector.h:1287-1289, that you "
+        "are passing a 'fully distributed' vector into a function "
+        "'that needs read access to vector elements that correspond' "
+        "'to degrees of freedom on ghost cells (or at least to' "
+        "locally active degrees of freedom that are not also locally "
+        "owned. "
+        "SCOPE: both are Assert-guarded, so they exist only in a "
+        "DEBUG build; in Release the same misuse is silent or "
+        "crashes. And both are MPI-only paths, so neither can be "
+        "reproduced on a build without MPI — the strings above were "
+        "read out of the library, the behaviour was not executed "
+        "here.",
         "[Syntax] SparsityTools::distribute_sparsity_pattern "
         "needed for parallel sparsity. Skipping it produces a "
         "globally-replicated sparsity (each rank holds all rows) "

@@ -29,8 +29,26 @@ def load(v, w):
 K = asm(biharmonic, ib)
 f = asm(load, ib)
 
-# Simply supported: u=0 on boundary
-D = ib.get_dofs().flatten()
+# BOUNDARY CONDITIONS ON A MORLEY ELEMENT: which dofs you constrain IS the
+# boundary condition. Morley carries two kinds of dof — a value at each vertex
+# ('u') and a normal derivative at each edge midpoint ('u_n') — so:
+#
+#   CLAMPED          u = 0 AND du/dn = 0  ->  d.flatten()      (both blocks)
+#   SIMPLY SUPPORTED u = 0 only           ->  d.nodal['u']     (values only)
+#
+# Choose deliberately: the two are one call apart and neither errors. Under a
+# unit load on this square, simple support gives a peak deflection about 3.4x
+# the clamped one, so picking the wrong one is a wrong answer, not a wrong
+# decimal.
+#
+# TRAP: .facet_ix is NOT the global normal-derivative dofs — it numbers them
+# within the facet block, so it starts near zero while the real ones sit past
+# the whole value block. Constraining it silently pins unrelated dofs, with no
+# error. Address the blocks by name, d.nodal['u'] and d.facet['u_n'], which are
+# global and say what they are. (Check on any mesh with
+# sorted(d.facet_ix) == sorted(d.facet['u_n']) — it is False.)
+d = ib.get_dofs()
+D = d.flatten()                      # CLAMPED
 u = solve(*condense(K, f, D=D))
 
 print(f"Biharmonic: {{K.shape[0]}} DOFs, max(u)={{u.max():.6e}}")
@@ -74,8 +92,9 @@ KNOWLEDGE = {
             "ElementLineHermite on a MeshLine. 4 DOFs per "
             "element (deflection + slope at each endpoint), "
             "C^1 continuous. Signal: skfem.Basis(MeshLine(), "
-            "ElementLineHermite()).Nbfun == 4. (Claim inherited "
-            "— not yet empirically verified.)",
+            "ElementLineHermite()).Nbfun == 4, unchanged under "
+            "refinement because it is a per-element count. "
+            "(Verified empirically 2026-08-30, skfem 12.0.1.)",
         ],
     },
 }
