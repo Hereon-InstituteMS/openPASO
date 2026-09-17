@@ -1,16 +1,18 @@
-"""Transient thermal MMS generator for 4C — temporal convergence grading.
+"""Transient thermal MMS generator for 4C — temporal convergence measurement.
 
 Unsteady heat conduction (PROBLEMTYPE "Thermo", One-Step-Theta) with a
 manufactured time-and-space-dependent solution u*(x,t), a matching
 volumetric heat source q = rho*c*du*/dt - kappa*lap(u*) as a
 SYMBOLIC_FUNCTION_OF_SPACE_TIME body load, time-dependent Dirichlet u*
 on the whole boundary, and initial field u*(x,0). On a fixed fine mesh
-a dt-halving study grades the temporal order of the time integrator:
+a dt-halving study measures the temporal order of the time integrator:
 theoretical order 2 for theta = 0.5 (Crank-Nicolson), 1 for theta = 1
-(backward Euler).
+(backward Euler). The order a given study attains is an OUTPUT of that
+study — compute it from the emitted errors, do not assume it.
 
-All facts below verified live against the deployed 4C binary
-(/home/alexander/4C/build/4C) on 2026-08-01.
+The 4C-behaviour claims below (which sections are honoured, what is
+silently dropped, what the parser accepts) were checked live against a
+built 4C binary rather than read off the documentation.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ class ThermoTransientMMSGenerator(BaseGenerator):
                 "volumetric source rho*c*du*/dt - kappa*lap(u*) is "
                 "applied as a space-time function body load, u* as "
                 "time-dependent Dirichlet on the whole boundary and "
-                "as the initial field. Fixed mesh + dt-halving grades "
+                "as the initial field. Fixed mesh + dt-halving measures "
                 "the TEMPORAL order of One-Step-Theta: ~2 for "
                 "theta=0.5, ~1 for theta=1."
             ),
@@ -50,10 +52,10 @@ class ThermoTransientMMSGenerator(BaseGenerator):
                     "between t_n and t_n+1 (trapezoid quadrature of "
                     "the source) and consistent initial temperature "
                     "rates are computed at t=0, so theta=0.5 is "
-                    "genuinely 2nd-order in time. Live dt-halving on "
-                    "this build (2026-08-01): theta=0.5 Richardson "
-                    "orders 2.018/2.004; theta=1.0 orders vs exact "
-                    "0.95/1.00/1.05."
+                    "genuinely 2nd-order in time and theta=1.0 is "
+                    "1st-order. Confirm on YOUR case with a dt-halving "
+                    "study; see the spatial-floor pitfall for how to "
+                    "measure it correctly."
                 ),
             },
             "materials": {
@@ -79,7 +81,7 @@ class ThermoTransientMMSGenerator(BaseGenerator):
                 "u*(x,0) exactly (initial field by function)."
             ),
             "pitfalls": [
-                "[Syntax] A volumetric heat source in STANDALONE "
+                "[Syntax] A volumetric heat source in standalone "
                 "Thermo must use the PLAIN Neumann sections "
                 "('DESIGN SURF NEUMANN CONDITIONS' in 2D, "
                 "'DESIGN VOL NEUMANN CONDITIONS' in 3D). The "
@@ -94,13 +96,15 @@ class ThermoTransientMMSGenerator(BaseGenerator):
                 "TemperImpl::radiation() (find_element_conditions "
                 "with the plain names, 4C_thermo_ele_impl.cpp:"
                 "2516-2525). The run finishes rc=0 with NO warning "
-                "and the source is silently dropped. Signal: field "
-                "converges (in dt) to the source-free solution — "
-                "probe 2026-08-01 saw RMS error 0.55 vs the MMS "
-                "solution; switching to the plain section gave "
-                "5e-4. The THERMO-prefixed sections are for the TSI "
-                "condition-transfer machinery, not standalone "
-                "Thermo.",
+                "and the source is silently dropped. Signal: the run "
+                "finishes rc=0 with no warning while the field "
+                "converges (in dt) to the SOURCE-FREE solution — the "
+                "error against the MMS solution is O(1) relative and "
+                "refuses to shrink under dt refinement, whereas the "
+                "same deck with the plain section converges "
+                "normally. The THERMO-prefixed sections are for the "
+                "TSI condition-transfer machinery, not standalone "
+                "Thermo. (Verified 2026-08-01.)",
                 "[Syntax] In a 2D Thermo discretization the plain "
                 "'DESIGN SURF NEUMANN CONDITIONS' on a DSURF "
                 "covering all nodes IS the body load: the condition "
@@ -109,20 +113,27 @@ class ThermoTransientMMSGenerator(BaseGenerator):
                 "FUNCT(x,t) over each element (FunctionOfSpaceTime "
                 "at Gauss points, reference coordinates). "
                 "Constraints from the code: exactly ONE such "
-                "condition may touch an element ('more than one "
-                "VolumeNeumann cond on one node' throw) and FUNCT "
-                "must have exactly one entry. Signal: overlapping "
-                "conditions abort with 'more than one VolumeNeumann "
-                "cond on one node'; a working body load reproduces "
-                "the MMS field (probe 2026-08-01: error 5e-4 vs "
-                "0.55 with the source dropped).",
+                "condition may touch an element — a real "
+                "FOUR_C_THROW, raised during element evaluation "
+                "after the discretisation is already built, not at "
+                "input read. The 'FUNCT must have exactly one "
+                "entry' rule next to it is a FOUR_C_ASSERT and is "
+                "therefore compiled out of a Release build: a "
+                "longer FUNCT array is silently ignored there and "
+                "gives bit-identical results, so do not rely on it "
+                "being caught. Signal: overlapping conditions abort "
+                "with 'more than one VolumeNeumann cond on one "
+                "node' from 4C_thermo_ele_impl.cpp; a MISSING body "
+                "load, by contrast, draws no diagnostic whatsoever "
+                "and shows up only as a wrong field. (Verified by "
+                "execution 2026-08-06.)",
                 "[Syntax] Initial condition by function: THERMAL "
                 "DYNAMIC INITIALFIELD 'field_by_function' + "
                 "INITFUNCNO <id>; the referenced "
                 "SYMBOLIC_FUNCTION_OF_SPACE_TIME is evaluated at "
                 "t=0 at the nodes. Signal: the step-0 VTK file "
                 "equals u*(x,0) to machine precision when the "
-                "initial field is applied (verified 2026-08-01); a "
+                "initial field is applied; a "
                 "zero_field default shows up as an O(amplitude) "
                 "error at step 0 that decays over the first steps.",
                 "[Syntax] Time-dependent Dirichlet: plain 'DESIGN "
@@ -132,25 +143,32 @@ class ThermoTransientMMSGenerator(BaseGenerator):
                 "(effective value = VAL * f(x,t)). Works on the "
                 "whole boundary of a pure Thermo problem; the "
                 "THERMO-prefixed DIRICH sections are not needed. "
-                "Signal: boundary nodes in the output VTK track "
+                "Signal: boundary nodes track "
                 "u*(x,t) exactly at every step when wired correctly "
-                "(verified 2026-08-01); frozen boundary values "
-                "(equal to the t=0 trace) mean FUNCT was omitted "
-                "and VAL alone is being applied.",
+                "(verified 2026-08-01). If FUNCT is omitted the "
+                "boundary is frozen at VAL ITSELF — a single "
+                "constant, the same at every boundary node and at "
+                "every step — NOT at the t=0 trace of the intended "
+                "solution. Check against VAL, not against u*(x,0): "
+                "an earlier version of this entry said the frozen "
+                "value equals the t=0 trace, and a reader checking "
+                "for that would have concluded the boundary "
+                "condition was correctly wired. (Corrected by "
+                "execution 2026-08-06.)",
                 "[Numerics] On a fixed mesh the error vs the exact "
-                "MMS solution saturates at the spatial Q1 floor "
-                "(e.g. ~4.8e-4 RMS at n=32 for a unit-amplitude "
-                "mode-1 solution), so small-dt entries of an "
-                "error-vs-exact table flatten. Grade the temporal "
+                "MMS solution saturates at the SPATIAL (Q1) floor, so "
+                "the small-dt entries of an error-vs-exact table "
+                "flatten out and a naive fit reports a temporal order "
+                "far below the theoretical one. Grade the temporal "
                 "order from Richardson differences "
                 "||u_dt - u_dt/2|| of consecutive-dt solutions on "
-                "the SAME mesh — the spatial floor cancels exactly "
-                "and theta=0.5 shows clean order 2. Signal: an "
-                "error-vs-exact dt series whose ratios decay toward "
-                "1 (orders 0.91/0.31/0.08 in the 2026-08-01 smoke) "
-                "while Richardson ratios sit at 4.0 (orders "
-                "2.009/2.002) is the spatial floor, not a solver "
-                "defect.",
+                "the SAME mesh instead — the spatial floor cancels "
+                "exactly. Signal: an error-vs-exact dt series whose "
+                "successive ratios decay toward 1 while the "
+                "Richardson ratios stay near 2^p is the spatial "
+                "floor, not a solver defect; refine the mesh (or use "
+                "Richardson) before concluding anything about the "
+                "time integrator.",
                 "[Numerics] The symbolic expression parser knows "
                 "'pi' (4C_utils_symbolic_expression.cpp:479); the "
                 "generator nevertheless bakes kx, ky, omega and all "
@@ -171,7 +189,7 @@ class ThermoTransientMMSGenerator(BaseGenerator):
                 "times across a dt series produce error ratios that "
                 "wander instead of approaching 2^p — check the "
                 "actual MAXTIME/NUMSTEP echoed in the 4C stdout "
-                "header before grading.",
+                "header before fitting the order.",
             ],
         }
 

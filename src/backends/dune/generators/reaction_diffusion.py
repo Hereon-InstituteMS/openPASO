@@ -48,6 +48,7 @@ gridView.writeVTK("result", pointdata={{"concentration": u_n}})
 summary = {{"time": t, "max_value": float(vals.max()), "n_dofs": len(vals)}}
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -76,9 +77,17 @@ KNOWLEDGE = {
                 "dt > 2/lambda_max (where lambda_max ~ "
                 "reaction rate) gives NaN within ~10 "
                 "steps; for Da > 100 the explicit dt is "
-                "infeasibly small. Switch to BE or "
-                "DIRK22/SDIRK22 via the time-stepper "
-                "selection. (Audit 2026-06-02.)"
+                "infeasibly small. Switch to an implicit "
+                "scheme via the time-stepper selection. The "
+                "accepted names are exactly ImplicitEuler, "
+                "CrankNicolson, DIRK23, DIRK34 and SDIRK22 "
+                "-- the std::string array in dune/fem/solver/"
+                "rungekutta/timestepcontrol.hh:154. There is "
+                "no DIRK22 scheme; an earlier version of this "
+                "entry offered it beside SDIRK22 and it "
+                "appears in no dune header. (Audit "
+                "2026-06-02; names read from the installed "
+                "headers 2026-08-09.)"
             ),
             (
                 "[API] Multi-component systems (e.g. "

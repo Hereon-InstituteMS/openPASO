@@ -11,8 +11,8 @@ The first three terms are harmonic; only the D*r^p term sources the PDE:
     -kappa * lap(u*) = -kappa * D * p^2 * r^(p-2) =: f      (sympy-verified)
 
 Dirichlet u = u* is imposed on both boundary circles, so the exact
-solution of the BVP is u* itself and the P1 L2 error must converge at
-the theoretical order 2 (verified live on this install, see KNOWLEDGE).
+solution of the BVP is u* itself and the P1 L2 error is expected to
+converge at the theoretical order 2.
 
 The generated script genuinely exercises Kratos: it builds a ModelPart
 from the Gmsh mesh and solves with the ConvectionDiffusionApplication
@@ -82,9 +82,14 @@ def _curved_mms_annulus_2d(params: dict) -> str:
     values and fit the L2_ERROR lines to measure the convergence order
     (theoretical L2 order for P1 triangles: 2).
 
-    NOTE: on hosts where the pip Kratos wheel is GLIBC-incompatible with the
-    venv Python, run the generated script with the system interpreter that has
-    a working Kratos (here /usr/bin/python3) — see KNOWLEDGE['curved_mms'].
+    NOTE: run the generated script with an interpreter that imports Kratos.
+    RE-MEASURED 2026-08-18: the repo venv
+    ({PYTHON}, 3.12) now
+    imports Kratos 10.3 with ConvectionDiffusion, StructuralMechanics,
+    FluidDynamics AND gmsh; /mnt/kratos-tier2/kv/bin/python (3.12) imports
+    Kratos 10.4.3 with the same applications but NO gmsh; /usr/bin/python3
+    (3.8) does NOT import Kratos at all. Always probe rather than trust a
+    recorded path — see KNOWLEDGE['curved_mms'].
     """
     errs = validate_parameters(params)
     if errs:
@@ -296,8 +301,8 @@ KNOWLEDGE = {
                         "Gmsh-meshed 2D annulus, solved with the real ConvectionDiffusionApplication "
                         "stationary path (LaplacianElement2D3N + ResidualBasedLinearStrategy). "
                         "u*(r,theta) = A + B*ln(r) + C*r^m*cos(m*theta) + D*r^p; the ln and modal "
-                        "terms are harmonic, so f = -kappa*D*p^2*r^(p-2) exactly (sympy-verified "
-                        "2026-08-01). Theoretical L2 order for P1 triangles: 2."),
+                        "terms are harmonic, so f = -kappa*D*p^2*r^(p-2) exactly (closed form "
+                        "cross-checked with sympy). Theoretical L2 order for P1 triangles: 2."),
         "application": "ConvectionDiffusionApplication (+ LinearSolversApplication for sparse_lu)",
         "elements": ["LaplacianElement2D3N (string factory only, see poisson pitfalls)"],
         "variables": {
@@ -307,42 +312,118 @@ KNOWLEDGE = {
             "reaction": "REACTION_FLUX",
         },
         "theoretical_l2_order": 2.0,
+        "how_to_grade_convergence": (
+            "Run the emitted script at a sequence of mesh sizes (e.g. h, h/2, h/4) "
+            "and fit log(L2 error) against log(h); the slope is the observed order. "
+            "Both the errors and the order are OUTPUTS of your run — measure them, "
+            "do not assume them. Compare the slope against theoretical_l2_order to "
+            "decide whether the deck is correct."),
+        # NO MEASURED RESULT HERE. This field held our own error table and the
+        # observed orders from a development run. That is the answer to a
+        # convergence study, sitting inside the tool the study is meant to
+        # evaluate — an agent could read the result instead of computing it,
+        # and convergence order is exactly what such a study measures. Removed
+        # 2026-08-06 by the contamination merge gate.
+        #
+        # What survives is the falsifiable statement: the discretisation is
+        # expected to reach its theoretical order once the mesh resolves the
+        # geometry. Whether it does on any given draw is for the run to show.
         "verified_convergence": (
-            "Live smoke on this install (Kratos 10.4, /usr/bin/python3, gmsh OCC annulus, "
-            "dev draw r_i=0.6 r_o=1.7 A=0.7 B=-1.3 C=0.8 D=0.35 m=3 p=3 kappa=2.5), "
-            "h=0.2/0.1/0.05/0.025: L2 = 6.363e-2 / 1.674e-2 / 4.226e-3 / 1.063e-3, "
-            "observed orders 1.93 / 1.99 / 1.99 (2026-08-01)."),
+            "Exercised on this install (Kratos 10.4 under the system python3, "
+            "gmsh OCC annulus) over a refinement sequence; the L2 order "
+            "approaches the theoretical value above once the isoparametric "
+            "elements resolve the curved boundary. Measure it on your own "
+            "sequence — a plateau below the theoretical order is the signal "
+            "that the geometry, not the solver, is limiting you. "
+            "REPRODUCED 2026-08-03 on Kratos 10.4.0, and again 2026-08-09: "
+            "this family is DETERMINISTIC — re-running the same parameter "
+            "draw at the same mesh_size returns an identical L2_ERROR to "
+            "every printed digit (checked by repeating a run in place and by "
+            "repeating it in a fresh working directory), because the Gmsh OCC "
+            "geometry is rebuilt from the same construction each time. So a "
+            "series that differs between two of your runs means the draw, the "
+            "mesh size or the interpreter changed — it is never run-to-run "
+            "noise, and there is nothing to gain by averaging repeats. "
+            "The SAME check is how the draw trap was found, and it is the "
+            "reason no error table is quoted above: the parameter draw used "
+            "while this family was developed (r_inner=0.6, r_outer=1.7, "
+            "coeff_a=0.7, coeff_b=-1.3, coeff_c=0.8, coeff_d=0.35, mode_m=3, "
+            "radial_p=3, conductivity=2.5) is NOT the template default draw "
+            "(r_inner=0.5, r_outer=1.0, coeff_a..d=1, mode_m=2, radial_p=3, "
+            "conductivity=1), and the two produce visibly different error "
+            "CONSTANTS while sharing the same theoretical order. Reference "
+            "errors quoted for one draw therefore say nothing about the "
+            "other: re-derive your own reference for the draw you actually "
+            "run, and never compare a run against a number that came from a "
+            "different parameter set."),
         "pitfalls": [
-            '[Environment] Kratos 10.4 on this host works ONLY under the system '
-            '/usr/bin/python3 (Python 3.8). The pip Kratos wheel inside the repo .venv '
-            'is BROKEN: its shared libraries require GLIBC 2.32 which the OS libc does '
-            'not provide. Signal: "ImportError: /lib/x86_64-linux-gnu/libc.so.6: '
-            'version `GLIBC_2.32\' not found" on `import KratosMultiphysics` from the '
-            '.venv, while the same import succeeds under /usr/bin/python3. Run generated '
-            'Kratos scripts with the system interpreter (the gmsh module imports fine in '
-            'both). Available apps under /usr/bin/python3: KratosCore, '
-            'StructuralMechanicsApplication, ConvectionDiffusionApplication, '
-            'LinearSolversApplication — NO FluidDynamics, NO Mapping, NO CoSimulation. '
-            '(Verified empirically 2026-08-01.)',
+            '[Environment] RE-MEASURED 2026-08-18, and the earlier entry is now WRONG — '
+            'the host changed under it. The LESSON is per-host, so do not carry any '
+            'interpreter path from this text: on one machine the project venv '
+            'imported Kratos 10.3 with ConvectionDiffusion, StructuralMechanics, '
+            'FluidDynamics and gmsh, a second interpreter imported Kratos 10.4.3 '
+            'with those applications but WITHOUT gmsh, and the system python3 did '
+            'not import Kratos at all. Take the interpreter from '
+            'discover(query=\'list\'). ALWAYS PROBE '
+            'the interpreter you are about to use with `import KratosMultiphysics` '
+            'rather than trusting any path recorded here, including this one: an '
+            'entry about the installed environment is true on the day it is measured '
+            'and silently rots afterwards. The historical GLIBC failure, kept because '
+            'its signature is distinctive: from a venv whose wheel is incompatible the '
+            'import dies inside the DYNAMIC LINKER, before any Kratos code runs, so no '
+            'Kratos diagnostic is produced at all: an ImportError naming '
+            '/lib/x86_64-linux-gnu/libc.so.6 and a GLIBC_2.32 version that is not found, '
+            'required by the wheel\'s Kratos.cpython-312-x86_64-linux-gnu.so. Kratos\'s '
+            'own except-branch then prints \'Unable to find KratosCore.\' followed by a '
+            'sentence naming the library-path variable, which is substituted at runtime. '
+            'Run generated Kratos scripts with one of the two working interpreters, and '
+            'mind that they do not carry the same extras: gmsh imports under '
+            '/usr/bin/python3 and in the repo .venv, but is NOT installed in the Tier-2 '
+            'environment (checked 2026-08-09). '
+            'Application availability under /usr/bin/python3 is NOT fixed — every '
+            'Kratos application is a separate pip wheel, so ALWAYS probe with '
+            '`import KratosMultiphysics.X` instead of trusting any list. Measured on this '
+            'host 2026-08-03: 26 applications importable (Core, LinearSolvers, '
+            'StructuralMechanics, ContactStructuralMechanics, ConstitutiveLaws, '
+            'ConvectionDiffusion, FluidDynamics, CoSimulation, FSI, DEM, MPM, GeoMechanics, '
+            'CompressiblePotentialFlow, RANS, Rom, Iga, Poromechanics, ShallowWater, Dam, '
+            'DemStructuresCoupling, CableNet, Optimization, ShapeOptimization, MeshMoving, '
+            'Meshing, Mapping) after pip-installing the matching 10.4.0 wheels; before that '
+            'only four were present. Two wheels install under /usr/bin/python3 but do NOT '
+            'import: SwimmingDEM and Chimera. Both are stopped by the dynamic linker, '
+            'which reports that libKratosSwimmingDEMCore.so and '
+            'libKratosChimeraApplicationCore.so respectively cannot be opened because no '
+            'such file or directory exists — the per-application Core library is simply '
+            'not in the wheel, so the text comes from the loader and not from Kratos. '
+            '(Verified empirically 2026-08-01; list corrected and re-measured '
+            '2026-08-03 — the previous four-app list was already incomplete when written, '
+            'ContactStructuralMechanicsApplication was importable too. Both import '
+            'failures re-run 2026-08-09 under /usr/bin/python3; under '
+            '/mnt/kratos-tier2/kv/bin/python SwimmingDEM is not installed at all and '
+            'raises ModuleNotFoundError: No module named '
+            '\'KratosMultiphysics.SwimmingDEMApplication\', while Chimera fails through '
+            'the loader exactly as it does under 3.8.)',
             '[Numerical] LaplacianElement2D3N reads the diffusivity NODALLY via '
             'ConvectionDiffusionSettings.GetDiffusionVariable() — the CONDUCTIVITY value '
-            'on the Properties object is IGNORED by this element. Verified 2026-08-01 by '
-            'swap test: Properties CONDUCTIVITY=999 with correct nodal values leaves the '
-            'MMS L2 error unchanged (1.674e-2 at h=0.1); nodal CONDUCTIVITY=999 with '
-            'correct Properties value destroys it (L2 jumps to 1.18). Signal: solution '
-            'scales with the nodal value, not the property; forgetting '
-            'SetSolutionStepValue(CONDUCTIVITY, ...) on nodes gives a singular or '
-            'zero-diffusivity system.',
+            'on the Properties object is IGNORED by this element. Confirmed by a swap '
+            'test: corrupting the Properties CONDUCTIVITY while the nodal values stay '
+            'correct leaves the solution unchanged, whereas corrupting the nodal '
+            'CONDUCTIVITY destroys it. Signal: solution scales with the nodal value, '
+            'not the property; forgetting SetSolutionStepValue(CONDUCTIVITY, ...) on '
+            'nodes gives a singular or zero-diffusivity system.',
             '[Numerical] Curved boundaries with straight P1 edges: Gmsh places boundary '
             'NODES exactly on the circles, but element edges are straight chords, so the '
             'computed domain is a polygon inscribed in the annulus. The geometric '
             '(domain-approximation) error is O(h^2) — the same order as the P1 '
             'interpolation error — so the L2 convergence order 2 is PRESERVED without '
-            'curved (isoparametric) elements. Signal: observed orders 1.93-1.99 in the '
-            'live smoke above; a plateau near order 1.5 would instead indicate '
-            'misclassified boundary nodes or an inconsistent source term.',
+            'curved (isoparametric) elements. Signal: the measured L2 order holds at '
+            'the theoretical value for the element as the mesh is refined; a plateau '
+            'well below it (around order 1.5 for P1) is NOT the straight-chord geometry '
+            'and points instead at misclassified boundary nodes or an inconsistent '
+            'source term. (Verified 2026-08-01.)',
             '[Integration] msh -> ModelPart conversion pitfalls (all hit or guarded '
-            '2026-08-01): (1) Gmsh node tags are NOT contiguous after OCC boolean cuts — '
+            'while building this family): (1) Gmsh node tags are NOT contiguous after '
+            'OCC boolean cuts — '
             'renumber to 1..N before CreateNewNode or Kratos raises on missing node ids; '
             '(2) triangle orientation from Gmsh is not guaranteed CCW — check the signed '
             'area and flip, else element Jacobians go negative; (3) '
@@ -355,15 +436,24 @@ KNOWLEDGE = {
             'when the two circles need DIFFERENT boundary conditions. Signal: (1) raises '
             '"Error: Node #<id> does not exist" (or KeyError) at CreateNewElement; (2) '
             'raises "Element found with negative Jacobian" (or NaN/absurd L2 error) at '
-            'solve; (3) raises "missing variable" / "CONVECTION_DIFFUSION_SETTINGS not '
-            'defined" at AddDof or solver init; (4) shows up as a convergence-order drop '
+            'solve; (3) does NOT raise at all — an earlier wording claimed a "missing '
+            'variable" or "CONVECTION_DIFFUSION_SETTINGS not defined" error at AddDof or '
+            'solver init and neither string exists in Kratos. Measured 2026-08-13 on '
+            'Kratos 10.4.3: with the nodal variables added but '
+            'CONVECTION_DIFFUSION_SETTINGS never put on ProcessInfo, CreateNewElement '
+            'and AddDof both succeed and the process SEGFAULTS inside '
+            'CalculateLocalSystem — exit 139, empty stderr, no Kratos exception and no '
+            'message of any kind. The identical script with the settings object on '
+            'ProcessInfo exits 0. So the signal is the crash, not a diagnostic: check '
+            'ProcessInfo.Has(CONVECTION_DIFFUSION_SETTINGS) yourself before solving; '
+            '(4) shows up as a convergence-order drop '
             'below 2 with errors concentrated at near-boundary nodes.',
             '[Workflow] Meshing is agent-driven: the template accepts mesh_size (in-process '
             'Gmsh OCC meshing, also writes annulus_mms.msh) or msh_file (gmsh.open() an '
             'agent-built .msh; identical extraction path). Measure convergence by rerunning '
             'with halved mesh_size and fitting the machine-readable "L2_ERROR = ..." lines. '
             'Signal: a run whose stdout contains no "L2_ERROR = " line did not reach the '
-            'error computation — treat it as failed, never grade it.',
+            'error computation — treat it as failed, never fit an order to it.',
         ],
     },
 }

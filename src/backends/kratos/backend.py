@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
@@ -29,7 +30,124 @@ from core.backend import (
 from core.registry import register_backend
 from .generators import GENERATORS, KNOWLEDGE
 
-logger = logging.getLogger("oasis.kratos")
+# `import x`, `from x import y`, and their continuation-free one-liners. Used
+# by the honesty guard in validate_input to drop lines that merely NAME a
+# symbol before looking for evidence that one was CALLED.
+_IMPORT_LINE = re.compile(r"\s*(?:from\s+[\w.]+\s+)?import\s")
+
+logger = logging.getLogger("openpaso.kratos")
+
+
+# The applications openPASO's own catalogue names, which is what makes an
+# interpreter useful rather than merely importable.
+_CATALOGUE_APPS = (
+    "FluidDynamics", "FSI", "GeoMechanics", "RANS", "CompressiblePotentialFlow",
+    "Rom", "Iga", "StructuralMechanics", "Mapping", "MeshMoving", "Optimization",
+    "CableNet", "DemStructuresCoupling", "TopologyOptimization",
+    "PfemFluidDynamics", "ThermalDEM", "SwimmingDEM", "FemToDem", "Chimera",
+    "DropletDynamics", "FluidDynamicsBiomedical", "ConstitutiveLaws",
+    "ShallowWaterApplication".replace("Application", ""), "DEM", "MPM",
+    "Contact"
+)
+
+
+_KRATOS_PYTHON_CACHE: dict = {}
+
+
+def _find_kratos_python():
+    """Locate and VERIFY the Python that can import KratosMultiphysics.
+
+    THIS USED TO BE `get_python_executable()`, the server's own interpreter and
+    nothing else. Kratos is a heavy compiled package that is normally installed
+    somewhere of its own, so openPASO reported NOT_INSTALLED on a machine that
+    had Kratos 10.3.0 sitting in a sibling virtual environment. Same shape as
+    the NGSolve defect, and fixed the same way.
+
+    Order: KRATOS_PYTHON, then what autodiscovery recorded (an ABSOLUTE path
+    that survives the sandbox's tmpfs over $HOME, where a conda scan cannot
+    look), then the active interpreter, then conda envs. Every candidate is
+    verified by importing, because a recorded path can go stale.
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    if "python" in _KRATOS_PYTHON_CACHE:
+        return _KRATOS_PYTHON_CACHE["python"]
+
+    candidates = []
+    env_python = os.environ.get("KRATOS_PYTHON", "")
+    if env_python and Path(env_python).is_file():
+        candidates.append((-3, env_python))
+    try:
+        from core.autodiscovery import load_discovered_config
+        entry = ((load_discovered_config() or {}).get("backends") or {}).get("kratos")
+        recorded = (entry or {}).get("location")
+        if recorded and Path(recorded).is_file():
+            candidates.append((-2, str(recorded)))
+    except Exception:                                        # noqa: BLE001
+        pass
+    candidates.append((0, sys.executable))
+    for base in (Path.home() / "miniconda3" / "envs",
+                 Path.home() / "anaconda3" / "envs",
+                 Path.home() / "miniforge3" / "envs"):
+        if base.is_dir():
+            for env_dir in sorted(base.iterdir()):
+                py = env_dir / "bin" / "python"
+                if py.is_file():
+                    candidates.append((1 if "kratos" in env_dir.name.lower() else 2,
+                                       str(py)))
+
+    seen, ordered = set(), []
+    for _prio, py in sorted(candidates, key=lambda x: x[0]):
+        if py not in seen:
+            seen.add(py)
+            ordered.append(py)
+    # PICK THE BUILD THAT CAN DO THE WORK, not the first that imports.
+    #
+    # Kratos is 48 applications and a build carries whichever were compiled.
+    # "import KratosMultiphysics succeeds" says almost nothing about whether the
+    # physics openPASO offers will run. Measured on this machine: the first
+    # interpreter that imports Kratos carries 6 of the 21 applications the
+    # catalogue names, while a second build on the same host carries 14 --
+    # including OptimizationApplication, CableNetApplication and
+    # DemStructuresCouplingApplication, which are three physics openPASO ALREADY
+    # REGISTERS and could not actually run, and five more it does not yet offer.
+    #
+    # So candidates are scored by how many of those applications import, and the
+    # best wins. An explicit KRATOS_PYTHON still wins outright: someone who names
+    # an interpreter means it.
+    probe = (
+        "import importlib.util as u\n"
+        "apps = %r\n"
+        "print(sum(1 for a in apps "
+        "if u.find_spec('KratosMultiphysics.' + a + 'Application')))\n"
+    ) % (_CATALOGUE_APPS,)
+
+    best, best_score = None, -1
+    for priority, python in [(pr, py) for pr, py in
+                             sorted(candidates, key=lambda x: x[0])
+                             if py in set(ordered)]:
+        try:
+            done = subprocess.run([python, "-c", probe], stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=180)
+        except Exception:                                    # noqa: BLE001
+            continue
+        if done.returncode != 0:
+            continue
+        try:
+            score = int(done.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            score = 0
+        if priority <= -2:            # named outright: take it and stop
+            _KRATOS_PYTHON_CACHE["python"] = python
+            return python
+        if score > best_score:
+            best, best_score = python, score
+
+    _KRATOS_PYTHON_CACHE["python"] = best
+    return best
 
 
 class KratosBackend(SolverBackend):
@@ -41,20 +159,28 @@ class KratosBackend(SolverBackend):
         return "Kratos Multiphysics"
 
     def check_availability(self) -> tuple[BackendStatus, str]:
-        python = get_python_executable()
+        python = _find_kratos_python()
         if not python:
-            return BackendStatus.NOT_INSTALLED, "No Python found"
+            return BackendStatus.NOT_INSTALLED, "No Python with KratosMultiphysics found"
         import subprocess
         try:
             result = subprocess.run(
                 [python, "-c",
                  "import KratosMultiphysics as KM; "
-                 "print(KM.KratosGlobals.Kernel.Version())"],
+                 "print(KM.KratosGlobals.Kernel.Version())"], stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=15
             )
             if result.returncode == 0:
                 ver = result.stdout.strip().split('\n')[0]
-                return BackendStatus.AVAILABLE, f"Kratos {ver}"
+                # SAY WHERE IT LIVES, NOT ONLY THAT IT LIVES. `discover` is the
+                # one surface that resolves host paths -- the coupling knowledge
+                # deliberately ships none and sends the agent here for the argv
+                # `couple` needs -- and this backend was the only available one
+                # whose line carried a version and no interpreter. Measured on a
+                # C10 cell: the agent ran the Kratos participant with the wrong
+                # python, got `ModuleNotFoundError: No module named
+                # 'KratosMultiphysics'`, and had nowhere to read the right one.
+                return BackendStatus.AVAILABLE, f"Kratos {ver} at {python}"
             return BackendStatus.NOT_INSTALLED, f"Kratos import failed: {result.stderr.strip()[:200]}"
         except Exception as e:
             return BackendStatus.NOT_INSTALLED, f"Check failed: {e}"
@@ -152,11 +278,23 @@ class KratosBackend(SolverBackend):
                 element_types=["SphericParticle3D", "CylinderParticle2D"],
                 template_variants=["2d"],
             ),
+            # element_types corrected 2026-08-07. The row advertised
+            # "UpdatedLagrangianPQ2D" and "UpdatedLagrangianAxisym"; neither is
+            # a registered element. CreateNewElement on either raises 'The
+            # Element "..." is not registered!' against MPMApplication 10.4.3,
+            # while the MPM-prefixed spellings below construct. This is the
+            # claim kratos.mpm::0 already made — the knowledge was corrected in
+            # the DEM/MPM pass and the catalog row was left behind.
+            #
+            # The template this row points at is NOT MPMApplication: it is a
+            # standalone numpy/scipy MPM that never imports KratosMultiphysics.
+            # See the module docstring of generators/mpm.py.
             PhysicsCapability(
                 name="mpm",
                 description="Material Point Method for large-deformation solid mechanics (MPMApplication)",
                 spatial_dims=[2, 3],
-                element_types=["UpdatedLagrangianPQ2D", "UpdatedLagrangianAxisym"],
+                element_types=["MPMUpdatedLagrangian2D3N",
+                               "MPMUpdatedLagrangianAxisymmetry2D3N"],
                 template_variants=["2d"],
             ),
             PhysicsCapability(
@@ -308,23 +446,46 @@ class KratosBackend(SolverBackend):
         # both Kratos-native strategies and the scipy/numpy assemble-and-solve
         # pattern used by the poisson / heat / elasticity / contact / dynamics
         # generators in this backend.
-        solve_markers = (
-            ".Run()",                 # AnalysisStage.Run()
+        #
+        # EVERY MARKER IS CALL-SHAPED, AND IMPORT LINES ARE STRIPPED FIRST.
+        # Measured 2026-08-07: the MPM generator emitted a standalone numpy
+        # material-point method that never touched Kratos, and this guard
+        # passed it on the strength of one line —
+        #
+        #     from scipy.sparse.linalg import spsolve
+        #
+        # spsolve was never called; neither was lil_matrix. The marker list
+        # held both the bare name `spsolve` and the module path
+        # `scipy.sparse.linalg`, so an unused import was enough to certify a
+        # solve. A guard satisfied by a symbol's PRESENCE rather than its USE
+        # is the same defect shape as an expectation satisfied by a word the
+        # fixture prints itself: it can only be passed, never failed, by the
+        # thing it is supposed to be checking.
+        #
+        # `AnalysisStage` and `SolvingStrategy` are gone for the same reason:
+        # naming a class is not running one. Both templates that used to be
+        # covered by them (dem, dem_structures_coupling) call `.Run()` or
+        # `.RunSolutionLoop(` and are still covered. Measured over all 21
+        # Kratos templates on the 28-application build: 20 contain at least one
+        # of the calls below, and mpm — before its rewrite — was the only one
+        # that contained none.
+        solve_calls = (
+            ".Run()",                          # AnalysisStage.Run()
             ".RunSolutionLoop(",
-            ".Solve()",               # strategy / solver .Solve()
+            ".Solve()",                        # strategy / solver .Solve()
             ".SolveSolutionStep(",
-            "AnalysisStage",
-            "SolvingStrategy",
-            "CreateSolver",
-            "ResidualBasedNewtonRaphsonStrategy",
-            "ResidualBasedLinearStrategy",
-            "spsolve",                # scipy sparse direct solve
-            "scipy.sparse.linalg",
-            "factorized(",            # scipy prefactored solve (dynamics)
-            "np.linalg.solve",
-            "numpy.linalg.solve",
+            "CreateSolver(",
+            "ResidualBasedNewtonRaphsonStrategy(",
+            "ResidualBasedLinearStrategy(",
+            "spsolve(",                        # scipy sparse direct solve
+            "factorized(",                     # scipy prefactored solve
+            "np.linalg.solve(",
+            "numpy.linalg.solve(",
         )
-        has_solve = any(m in content for m in solve_markers)
+        executable = "\n".join(
+            line for line in content.splitlines()
+            if not _IMPORT_LINE.match(line))
+        has_solve = any(m in executable for m in solve_calls)
 
         # A "note"-only summary is the tell-tale signature of the old probe
         # stubs ({"note": "... available"} / {"note": "not installed"}).
@@ -360,7 +521,12 @@ class KratosBackend(SolverBackend):
 
     async def run(self, input_content: str, work_dir: Path,
                   np: int = 1, timeout=None) -> JobHandle:
-        python = get_python_executable()
+        # NO FALLBACK TO THE SERVER'S OWN INTERPRETER. That would let run()
+        # try an interpreter check_availability() has already rejected, which
+        # is the issue-#40 bug class: discovery and execution answering
+        # different questions. tests/test_python_env_consistency.py pins it,
+        # and caught exactly this when the fallback was written here.
+        python = _find_kratos_python()
         if not python:
             return JobHandle(
                 job_id=str(uuid.uuid4())[:8],
@@ -396,8 +562,29 @@ class KratosBackend(SolverBackend):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(work_dir),
                 env=env,
+                start_new_session=True,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+            # TIMEOUT MUST KILL THE SOLVER, AND THE WHOLE GROUP. Without this, a
+            # timed-out solve kept running forever: wait_for() abandoned the
+            # process but never terminated it, and a sweep found one such
+            # solver 3.2 CPU-hours later at 100%% of a core, its MPI daemon
+            # (orted) beside it. start_new_session puts the solver and every child
+            # it spawns into their own process group, so one killpg reaps MPI
+            # ranks too — the same idiom precice_config.py already uses, for the
+            # same reason. The kill re-raises, so each backend's own TimeoutError
+            # handling below is unchanged.
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                import os as _os, signal as _signal
+                try:
+                    _os.killpg(proc.pid, _signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                await proc.wait()
+                raise
+
             job.elapsed = time.time() - start
             job.return_code = proc.returncode
             job.pid = proc.pid

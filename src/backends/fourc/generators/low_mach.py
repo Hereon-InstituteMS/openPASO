@@ -127,7 +127,7 @@ class LowMachGenerator(BaseGenerator):
                 },
             },
             "time_integration": {
-                "FLUID_DYNAMIC": {
+                "FLUID DYNAMIC": {
                     "PHYSICAL_TYPE": (
                         "Must be set to 'Loma' (Low Mach number) to enable "
                         "variable-density treatment."
@@ -137,7 +137,7 @@ class LowMachGenerator(BaseGenerator):
                         "fluid field."
                     ),
                 },
-                "SCALAR_TRANSPORT": {
+                "SCALAR TRANSPORT DYNAMIC": {
                     "TIMEINTEGR": (
                         "'Gen_Alpha' (recommended) to match the fluid "
                         "time integration order."
@@ -147,7 +147,7 @@ class LowMachGenerator(BaseGenerator):
                         "velocity."
                     ),
                 },
-                "LOMA_CONTROL": {
+                "LOMA CONTROL": {
                     "MONOLITHIC": (
                         "Set to true for monolithic fluid-scalar coupling "
                         "(recommended for accuracy).  False for partitioned."
@@ -161,85 +161,100 @@ class LowMachGenerator(BaseGenerator):
             },
             "pitfalls": [
                 (
-                    "[Input] PHYSICAL_TYPE must be 'Loma' in FLUID "
-                    "DYNAMIC.  Without this, the solver treats the "
-                    "problem as constant-density incompressible flow "
-                    "and ignores buoyancy effects. Signal: a natural-"
-                    "convection benchmark (heated cavity) shows a "
-                    "uniformly stagnant velocity field; or buoyancy-"
-                    "driven flow rate is ~0 even at large Ra. "
-                    "(Audit 2026-06-02.)"
+                    "[Input] PHYSICAL_TYPE in FLUID DYNAMIC must be 'Loma' (or "
+                    "'Temp_dep_water'). This is not a setting you can forget and "
+                    'then diagnose from the flow field. Signal: any other value '
+                    "aborts during adapter setup with 'Input parameter "
+                    'PHYSICAL_TYPE in section FLUID DYNAMIC needs to be Loma or '
+                    "Temp_dep_water for low-Mach-number flow!' from "
+                    '4C_adapter_fld_base_algorithm.cpp, before the first time step, '
+                    'so there is no stagnant velocity field or zero buoyant flow '
+                    'rate to inspect. (Audit 2026-06-02; corrected by execution '
+                    '2026-08-06.)'
                 ),
                 (
-                    "[Input] VELOCITYFIELD in SCALAR TRANSPORT DYNAMIC "
-                    "must be 'Navier_Stokes' to couple the temperature "
-                    "field with the fluid velocity. Signal: temperature "
-                    "field evolves as if in a stagnant medium (pure "
-                    "diffusion) — no advection signature; or "
-                    "scalar-transport solver warns "
-                    "`VELOCITYFIELD=zero with PHYSICAL_TYPE=Loma is "
-                    "inconsistent`. (Audit 2026-06-02.)"
+                    '[Input] VELOCITYFIELD in SCALAR TRANSPORT DYNAMIC must be '
+                    "'Navier_Stokes' to couple the temperature to the fluid "
+                    'velocity. The value does not tune the coupling, it selects the '
+                    'ALGORITHM: loma_dyn branches on it, and only Navier_Stokes '
+                    'clones the scalar-transport discretisation from the fluid. '
+                    "Signal: 'zero' and 'function' both take a scatra-only branch "
+                    'that expects a hand-written TRANSPORT ELEMENTS section and '
+                    "aborts with 'No elements in input section ---TRANSPORT "
+                    "ELEMENTS!' from 4C_loma_dyn.cpp. The fluid field is never "
+                    'built, and no warning about an inconsistent combination is '
+                    'ever printed. (Audit 2026-06-02; corrected by execution '
+                    '2026-08-06.)'
                 ),
                 (
-                    "[Input] The Sutherland material (MAT_sutherland) "
-                    "provides temperature-dependent viscosity AND "
-                    "density via the ideal gas law.  Do not use "
-                    "MAT_fluid for LOMA problems. Signal: 4C aborts "
-                    "with `material MAT_fluid incompatible with "
-                    "PHYSICAL_TYPE Loma` OR results show constant "
-                    "density / no temperature-induced viscosity "
-                    "change at large delta-T. (Audit 2026-06-02.)"
+                    '[Input] Use MAT_sutherland, which supplies '
+                    'temperature-dependent viscosity and density through the ideal '
+                    'gas law; MAT_fluid will not do. Because a LOMA run clones its '
+                    'scalar-transport discretisation from the fluid one, the '
+                    'material is vetted by the scatra cloning strategy rather than '
+                    "by any PHYSICAL_TYPE check. Signal: 'Material with ID {} is not "
+                    "admissible for scalar transport elements' from "
+                    '4C_scatra_utils_clonestrategy.cpp:59, with the material id '
+                    'filled in, thrown before the first '
+                    'time step. The message names neither the material type nor '
+                    'Loma, so grepping for either finds nothing, and there is no '
+                    'quieter constant-density outcome to fall back on. (Audit '
+                    '2026-06-02; corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Numerical] INITIALFIELD should be set to "
-                    "'field_by_function' with a STARTFUNCNO for the "
-                    "fluid and INITFUNCNO for the scalar transport "
-                    "to provide consistent initial conditions for "
-                    "velocity, pressure, and temperature. Signal: "
-                    "first-step residual norm is very large "
-                    "(~|delta-T|*max_density) because the temperature "
-                    "starts at 0 but BCs prescribe non-zero T_wall; "
-                    "Newton may converge slowly or diverge. (Audit "
-                    "2026-06-02.)"
+                    '[Numerical] Give the fluid and the scalar consistent initial '
+                    'fields: INITIALFIELD: field_by_function with STARTFUNCNO for '
+                    'the fluid and INITFUNCNO for the scalar transport. With '
+                    'MAT_sutherland this is a hard requirement, not a convergence '
+                    'nicety, because density is evaluated from the ideal gas law '
+                    'and a zero initial temperature divides by zero. Signal: '
+                    'INITIALFIELD: zero_field terminates the process with SIGFPE, '
+                    'so the log ends with the MPI runtime\'s signal block -- the '
+                    'floating point exception, signal 8, with signal code '
+                    'floating-point divide-by-zero, 3 -- and carries no PROC 0 '
+                    'ERROR block, no residual table and no result test. (Audit '
+                    '2026-06-02; corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Numerical] Residual-based "
-                    "stabilisation parameters should be "
-                    "CONSISTENT between fluid and scalar "
-                    "transport. Use 'Taylor_Hughes_Zarins_"
-                    "Whiting_Jansen' for the fluid tau "
-                    "definition. Signal: different tau "
-                    "definitions on fluid vs scatra produce "
-                    "an artificial discontinuity at the "
-                    "coupling — the temperature field "
-                    "shows visible stair-stepping at "
-                    "the interface; matching tau "
-                    "definitions removes the artifact. "
-                    "(Audit 2026-06-02.)"
+                    '[Numerical] Do not try to make the stabilisation tau '
+                    'definitions identical on the two fields: the enums are '
+                    'different sets. FLUID DYNAMIC/RESIDUAL-BASED STABILIZATION '
+                    'offers Taylor_Hughes_Zarins_Whiting_Jansen, while SCALAR '
+                    'TRANSPORT DYNAMIC/STABILIZATION stops at Taylor_Hughes_Zarins. '
+                    'Signal: writing the fluid value into the scatra section fails '
+                    "with 'Could not match this input' and 4C prints the admissible "
+                    'scatra list. The upstream LOMA regression decks deliberately '
+                    'run Whiting_Jansen on the fluid and Taylor_Hughes_Zarins on '
+                    'the scalar and pass their result tests, and no '
+                    'coupling-interface artefact is reported. (Audit 2026-06-02; '
+                    'corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Input] Gravity (buoyancy) is applied "
-                    "through Neumann boundary conditions or "
-                    "BODY-FORCE terms — NOT through a "
-                    "separate gravity section. Signal: "
-                    "looking for a 'GRAVITY:' YAML key "
-                    "fails — 4C has no such section. Apply "
-                    "as DESIGN VOL NEUMANN with FORCE: "
-                    "[0, 0, -9.81] in 3D (z downward) or "
-                    "as a body-force coefficient in "
-                    "MAT_fluid/MAT_struct. (Audit "
-                    "2026-06-02.)"
+                    '[Input] Gravity and buoyancy are applied as a body force '
+                    'through a Neumann condition; there is no gravity section and '
+                    'no FORCE key. Signal: a GRAVITY: block is rejected with '
+                    '"Section \'GRAVITY\' is not a valid section name." (the only '
+                    'GRAVITY_ACCELERATION / GRAVITY_RAMP_FUNCT keys in 4C belong to '
+                    'PARTICLE DYNAMIC), and a Neumann entry written with FORCE: '
+                    "instead of VAL: fails with 'Failed to match condition "
+                    "specification' from 4C_fem_condition_definition.cpp. The "
+                    'working form is DESIGN VOL NEUMANN CONDITIONS in 3D (DESIGN '
+                    'SURF NEUMANN in 2D) with NUMDOF, ONOFF, VAL, FUNCT and TYPE: '
+                    "'Dead'. (Audit 2026-06-02; corrected by execution 2026-08-06.)"
                 ),
                 (
-                    "[Numerical] For natural convection problems, the "
-                    "Rayleigh number Ra = g * beta * Delta_T * L^3 / "
-                    "(nu * alpha) controls the flow regime.  Ensure "
-                    "mesh resolution is adequate for the expected Ra. "
-                    "Signal: Nusselt number from the benchmark "
-                    "differs from the literature value (e.g. de Vahl "
-                    "Davis cavity) by more than 5% — typically a "
-                    "sign of under-resolved boundary layers when "
-                    "h_boundary > L * Ra^(-1/4). (Audit 2026-06-02.)"
+                    '[Numerical] For natural convection the Rayleigh number sets '
+                    'the regime and the boundary layers must be resolved for it, '
+                    'but 4C computes neither Ra nor Nu and never prints either '
+                    "word, so 'compare Nu with the literature value' needs a "
+                    'non-dimensionalisation you do yourself. Signal: the quantity '
+                    '4C will give you is the wall heat flux, and only if you ask '
+                    'for it: set CALCFLUX_BOUNDARY in SCALAR TRANSPORT DYNAMIC and '
+                    'add a SCATRA FLUX CALC LINE/SURF CONDITIONS block, after which '
+                    'each step prints "Normal fluxes at boundary \'ScaTraFluxCalc\' '
+                    'on discretization \'scatra\'" and \'Sum of all normal flux '
+                    "boundary integrals for scalar 0'. (Audit 2026-06-02; corrected "
+                    'by execution 2026-08-06.)'
                 ),
             ],
             "typical_experiments": [

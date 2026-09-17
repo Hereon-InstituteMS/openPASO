@@ -49,38 +49,13 @@ KNOWLEDGE = {
             "PartitionedFSIUtilitiesDouble3D",
         ],
         "pitfalls": [
-                        '[Integration] KratosFSIApplication is a '
-                        'SEPARATE pip package (pip install '
-                        'KratosFSIApplication) — it is NOT pulled '
-                        'in by KratosMultiphysics core. The FSI '
-                        'catalog previously inherited the cosim '
-                        'accelerator list verbatim, conflating '
-                        'TWO distinct surfaces: '
-                        '(a) CoSimulationApplication accelerator '
-                        'FILE stems (block_ibqnls, iqnils, mvqn, '
-                        'block_mvqn, aitken, anderson) under '
-                        'convergence_accelerators/, vs '
-                        '(b) FSIApplication CLASS names '
-                        '(IBQNMVQNConvergenceAccelerator, '
-                        'MVQNFullJacobianConvergenceAccelerator, '
-                        'AitkenConvergenceAccelerator, ...). '
-                        '"ibqn" (bare) is neither — neither a '
-                        'CoSim file nor an FSI class. Signal: '
-                        '"import KratosMultiphysics.FSIApplication" '
-                        'on a fresh .venv raises '
-                        'ModuleNotFoundError; using "ibqn" as a '
-                        'CoSim accelerator "type" raises a factory '
-                        'ImportError finding "ibqn.py". (Verified '
-                        '2026-06-01 — see also cosimulation '
-                        'physics pitfall #0 + Tier-2 fixture '
-                        'cosimulation_accelerator_mapper_names.)',
-                        '[Numerical] FSI needs: FluidDynamics + StructuralMechanics + MeshMoving + Mapping applications '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] CoSimIO enables coupling Kratos with any external solver (including our MCP agents) '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Numerical] Aitken relaxation recommended for initial runs; MVQN for production '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                    ],
+            "[Integration] KratosFSIApplication is a SEPARATE pip package (pip install KratosFSIApplication) \u2014 it is NOT pulled in by KratosMultiphysics core. The FSI catalog previously inherited the cosim accelerator list verbatim, conflating TWO distinct surfaces: (a) CoSimulationApplication accelerator FILE stems (block_ibqnls, iqnils, mvqn, block_mvqn, aitken, anderson) under convergence_accelerators/, vs (b) FSIApplication CLASS names (IBQNMVQNConvergenceAccelerator, MVQNFullJacobianConvergenceAccelerator, AitkenConvergenceAccelerator, ...). \"ibqn\" (bare) is neither \u2014 neither a CoSim file nor an FSI class. Signal: \"import KratosMultiphysics.FSIApplication\" on a fresh .venv raises ModuleNotFoundError; using \"ibqn\" as a CoSim accelerator \"type\" raises a factory ImportError finding \"ibqn.py\". (Verified 2026-06-01 \u2014 see also cosimulation physics pitfall #0 + Tier-2 fixture cosimulation_accelerator_mapper_names.)",
+            "[Numerical] FSI needs: FluidDynamics + StructuralMechanics + MeshMoving + Mapping applications Signal: two of the four \u2014 MeshMovingApplication and MappingApplication \u2014 never appear in a user-facing FSI JSON, so their absence surfaces as a ModuleNotFoundError raised inside partitioned_fsi_base_solver at run time rather than as a validation error at plan time.",
+        ],
+        "guidance": [
+            "[Numerical] CoSimIO enables coupling Kratos with any external solver (including our MCP agents)",
+            "[Numerical] Aitken relaxation recommended for initial runs; MVQN for production",
+        ]
     },
 }
 

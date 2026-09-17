@@ -39,6 +39,7 @@ _GENERATOR_SPECS: dict[str, tuple[str, str]] = {
     "contact":             (".contact",             "ContactGenerator"),
     "particle_pd":         (".particle_pd",         "ParticlePDGenerator"),
     "particle_sph":        (".particle_sph",        "ParticleSPHGenerator"),
+    "particle_dem":        (".particle_dem",        "ParticleDEMGenerator"),
     "porous_media":        (".porous_media",        "PorousMediaGenerator"),
     "tsi":                 (".tsi",                  "TSIGenerator"),
     "ssi":                 (".ssi",                  "SSIGenerator"),
@@ -120,6 +121,10 @@ _ALIASES: dict[str, str] = {
     # SPH aliases
     "sph":              "particle_sph",
     "smoothed_particle": "particle_sph",
+    # DEM aliases
+    "dem":              "particle_dem",
+    "discrete_element": "particle_dem",
+    "granular":         "particle_dem",
     # Porous media aliases
     "porous":           "porous_media",
     "darcy":            "porous_media",

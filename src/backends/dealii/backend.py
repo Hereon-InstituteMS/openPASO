@@ -13,6 +13,7 @@ deal.ii tutorials used:
 
 import asyncio
 import logging
+import re
 import os
 import shutil
 import time
@@ -27,7 +28,135 @@ from core.backend import (
 )
 from core.registry import register_backend
 
-logger = logging.getLogger("oasis.dealii")
+logger = logging.getLogger("openpaso.dealii")
+
+
+class DealiiRootOverrideError(RuntimeError):
+    """DEAL_II_DIR / DEALII_ROOT names something that is not deal.II.
+
+    Raised rather than ignored, for the same reason FEBIO_BINARY raises:
+    silently searching elsewhere means the install openPASO reports is not
+    the install the user named. `DEAL_II_DIR=/tmp` used to log a warning
+    and CONTINUE discovery, so the backend reported
+    `available — deal.II 9.8.0-pre at {DEALII_BUILD}` while
+    the variable pointed at /tmp. Every surface then agreed the backend
+    was fine, and the only place the wrong path would surface was the
+    compile error, much later, naming neither variable.
+    """
+
+
+# Cache of verification verdicts, keyed by resolved path. A verdict is
+# True (proven deal.II), False (proven not), or None (could not look).
+_VERIFY_CACHE: dict[str, tuple[Optional[bool], str]] = {}
+
+
+def verify_dealii_install(root: Path) -> tuple[Optional[bool], str]:
+    """Prove that ``root`` really is a deal.II installation.
+
+    deal.II is a C++ library with no executable to interrogate, so the
+    equivalent of "run it and look for its own vocabulary" is to read
+    the version macro that deal.II's OWN generated header carries, or
+    the version its own CMake package file declares. A directory that
+    merely exists, or that happens to contain a differently-named
+    ``include/`` tree, cannot produce either string.
+
+    Returns ``(verdict, detail)``:
+      * ``(True,  "9.8.0-pre (include/deal.II/base/config.h)")`` —
+        proven; ``detail`` names the version and the evidence.
+      * ``(False, reason)`` — looked, and the evidence is absent.
+      * ``(None,  reason)`` — could NOT look (unreadable path,
+        permission error). Callers must FAIL OPEN on None: an
+        unreadable install is not a wrong install, and refusing to
+        run because we could not inspect it would be its own bug.
+
+    Verdicts are cached per path; the filesystem does not change under
+    us within a session and ``discover`` may ask repeatedly.
+    """
+    key = str(root)
+    if key in _VERIFY_CACHE:
+        return _VERIFY_CACHE[key]
+
+    result: tuple[Optional[bool], str]
+    unreadable = False
+    version = ""
+    evidence = ""
+
+    # (a) The generated header, which carries deal.II's own
+    #     DEAL_II_PACKAGE_VERSION macro. It exists in an installed
+    #     prefix, and in the BUILD tree of a source checkout — note a
+    #     source checkout's own include/ has only config.h.in, so a
+    #     bare checkout root is not by itself proof.
+    for rel in (Path("include"),):
+        cfg = root / rel / "deal.II" / "base" / "config.h"
+        if not cfg.is_file():
+            continue
+        try:
+            m = re.search(
+                r'#\s*define\s+DEAL_II_PACKAGE_VERSION\s+"([^"]+)"',
+                cfg.read_text(errors="replace"))
+            if m:
+                version = m.group(1)
+                evidence = str(rel / "deal.II" / "base" / "config.h")
+                break
+        except OSError as exc:
+            unreadable = True
+            evidence = f"could not read {cfg}: {exc}"
+
+    # (b) deal.II's own CMake package-version file, in any of the
+    #     layouts it ships (installed prefix, or a build tree).
+    if not version:
+        for rel in (Path("lib") / "cmake" / "deal.II",
+                    Path("share") / "deal.II" / "cmake",
+                    Path("cmake") / "config"):
+            vf = root / rel / "deal.IIConfigVersion.cmake"
+            if not vf.is_file():
+                continue
+            try:
+                m = re.search(r'set\(\s*PACKAGE_VERSION\s+"([^"]+)"',
+                              vf.read_text(errors="replace"))
+                if m:
+                    version, evidence = m.group(1), str(rel / vf.name)
+                    break
+            except OSError as exc:
+                unreadable = True
+                evidence = f"could not read {vf}: {exc}"
+
+    if version:
+        result = (True, f"deal.II {version} ({evidence})")
+    elif unreadable:
+        result = (None, evidence)
+    else:
+        result = (False,
+                  "no DEAL_II_PACKAGE_VERSION in "
+                  "include/deal.II/base/config.h and no "
+                  "deal.IIConfigVersion.cmake under lib/cmake/deal.II, "
+                  "share/deal.II/cmake or cmake/config")
+
+    _VERIFY_CACHE[key] = result
+    return result
+
+
+def resolve_dealii_root(candidate: Path) -> Optional[Path]:
+    """Return the sub-path of ``candidate`` that find_package can use.
+
+    A source checkout is not itself usable: its ``include/`` holds
+    ``config.h.in``, and the generated header plus the CMake package
+    files live in the build directory. Try the candidate first, then
+    the usual build/install layouts, and return the first that
+    verifies (or that we could not inspect, since we fail open).
+    """
+    unreadable: Optional[Path] = None
+    for rel in (Path("."), Path("build"), Path("install"),
+                Path("build") / "install"):
+        cand = (candidate / rel).resolve()
+        if not cand.is_dir():
+            continue
+        verdict, _ = verify_dealii_install(cand)
+        if verdict is True:
+            return cand
+        if verdict is None and unreadable is None:
+            unreadable = cand      # fail open, but prefer a proven hit
+    return unreadable
 
 
 def _find_dealii() -> Optional[Path]:
@@ -39,8 +168,8 @@ def _find_dealii() -> Optional[Path]:
       3. Conda envs at ``~/miniconda3/envs/*`` and
          ``~/anaconda3/envs/*`` that contain ``include/deal.II/``.
       4. User-source dirs: ``~/dealii``, ``~/deal.II``,
-         ``~/Schreibtisch/dealii``, ``~/Schreibtisch/deal.II``,
-         ``~/src/dealii``, ``~/src/deal.II``.
+         ``~/src/dealii``, ``~/src/deal.II``, and ``dealii`` / ``deal.II``
+         in the user's desktop folder (core.user_dirs, locale-aware).
       5. System paths: ``/opt/dealii``,
          ``/usr/lib/x86_64-linux-gnu/cmake/deal.II``,
          ``/usr/share/cmake/deal.II``.
@@ -50,12 +179,6 @@ def _find_dealii() -> Optional[Path]:
     ``include/deal.II/`` or ``share/deal.II/cmake/``). Callers
     pass this to ``find_package(deal.II HINTS ...)``.
     """
-    # 1. Explicit env override
-    for env_var in ("DEAL_II_DIR", "DEALII_ROOT"):
-        env_dir = os.environ.get(env_var)
-        if env_dir and Path(env_dir).is_dir():
-            return Path(env_dir)
-
     def _looks_like_dealii_root(p: Path) -> bool:
         """A path is a deal.II install root if it has either
         include/deal.II/ headers or share/deal.II/cmake/ macros
@@ -65,6 +188,55 @@ def _find_dealii() -> Optional[Path]:
         return ((p / "include" / "deal.II").is_dir()
                 or (p / "share" / "deal.II" / "cmake").is_dir()
                 or (p / "lib" / "cmake" / "deal.II").is_dir())
+
+    # 1. Explicit env override. The path is VERIFIED, not merely
+    #    tested for existence: this branch used to `return
+    #    Path(env_dir)` for any directory that happened to exist, so
+    #    `DEAL_II_DIR=/tmp` (or DEALII_ROOT=/tmp) made
+    #    check_availability report "deal.II found at /tmp" and the
+    #    backend advertise itself as available with no deal.II
+    #    anywhere near it. An availability check that a wrong path
+    #    can satisfy is worse than no check: it turns a clear
+    #    "not installed" into template generation that fails much
+    #    later, at compile time, with an unrelated error.
+    #
+    #    Verifying is only half of it. The first fix WARNED and then
+    #    continued discovery, which restored the same false verdict by
+    #    a longer route: `DEAL_II_DIR=/tmp` fell through to the real
+    #    build tree and the backend reported AVAILABLE again — now with
+    #    an accurate-looking version string, from an install the user
+    #    had not named. An explicit override that resolves elsewhere is
+    #    how you debug the install you are not running, so a set-but-
+    #    wrong override is an ERROR, not a hint.
+    for env_var in ("DEAL_II_DIR", "DEALII_ROOT"):
+        env_dir = os.environ.get(env_var)
+        if not env_dir:
+            continue
+        cand = Path(env_dir)
+        if not cand.is_dir():
+            raise DealiiRootOverrideError(
+                f"{env_var} is set to {env_dir!r}, which is not a "
+                f"directory. Refusing to fall back to a different "
+                f"install: point it at a prefix containing "
+                f"include/deal.II/base/config.h (or at the build "
+                f"directory of a source checkout), or unset it.")
+        resolved = resolve_dealii_root(cand)
+        if resolved is None:
+            # resolve_dealii_root already fails OPEN on a path it could
+            # not inspect (it returns the unreadable candidate), so None
+            # means we DID look and deal.II's own version evidence is
+            # absent. Fail closed.
+            raise DealiiRootOverrideError(
+                f"{env_var} is set to {env_dir!r}, which does not look "
+                f"like a deal.II install: neither "
+                f"include/deal.II/base/config.h nor "
+                f"lib/cmake/deal.II/deal.IIConfigVersion.cmake is there, "
+                f"under it, or under its build/ or install/ subdirectory. "
+                f"Refusing to fall back to a different install and report "
+                f"that one as available. Fix the path or unset the "
+                f"variable.")
+        # Proven, or unreadable -> fail OPEN and trust the override.
+        return resolved
 
     # 2 + 3. Conda envs (deal.II often lives in a dedicated env).
     # When several envs contain deal.II, prefer the HIGHEST version:
@@ -97,17 +269,19 @@ def _find_dealii() -> Optional[Path]:
     if candidates:
         return max(candidates, key=_dealii_version_of)
 
-    # 4. User-source dirs (in case the user built from source).
-    for sub in ("dealii", "deal.II", "src/dealii", "src/deal.II",
-                "Schreibtisch/dealii", "Schreibtisch/deal.II"):
-        candidate = Path.home() / sub
-        if _looks_like_dealii_root(candidate):
-            return candidate
-        # Also try common build-subdir layouts.
-        for build_sub in ("install", "build/install"):
-            inner = candidate / build_sub
-            if _looks_like_dealii_root(inner):
-                return inner
+    # 4. User-source dirs (in case the user built from source). A
+    #    checkout root is NOT usable on its own — the generated header
+    #    and the CMake package files live in the build tree — so each
+    #    candidate goes through resolve_dealii_root().
+    from core.user_dirs import desktop_dirs   # noqa: PLC0415
+    _cands = [Path.home() / s for s in ("dealii", "deal.II", "src/dealii", "src/deal.II")]
+    _cands += [d / s for d in desktop_dirs() for s in ("dealii", "deal.II")]
+    for candidate in _cands:
+        if not candidate.is_dir():
+            continue
+        resolved = resolve_dealii_root(candidate)
+        if resolved is not None:
+            return resolved
 
     # 5. System paths.
     for cand in (Path("/opt/dealii"), Path("/opt/deal.II"),
@@ -125,7 +299,7 @@ def _find_dealii() -> Optional[Path]:
             r = subprocess.run(
                 [cmake, "--find-package", "-DNAME=deal.II",
                  "-DCOMPILER_ID=GNU", "-DLANGUAGE=CXX",
-                 "-DMODE=COMPILE"],
+                 "-DMODE=COMPILE"], stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=10
             )
             if r.returncode == 0:
@@ -151,12 +325,42 @@ class DealiiBackend(SolverBackend):
             return BackendStatus.NOT_INSTALLED, "CMake not found"
 
         # Check for deal.II headers/library
-        dealii = _find_dealii()
+        try:
+            dealii = _find_dealii()
+        except DealiiRootOverrideError as exc:
+            # Report as MISCONFIGURED rather than propagating: `discover`
+            # must keep working and list the other backends, but this one
+            # must not read as available, and must not read as simply
+            # absent either — the user set a variable and it is wrong.
+            # NOT `_check_via_compile()`: find_package(deal.II) consults
+            # DEAL_II_DIR itself, so probing would answer for whatever
+            # CMake finds next and re-hide the bad override.
+            return BackendStatus.MISCONFIGURED, str(exc)
         if not dealii:
             # Try a test compile
             return self._check_via_compile()
 
-        return BackendStatus.AVAILABLE, f"deal.II found at {dealii}"
+        # Report WHAT was found, not just WHERE. A message of the form
+        # "deal.II <version> at <path>" cannot be produced by a path
+        # that is not a deal.II install, which is the point: the old
+        # message ("deal.II found at {dealii}") was satisfied by any
+        # directory reachable through DEAL_II_DIR / DEALII_ROOT.
+        verdict, detail = verify_dealii_install(dealii)
+        if verdict is False:
+            # _find_dealii's non-env branches already require deal.II
+            # markers, so getting here means those markers exist but
+            # no version does — a broken or partial install. Fall back
+            # to the compile probe, which is the authority.
+            logger.warning("%s has deal.II markers but no version (%s)",
+                           dealii, detail)
+            return self._check_via_compile()
+        if verdict is None:
+            # Could not look. FAIL OPEN, and say so rather than
+            # claiming a verification that did not happen.
+            return (BackendStatus.AVAILABLE,
+                    f"deal.II at {dealii} (version not verifiable: "
+                    f"{detail})")
+        return BackendStatus.AVAILABLE, f"{detail} at {dealii}"
 
     def _check_via_compile(self) -> tuple[BackendStatus, str]:
         """Try to compile a minimal deal.II program to check availability."""
@@ -178,7 +382,7 @@ class DealiiBackend(SolverBackend):
             Path(tmpdir, "CMakeLists.txt").write_text(test_cmake)
             try:
                 r = subprocess.run(
-                    ["cmake", "."], capture_output=True, text=True,
+                    ["cmake", "."], stdin=subprocess.DEVNULL, capture_output=True, text=True,
                     cwd=tmpdir, timeout=30
                 )
                 if r.returncode == 0:
@@ -192,7 +396,12 @@ class DealiiBackend(SolverBackend):
         return InputFormat.CPP
 
     def get_version(self) -> Optional[str]:
-        dealii = _find_dealii()
+        try:
+            dealii = _find_dealii()
+        except DealiiRootOverrideError:
+            # No version to report for an override that is not deal.II;
+            # check_availability is the surface that explains why.
+            return None
         if not dealii:
             return None
         # Try to read version from cmake config
@@ -358,6 +567,23 @@ class DealiiBackend(SolverBackend):
         ]
 
     def get_knowledge(self, physics: str) -> dict:
+        # ATTACHED ON EVERY RETURN PATH, VIA A WRAPPER, NOT PER-BRANCH.
+        #
+        # This method resolves through three catalogs and returns from four
+        # places. Measured across the nine served backends, deal.II was the
+        # only one whose payload told an agent no way to read its solution at a
+        # point that is not a mesh node — and "the solve worked and was never
+        # read back" is the largest single failure bucket across the
+        # development runs, 60 runs at 12.9%. Adding the recipe to one branch
+        # would have left the other three silent, which is the defect class
+        # this file has already been repaired for twice.
+        k = self._get_knowledge_inner(physics)
+        if isinstance(k, dict):
+            from backends.dealii.probe_recipe import DEALII_PROBE_RECIPE
+            k = {**k, "probe_recipe": DEALII_PROBE_RECIPE}
+        return k
+
+    def _get_knowledge_inner(self, physics: str) -> dict:
         # Resolution order (2026-06-01 audit closes task #69):
         #
         #   1. data/dealii_knowledge.py:DEALII_KNOWLEDGE — the
@@ -394,7 +620,24 @@ class DealiiBackend(SolverBackend):
         try:
             from tools.deep_knowledge import _DEALII_KNOWLEDGE
             if physics in _DEALII_KNOWLEDGE:
-                return _DEALII_KNOWLEDGE[physics]
+                tier3 = _DEALII_KNOWLEDGE[physics]
+                # The always-served essentials block is injected by
+                # the GENERATOR path only, so physics resolved here
+                # used to be served without it: advection_dg, contact
+                # and nonlinear_elasticity are advertised by
+                # supported_physics() and do serve pitfalls (4/3/3),
+                # yet reached the client with none of the Debug-vs-
+                # Release scoping, required call order or JxW check —
+                # 24 of 27 payloads carried the block, these 3 did
+                # not. Inject on the same condition the generator
+                # path uses, so an unknown physics still cannot look
+                # covered.
+                if isinstance(tier3, dict) and tier3.get("pitfalls"):
+                    from backends.dealii.generators._critical import (
+                        CRITICAL_KNOWLEDGE)
+                    return {"deal_II_essentials": CRITICAL_KNOWLEDGE,
+                            **tier3}
+                return tier3
         except ImportError:
             pass
         return gen_k
@@ -488,8 +731,29 @@ class DealiiBackend(SolverBackend):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(work_dir),
+                start_new_session=True,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+
+            # TIMEOUT MUST KILL THE SOLVER, AND THE WHOLE GROUP. Without this, a
+            # timed-out solve kept running forever: wait_for() abandoned the
+            # process but never terminated it, and a sweep found one such
+            # solver 3.2 CPU-hours later at 100%% of a core, its MPI daemon
+            # (orted) beside it. start_new_session puts the solver and every child
+            # it spawns into their own process group, so one killpg reaps MPI
+            # ranks too — the same idiom precice_config.py already uses, for the
+            # same reason. The kill re-raises, so each backend's own TimeoutError
+            # handling below is unchanged.
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            except asyncio.TimeoutError:
+                import os as _os, signal as _signal
+                try:
+                    _os.killpg(proc.pid, _signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                await proc.wait()
+                raise
+
             if proc.returncode != 0:
                 job.status = "failed"
                 job.error = f"CMake configure failed:\n{stderr.decode(errors='replace')}"
@@ -521,7 +785,7 @@ class DealiiBackend(SolverBackend):
                         or ("abs" in err and "ambiguous" in err)):
                     hint = ("\n\nHint (macOS + deal.II.app): this looks like the Xcode "
                             "SDK header conflict (a deal.II.app packaging issue, not an "
-                            "OASiS bug). Make the sysroot consistent and re-run:\n"
+                            "openPASO bug). Make the sysroot consistent and re-run:\n"
                             "    export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
                 job.error = f"Compilation failed:\n{err[-2000:]}{hint}"
                 job.elapsed = time.time() - start

@@ -5,6 +5,17 @@ Variants: 2d
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['reaction_diffusion'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Two-species reaction-diffusion system (coupled, transient, nonlinear)",
     "weak_form": "((u-u_old)/dt, phi_u)*dx + D1*(grad(u),grad(phi_u))*dx = (R_u, phi_u)*dx (+ same for v)",
     "function_space": "Mixed: P1 + P1 (one per species) via mixed_element",
@@ -29,14 +40,31 @@ KNOWLEDGE = {
             "phase error. (Audit 2026-06-02.)"
         ),
         (
-            "[API] Initial conditions: must be set on COLLAPSED "
-            "sub-spaces, then call scatter_forward(). Signal: "
-            "writing u0 = w.sub(0).interpolate(initial_u) on a "
-            "mixed Function w raises "
-            "`AttributeError: Function.sub() returns a sub-"
-            "function not a sub-space` or the IC stays at zero. "
-            "Use w_sub_0, w_sub_0_to_w = w.sub(0).collapse() "
-            "first. (Audit 2026-06-02.)"
+            "[API] Initial conditions on a mixed Function: the "
+            "component-wise trap is real but it is NOT the one this "
+            "entry used to describe. TWO CORRECTIONS, both measured. "
+            "First, `w.sub(0).interpolate(initial_u)` does NOT raise "
+            "and the IC does NOT stay at zero — it writes component 0 "
+            "correctly and leaves component 1 alone (measured: sub0 "
+            "5.0, sub1 0.0). The quoted `AttributeError: Function."
+            "sub() returns a sub-function not a sub-space` is emitted "
+            "by nothing in dolfinx and does not reproduce. Second, "
+            "what DOES bite, silently, is the array: "
+            "`w.sub(0).x.array` is not the component, it is the WHOLE "
+            "mixed vector — same length as w.x.array (50 and 50 on a "
+            "4x4 P1-P1 mesh) — so `w.sub(0).x.array[:] = 7.0` "
+            "overwrites BOTH components (measured: sub0 7.0 AND sub1 "
+            "7.0) with no error and no warning. Signal: set an IC on "
+            "one component through .x.array and read the OTHER "
+            "component back; if it moved, that is the defect. Use the "
+            "collapsed route — `V0, dofs0 = W.sub(0).collapse()`, "
+            "interpolate on V0, `w.x.array[dofs0] = f0.x.array`, then "
+            "`w.x.scatter_forward()` — which leaves component 1 at 0.0. "
+            "Note also that interpolate returns None, so "
+            "`u0 = w.sub(0).interpolate(...)` binds None and the next "
+            "use of u0 gives `AttributeError: 'NoneType' object has no "
+            "attribute 'x'`. (Verified by execution 2026-08-07, "
+            "dolfinx 0.10.0.)"
         ),
         (
             "[API] No-flux (Neumann zero) is the natural BC \u2014 no "

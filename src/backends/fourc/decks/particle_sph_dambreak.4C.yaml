@@ -1,0 +1,253 @@
+# SPH: 2-D dam break (collapse of a water column onto a dry bed).
+# Non-dimensional: rho0 = 1, g = 1, column height H = 0.4, tank 1.2 x 0.8.
+# Weakly compressible: c = sqrt(BULK_MODULUS/rho0) = 14.1 >> the surge speed
+# 2*sqrt(g*H) = 1.26, so density stays within ~1% of rho0.
+PROBLEM TYPE:
+  PROBLEMTYPE: "Particle"
+IO:
+  STDOUTEVERY: 200
+  VERBOSITY: "Standard"
+# BIN_SIZE_LOWER_BOUND must be >= the kernel support radius (INITRADIUS).
+# All particles must remain inside DOMAINBOUNDINGBOX for the whole run;
+# in 2-D the z extent is one bin thick.
+BINNING STRATEGY:
+  BIN_SIZE_LOWER_BOUND: 0.1
+  DOMAINBOUNDINGBOX: "-0.2 -0.2 -0.05 1.4 1.2 0.05"
+PARTICLE DYNAMIC:
+  INTERACTION: "SPH"
+  DYNAMICTYPE: "VelocityVerlet"
+  RESULTSEVERY: 100
+  RESTARTEVERY: 2000
+  TIMESTEP: 0.0006
+  NUMSTEP: 2000
+  MAXTIME: 1.2
+  GRAVITY_ACCELERATION: "0.0 -1.0 0.0"
+  GRAVITY_RAMP_FUNCT: 1
+  PHASE_TO_DYNLOADBALFAC: "phase1 1.0 boundaryphase 1.0"
+  PHASE_TO_MATERIAL_ID: "phase1 1 boundaryphase 2"
+# Free-surface flow: density integrated in time and periodically re-normalised,
+# Adami wall pressure extrapolation with free-slip walls, and a transport
+# velocity that keeps the particle distribution regular in the spreading sheet.
+PARTICLE DYNAMIC/SPH:
+  KERNEL: "CubicSpline"
+  KERNEL_SPACE_DIM: "Kernel2D"
+  INITIALPARTICLESPACING: 0.05
+  EQUATIONOFSTATE: "GenTait"
+  MOMENTUMFORMULATION: "MonaghanMomentumFormulation"
+  DENSITYEVALUATION: "DensityPredictCorrect"
+  DENSITYCORRECTION: "NormalizedCorrection"
+  BOUNDARYPARTICLEFORMULATION: "AdamiBoundaryFormulation"
+  BOUNDARYPARTICLEINTERACTION: "FreeSlipBoundaryParticle"
+  TRANSPORTVELOCITYFORMULATION: "GeneralizedTransportVelocity"
+# Gravity switched on smoothly over 0.05 time units = removing the dam gate.
+FUNCT1:
+  - SYMBOLIC_FUNCTION_OF_TIME: "a"
+  - VARIABLE: 0
+    NAME: "a"
+    TYPE: "multifunction"
+    NUMPOINTS: 3
+    TIMES: [0, 0.05, 1000]
+    DESCRIPTION: ["0.5*(1.0-cos((t*pi)/0.05))", "1.0"]
+# INITRADIUS = 2 x INITIALPARTICLESPACING is the cubic-spline support radius.
+MATERIALS:
+  - MAT: 1
+    MAT_ParticleSPHFluid:
+      INITRADIUS: 0.1
+      INITDENSITY: 1
+      REFDENSFAC: 1
+      EXPONENT: 1
+      BACKGROUNDPRESSURE: 200
+      BULK_MODULUS: 200
+      DYNAMIC_VISCOSITY: 0
+      BULK_VISCOSITY: 0
+      ARTIFICIAL_VISCOSITY: 0.1
+  - MAT: 2
+    MAT_ParticleSPHBoundary:
+      INITRADIUS: 0.1
+      INITDENSITY: 1
+# Two wall layers (bottom + both side walls) and the 0.4 x 0.4 water column.
+PARTICLES:
+  - "TYPE boundaryphase POS -0.075 -0.025 0.0"
+  - "TYPE boundaryphase POS -0.025 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.025 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.075 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.125 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.175 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.225 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.275 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.325 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.375 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.425 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.475 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.525 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.575 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.625 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.675 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.725 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.775 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.825 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.875 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.925 -0.025 0.0"
+  - "TYPE boundaryphase POS 0.975 -0.025 0.0"
+  - "TYPE boundaryphase POS 1.025 -0.025 0.0"
+  - "TYPE boundaryphase POS 1.075 -0.025 0.0"
+  - "TYPE boundaryphase POS 1.125 -0.025 0.0"
+  - "TYPE boundaryphase POS 1.175 -0.025 0.0"
+  - "TYPE boundaryphase POS 1.225 -0.025 0.0"
+  - "TYPE boundaryphase POS 1.275 -0.025 0.0"
+  - "TYPE boundaryphase POS -0.075 -0.075 0.0"
+  - "TYPE boundaryphase POS -0.025 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.025 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.075 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.125 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.175 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.225 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.275 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.325 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.375 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.425 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.475 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.525 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.575 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.625 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.675 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.725 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.775 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.825 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.875 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.925 -0.075 0.0"
+  - "TYPE boundaryphase POS 0.975 -0.075 0.0"
+  - "TYPE boundaryphase POS 1.025 -0.075 0.0"
+  - "TYPE boundaryphase POS 1.075 -0.075 0.0"
+  - "TYPE boundaryphase POS 1.125 -0.075 0.0"
+  - "TYPE boundaryphase POS 1.175 -0.075 0.0"
+  - "TYPE boundaryphase POS 1.225 -0.075 0.0"
+  - "TYPE boundaryphase POS 1.275 -0.075 0.0"
+  - "TYPE boundaryphase POS -0.025 0.025 0.0"
+  - "TYPE boundaryphase POS -0.075 0.025 0.0"
+  - "TYPE boundaryphase POS 1.225 0.025 0.0"
+  - "TYPE boundaryphase POS 1.275 0.025 0.0"
+  - "TYPE boundaryphase POS -0.025 0.075 0.0"
+  - "TYPE boundaryphase POS -0.075 0.075 0.0"
+  - "TYPE boundaryphase POS 1.225 0.075 0.0"
+  - "TYPE boundaryphase POS 1.275 0.075 0.0"
+  - "TYPE boundaryphase POS -0.025 0.125 0.0"
+  - "TYPE boundaryphase POS -0.075 0.125 0.0"
+  - "TYPE boundaryphase POS 1.225 0.125 0.0"
+  - "TYPE boundaryphase POS 1.275 0.125 0.0"
+  - "TYPE boundaryphase POS -0.025 0.175 0.0"
+  - "TYPE boundaryphase POS -0.075 0.175 0.0"
+  - "TYPE boundaryphase POS 1.225 0.175 0.0"
+  - "TYPE boundaryphase POS 1.275 0.175 0.0"
+  - "TYPE boundaryphase POS -0.025 0.225 0.0"
+  - "TYPE boundaryphase POS -0.075 0.225 0.0"
+  - "TYPE boundaryphase POS 1.225 0.225 0.0"
+  - "TYPE boundaryphase POS 1.275 0.225 0.0"
+  - "TYPE boundaryphase POS -0.025 0.275 0.0"
+  - "TYPE boundaryphase POS -0.075 0.275 0.0"
+  - "TYPE boundaryphase POS 1.225 0.275 0.0"
+  - "TYPE boundaryphase POS 1.275 0.275 0.0"
+  - "TYPE boundaryphase POS -0.025 0.325 0.0"
+  - "TYPE boundaryphase POS -0.075 0.325 0.0"
+  - "TYPE boundaryphase POS 1.225 0.325 0.0"
+  - "TYPE boundaryphase POS 1.275 0.325 0.0"
+  - "TYPE boundaryphase POS -0.025 0.375 0.0"
+  - "TYPE boundaryphase POS -0.075 0.375 0.0"
+  - "TYPE boundaryphase POS 1.225 0.375 0.0"
+  - "TYPE boundaryphase POS 1.275 0.375 0.0"
+  - "TYPE boundaryphase POS -0.025 0.425 0.0"
+  - "TYPE boundaryphase POS -0.075 0.425 0.0"
+  - "TYPE boundaryphase POS 1.225 0.425 0.0"
+  - "TYPE boundaryphase POS 1.275 0.425 0.0"
+  - "TYPE boundaryphase POS -0.025 0.475 0.0"
+  - "TYPE boundaryphase POS -0.075 0.475 0.0"
+  - "TYPE boundaryphase POS 1.225 0.475 0.0"
+  - "TYPE boundaryphase POS 1.275 0.475 0.0"
+  - "TYPE boundaryphase POS -0.025 0.525 0.0"
+  - "TYPE boundaryphase POS -0.075 0.525 0.0"
+  - "TYPE boundaryphase POS 1.225 0.525 0.0"
+  - "TYPE boundaryphase POS 1.275 0.525 0.0"
+  - "TYPE boundaryphase POS -0.025 0.575 0.0"
+  - "TYPE boundaryphase POS -0.075 0.575 0.0"
+  - "TYPE boundaryphase POS 1.225 0.575 0.0"
+  - "TYPE boundaryphase POS 1.275 0.575 0.0"
+  - "TYPE boundaryphase POS -0.025 0.625 0.0"
+  - "TYPE boundaryphase POS -0.075 0.625 0.0"
+  - "TYPE boundaryphase POS 1.225 0.625 0.0"
+  - "TYPE boundaryphase POS 1.275 0.625 0.0"
+  - "TYPE boundaryphase POS -0.025 0.675 0.0"
+  - "TYPE boundaryphase POS -0.075 0.675 0.0"
+  - "TYPE boundaryphase POS 1.225 0.675 0.0"
+  - "TYPE boundaryphase POS 1.275 0.675 0.0"
+  - "TYPE boundaryphase POS -0.025 0.725 0.0"
+  - "TYPE boundaryphase POS -0.075 0.725 0.0"
+  - "TYPE boundaryphase POS 1.225 0.725 0.0"
+  - "TYPE boundaryphase POS 1.275 0.725 0.0"
+  - "TYPE boundaryphase POS -0.025 0.775 0.0"
+  - "TYPE boundaryphase POS -0.075 0.775 0.0"
+  - "TYPE boundaryphase POS 1.225 0.775 0.0"
+  - "TYPE boundaryphase POS 1.275 0.775 0.0"
+  - "TYPE phase1 POS 0.025 0.025 0.0"
+  - "TYPE phase1 POS 0.075 0.025 0.0"
+  - "TYPE phase1 POS 0.125 0.025 0.0"
+  - "TYPE phase1 POS 0.175 0.025 0.0"
+  - "TYPE phase1 POS 0.225 0.025 0.0"
+  - "TYPE phase1 POS 0.275 0.025 0.0"
+  - "TYPE phase1 POS 0.325 0.025 0.0"
+  - "TYPE phase1 POS 0.375 0.025 0.0"
+  - "TYPE phase1 POS 0.025 0.075 0.0"
+  - "TYPE phase1 POS 0.075 0.075 0.0"
+  - "TYPE phase1 POS 0.125 0.075 0.0"
+  - "TYPE phase1 POS 0.175 0.075 0.0"
+  - "TYPE phase1 POS 0.225 0.075 0.0"
+  - "TYPE phase1 POS 0.275 0.075 0.0"
+  - "TYPE phase1 POS 0.325 0.075 0.0"
+  - "TYPE phase1 POS 0.375 0.075 0.0"
+  - "TYPE phase1 POS 0.025 0.125 0.0"
+  - "TYPE phase1 POS 0.075 0.125 0.0"
+  - "TYPE phase1 POS 0.125 0.125 0.0"
+  - "TYPE phase1 POS 0.175 0.125 0.0"
+  - "TYPE phase1 POS 0.225 0.125 0.0"
+  - "TYPE phase1 POS 0.275 0.125 0.0"
+  - "TYPE phase1 POS 0.325 0.125 0.0"
+  - "TYPE phase1 POS 0.375 0.125 0.0"
+  - "TYPE phase1 POS 0.025 0.175 0.0"
+  - "TYPE phase1 POS 0.075 0.175 0.0"
+  - "TYPE phase1 POS 0.125 0.175 0.0"
+  - "TYPE phase1 POS 0.175 0.175 0.0"
+  - "TYPE phase1 POS 0.225 0.175 0.0"
+  - "TYPE phase1 POS 0.275 0.175 0.0"
+  - "TYPE phase1 POS 0.325 0.175 0.0"
+  - "TYPE phase1 POS 0.375 0.175 0.0"
+  - "TYPE phase1 POS 0.025 0.225 0.0"
+  - "TYPE phase1 POS 0.075 0.225 0.0"
+  - "TYPE phase1 POS 0.125 0.225 0.0"
+  - "TYPE phase1 POS 0.175 0.225 0.0"
+  - "TYPE phase1 POS 0.225 0.225 0.0"
+  - "TYPE phase1 POS 0.275 0.225 0.0"
+  - "TYPE phase1 POS 0.325 0.225 0.0"
+  - "TYPE phase1 POS 0.375 0.225 0.0"
+  - "TYPE phase1 POS 0.025 0.275 0.0"
+  - "TYPE phase1 POS 0.075 0.275 0.0"
+  - "TYPE phase1 POS 0.125 0.275 0.0"
+  - "TYPE phase1 POS 0.175 0.275 0.0"
+  - "TYPE phase1 POS 0.225 0.275 0.0"
+  - "TYPE phase1 POS 0.275 0.275 0.0"
+  - "TYPE phase1 POS 0.325 0.275 0.0"
+  - "TYPE phase1 POS 0.375 0.275 0.0"
+  - "TYPE phase1 POS 0.025 0.325 0.0"
+  - "TYPE phase1 POS 0.075 0.325 0.0"
+  - "TYPE phase1 POS 0.125 0.325 0.0"
+  - "TYPE phase1 POS 0.175 0.325 0.0"
+  - "TYPE phase1 POS 0.225 0.325 0.0"
+  - "TYPE phase1 POS 0.275 0.325 0.0"
+  - "TYPE phase1 POS 0.325 0.325 0.0"
+  - "TYPE phase1 POS 0.375 0.325 0.0"
+  - "TYPE phase1 POS 0.025 0.375 0.0"
+  - "TYPE phase1 POS 0.075 0.375 0.0"
+  - "TYPE phase1 POS 0.125 0.375 0.0"
+  - "TYPE phase1 POS 0.175 0.375 0.0"
+  - "TYPE phase1 POS 0.225 0.375 0.0"
+  - "TYPE phase1 POS 0.275 0.375 0.0"
+  - "TYPE phase1 POS 0.325 0.375 0.0"
+  - "TYPE phase1 POS 0.375 0.375 0.0"

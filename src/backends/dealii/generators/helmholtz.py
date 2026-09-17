@@ -208,9 +208,25 @@ KNOWLEDGE = {
         "Complex shifted-Laplacian preconditioner — preconditions (K - k^2 M) with (K - (k^2 + i*shift) M); shift damps oscillations enough for multigrid",
     ],
     "pitfalls": [
-        "[Numerical] System is INDEFINITE for k^2 > 0 — cannot use "
-        "SolverCG, use SolverGMRES / SolverMinRes / a direct solver. "
-        "Signal: SolverCG reports 'breakdown' immediately.",
+        "[Numerical] System is INDEFINITE once k^2 exceeds the "
+        "smallest Laplace eigenvalue — SolverCG then has no "
+        "convergence guarantee, so prefer SolverGMRES / "
+        "SolverMinRes / a direct solver. But CG does NOT announce "
+        "this. Signal: there is none from the solver — check "
+        "definiteness directly (a few hundred power iterations on "
+        "A and on sigma*I - A give lambda_max and lambda_min) "
+        "rather than waiting for SolverCG to complain. Measured on "
+        "deal.II 9.8 on the "
+        "matrix this template assembles (omega=10, c=1, 5 global "
+        "refinements, 2178 DoFs): a power-iteration estimate gives "
+        "lambda_max = 3.85 and lambda_min = -0.37, i.e. genuinely "
+        "INDEFINITE — and SolverCG with PreconditionSSOR still "
+        "CONVERGED in 126 iterations to residual 7.0e-11, while "
+        "SolverGMRES on the same system took 1718. There was no "
+        "breakdown of any kind. (This entry used to quote "
+        "\"SolverCG reports 'breakdown' immediately\"; it does "
+        "not.) Test definiteness explicitly if it matters; do not "
+        "use CG's silence as evidence the system is SPD.",
         "[Syntax] Complex splitting: 2-component FESystem<dim>(FE_Q, 2) "
         "with (u_re, u_im) doubles the DOF count and requires the "
         "bilinear form to assemble the 2x2 block carrying the "

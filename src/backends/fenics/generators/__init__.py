@@ -192,206 +192,257 @@ def list_all_physics() -> list[str]:
 
 
 # General FEniCS knowledge (not tied to a specific physics module).
-GENERAL_KNOWLEDGE = {
-    "description": "FEniCSx (dolfinx) general capabilities",
-    "element_families": {
-        "Lagrange (P/Q)": "Continuous, arbitrary order, all cell types",
-        "DG": "Discontinuous Lagrange, order 0+",
-        "Raviart-Thomas": "H(div) conforming, for mixed methods",
-        "BDM": "H(div) conforming, full polynomial",
-        "Nedelec 1st kind": "H(curl) conforming, for Maxwell/electromagnetics",
-        "Nedelec 2nd kind": "H(curl) conforming, full polynomial",
-        "Crouzeix-Raviart": "Nonconforming, order 1 only",
-        "Bubble": "For MINI element enrichment",
-        "Hermite": "C1 conforming on simplices",
-        "Serendipity": "Quad/hex only, fewer DOFs",
-        "Regge": "For elasticity complexes",
-    },
-    "mesh_types": [
-        "create_unit_square, create_unit_cube, create_box, create_rectangle",
-        "Gmsh: gmshio.model_to_mesh (2D/3D, mixed cell types)",
-        "XDMF import/export, refinement (refine, plaza_refine)",
-    ],
-    "solver_catalogue": {
-        "direct": "MUMPS, SuperLU_dist, UMFPACK (via PETSc)",
-        "iterative": "CG, GMRES, BiCGStab, MinRes, Richardson",
-        "preconditioners": "ILU, ICC, Jacobi, SOR, GAMG, hypre/BoomerAMG, BDDC, fieldsplit",
-        "nonlinear": "PETSc SNES (newtonls, newtontr, ngmres)",
-        "eigenvalue": "SLEPc EPS (krylovschur, arnoldi, lanczos)",
-    },
-    "unique_features": [
-        "UFL: symbolic weak form language with automatic differentiation",
-        "PETSc/SLEPc: industrial-strength solver infrastructure",
-        "Gmsh integration: complex geometry meshing via Python API",
-        "MPI parallel: distributed assembly + solve out-of-box",
-        "Complex-valued problems: complex PETSc build",
-        "Mixed elements: arbitrary combinations via mixed_element()",
-        "Checkpointing via adios4dolfinx",
-    ],
-    "petsc_index_size_solver_compat": {
-        "description": (
-            "PETSc-direct-solver compatibility depends on the "
-            "PETSc index size: MUMPS works only with 32-bit "
-            "PetscInt (the default build), SuperLU_DIST is the "
-            "64-bit-PetscInt drop-in replacement. The C++ "
-            "mixed_poisson demo dispatches at compile time "
-            "(sizeof(PetscInt) == 4 ? 'mumps' : "
-            "'superlu_dist'); Python users hit the same wall at "
-            "runtime when their conda-forge build was compiled "
-            "with --with-64-bit-indices. Source: "
-            "cpp/demo/mixed_poisson/main.cpp:345-348."),
-        "Signal": (
-            "[Solver] dolfinx generators that hardcode "
-            "petsc_options={'pc_factor_mat_solver_type': "
-            "'mumps', ...} (used in fracture, "
-            "nearly_incompressible_elasticity, stokes_darcy, "
-            "hyperelasticity, helmholtz, reaction_diffusion, "
-            "mixed_poisson, and others) will FAIL on a PETSc "
-            "build with 64-bit indices "
-            "(--with-64-bit-indices, sizeof(PetscInt) == 8). "
-            "MUMPS does not support 64-bit indices and PETSc "
-            "raises a runtime error like "
-            "'PCFactor: matrix solver type mumps does not "
-            "support 64-bit integers' / "
-            "'MatSolverType for serial is not '. Diagnostic: "
-            "`python -c \"from petsc4py import PETSc; "
-            "print(PETSc.IntType)\"` returns int64 vs int32. "
-            "Workaround: switch to 'superlu_dist' (or "
-            "'pastix' / 'mkl_pardiso' if available) in "
-            "petsc_options, OR rebuild PETSc with the default "
-            "32-bit indices. The canonical compile-time "
-            "dispatch from the C++ mixed_poisson demo (line "
-            "345-348) is `sizeof(PetscInt) == 4 ? 'mumps' : "
-            "'superlu_dist'` — a runtime Python equivalent is "
-            "`'superlu_dist' if PETSc.IntType().itemsize == 8 "
-            "else 'mumps'`. Plus: 'mumps' requires the "
-            "PETSc build to have actually configured MUMPS "
-            "(--download-mumps); a 32-bit PETSc without "
-            "MUMPS gives 'Could not locate solver type mumps' "
-            "at runtime — separate failure mode. (File walk "
-            "cpp/demo/mixed_poisson/main.cpp 2026-06-03.)"
-        ),
-    },
-    "cross_mesh_interpolation": {
-        "description": (
-            "Non-matching-mesh interpolation: take a Function on "
-            "one mesh and evaluate it onto a Function on a "
-            "DIFFERENT mesh (e.g., tet→hex transfer, mesh "
-            "convergence studies on independent meshes, "
-            "decoupled multiphysics with separate meshes per "
-            "field). Source: "
-            "cpp/demo/interpolation_different_meshes/main.cpp + "
-            "Python wrappers dolfinx.fem.create_interpolation_data "
-            "and Function.interpolate_nonmatching."),
-        "python_api": {
-            "step_1_build_pointownership": (
-                "data = dolfinx.fem.create_interpolation_data("
-                "V_to, V_from, cells, padding=1e-14). V_to is "
-                "the TARGET FunctionSpace (the one receiving "
-                "values), V_from is the SOURCE. cells is the "
-                "INT32 array of TARGET mesh cell indices to "
-                "interpolate onto (typically all cells: "
-                "`np.arange(cell_map.size_local + "
-                "cell_map.num_ghosts, dtype=np.int32)`). "
-                "padding (default 1e-14) is the geometric "
-                "tolerance for point-in-cell ownership tests."),
-            "step_2_interpolate": (
-                "u_to.interpolate_nonmatching(u_from, cells, "
-                "interpolation_data=data). NOT u_to.interpolate("
-                "u_from) — regular interpolate only works for "
-                "same-mesh Function-to-Function transfer."),
-        },
-        "Signal": (
-            "[API] FOUR common failure modes in cross-mesh "
-            "interpolation: "
-            "(1) Calling Function.interpolate(u_other_mesh) "
-            "instead of Function.interpolate_nonmatching(u, "
-            "cells, data) — the regular path tries same-mesh "
-            "shape-function evaluation and silently produces "
-            "garbage (sometimes zeros, sometimes uninitialized "
-            "memory) when meshes differ. No clear error; the "
-            "interpolated Function looks plausibly-shaped but "
-            "values are wrong. "
-            "(2) The Python create_interpolation_data default "
-            "padding is 1e-14 (machine-eps-tight) while the "
-            "C++ interpolation-different-meshes demo uses 1e-8. "
-            "Points lying on the geometric boundary between "
-            "source cells fall outside any cell with the "
-            "Python default and get silently zeroed. For "
-            "near-coincident meshes (FSI fluid/solid interfaces, "
-            "h-refined target vs. coarser source) the 1e-8 "
-            "default from the C++ demo is safer; bump padding "
-            "explicitly to 1e-10..1e-8 for boundary points. "
-            "(3) The `cells` argument is the TARGET mesh's "
-            "cell indices, NOT the source's. Common mistake: "
-            "passing source-mesh cells gets you garbage "
-            "ownership data with cells reading data they "
-            "don't own. "
-            "(4) Argument order in create_interpolation_data "
-            "is (V_to, V_from, cells, padding) but the "
-            "Function.interpolate_nonmatching signature is "
-            "(u_from, cells, interpolation_data) — the FROM "
-            "and TO directions are SWAPPED across the two "
-            "calls. Reading the function names instead of the "
-            "kwargs leads to swapped data. "
-            "(File walk cpp/demo/interpolation_different_meshes/"
-            "main.cpp 2026-06-03.)"
-        ),
-    },
-    "mixed_domain_assembly": {
-        "description": (
-            "Co-dimension-0 mixed assembly: assemble bilinear forms "
-            "where trial and test spaces live on DIFFERENT meshes (a "
-            "parent mesh and a submesh of a region of interest). "
-            "Source: cpp/demo/codim_0_assembly/main.cpp + "
-            "mixed_codim0.py."
-        ),
-        "workflow": [
-            "1. Mark cells with a MeshTags scalar (e.g. 2 for the "
-            "subregion, 1 elsewhere).",
-            "2. submesh, emap, v_map, g_map = mesh.create_submesh(parent, "
-            "tdim, subcells) — RETURNS 4-TUPLE, not just submesh; the "
-            "EntityMap `emap` is REQUIRED for cross-mesh form assembly.",
-            "3. V = parent FunctionSpace, W = submesh FunctionSpace.",
-            "4. integration_entities = fem.compute_integration_domains("
-            "IntegralType.cell, parent.topology, marker.find(2)).",
-            "5. subdomain_data = {IntegralType.cell: [(<marker_id>, "
-            "integration_entities)]} — marker_id (e.g. 3) chosen at "
-            "UFL form-definition time as dx(3); it's the form-side tag, "
-            "NOT the MeshTags value (2 above).",
-            "6. fem.create_form(form, [V, W], coefficients={}, "
-            "constants={}, subdomains=subdomain_data, "
-            "entity_maps=[emap], parent_mesh=V.mesh) — the "
-            "extended-signature variant; vanilla create_form lacks "
-            "entity_maps + parent_mesh args.",
-            "UFL-side idiom (cpp/demo/codim_0_assembly/mixed_codim0.py): "
-            "the bilinear form is written as "
-            "`a_mixed = inner(p, v) * dx(domain=mesh, subdomain_id=3)` "
-            "with trial p on submesh W, test v on parent mesh V. BOTH "
-            "kwargs are essential: domain=mesh picks the integration "
-            "domain (parent, not the trial-space's submesh); "
-            "subdomain_id=3 is the form-side numeric tag bridged by "
-            "the subdomain_data dict at create_form time. The UFL file "
-            "must also expose a top-level `forms = [a_mixed, a]` list "
-            "for ffcx code generation.",
-        ],
-        "Signal": (
-            "[API] Two distinct tag-id namespaces in mixed-domain "
-            "assembly that frequently confuse users: (a) the MeshTags "
-            "value (e.g. 2 for the subregion in this demo) is what "
-            "marks cells in the PYTHON topology, while (b) the dx(N) "
-            "marker on the UFL FORM (e.g. 3 in the demo's "
-            "subdomain_data) is what the form expects at assembly. The "
-            "subdomain_data dict bridges them by mapping form-tag -> "
-            "(MeshTags-selected entity list). Confusing the two yields "
-            "either empty assembly (no marker match) or an unrelated "
-            "subdomain getting integrated. Use distinct numeric values "
-            "(e.g. 2 in MeshTags, 3 in dx) until you've validated the "
-            "mapping. Plus: dolfinx demos use "
-            "mesh.create_cell_partitioner(GhostMode.shared_facet, 2) "
-            "for these mixed assemblies (extra overlap=2 needed for "
-            "cross-mesh entity matching). (File walk "
-            "cpp/demo/codim_0_assembly/main.cpp 2026-06-03.)"
-        ),
-    },
-}
+GENERAL_KNOWLEDGE = {'description': 'FEniCSx (dolfinx) general capabilities',
+ 'element_families': {'Lagrange (P/Q)': 'Continuous, arbitrary order, all cell types',
+                      'DG': 'Discontinuous Lagrange, order 0+',
+                      'Raviart-Thomas': 'H(div) conforming, for mixed methods',
+                      'BDM': 'H(div) conforming, full polynomial',
+                      'Nedelec 1st kind': 'H(curl) conforming, for '
+                                          'Maxwell/electromagnetics',
+                      'Nedelec 2nd kind': 'H(curl) conforming, full polynomial',
+                      'Crouzeix-Raviart': 'Nonconforming, order 1 only',
+                      'Bubble': 'For MINI element enrichment',
+                      'Hermite': 'C1 conforming on simplices',
+                      'Serendipity': 'Quad/hex only, fewer DOFs',
+                      'Regge': 'For elasticity complexes'},
+ 'mesh_types': ['create_unit_square, create_unit_cube, create_box, create_rectangle',
+                'Gmsh: dolfinx.io.gmsh.model_to_mesh / dolfinx.io.gmsh.read_from_msh '
+                '(2D/3D, mixed cell types) — the module is `gmsh`, NOT `gmshio`, which '
+                'was removed in dolfinx 0.10',
+                'XDMF import/export, refinement (refine, plaza_refine)'],
+ 'solver_catalogue': {'direct': 'MUMPS, SuperLU_dist, UMFPACK (via PETSc)',
+                      'iterative': 'CG, GMRES, BiCGStab, MinRes, Richardson',
+                      'preconditioners': 'ILU, ICC, Jacobi, SOR, GAMG, '
+                                         'hypre/BoomerAMG, BDDC, fieldsplit',
+                      'nonlinear': 'PETSc SNES (newtonls, newtontr, ngmres)',
+                      'eigenvalue': 'SLEPc EPS (krylovschur, arnoldi, lanczos)'},
+ 'unique_features': ['UFL: symbolic weak form language with automatic differentiation',
+                     'PETSc/SLEPc: industrial-strength solver infrastructure',
+                     'Gmsh integration: complex geometry meshing via Python API',
+                     'MPI parallel: distributed assembly + solve out-of-box',
+                     'Complex-valued problems: complex PETSc build',
+                     'Mixed elements: arbitrary combinations via mixed_element()',
+                     'Checkpointing via adios4dolfinx'],
+ 'petsc_index_size_solver_compat': {'description': 'PETSc-direct-solver compatibility '
+                                                   'depends on the PETSc index size: '
+                                                   'MUMPS works only with 32-bit '
+                                                   'PetscInt (the default build), '
+                                                   'SuperLU_DIST is the '
+                                                   '64-bit-PetscInt drop-in '
+                                                   'replacement. The C++ mixed_poisson '
+                                                   'demo dispatches at compile time '
+                                                   "(sizeof(PetscInt) == 4 ? 'mumps' : "
+                                                   "'superlu_dist'); Python users hit "
+                                                   'the same wall at runtime when '
+                                                   'their conda-forge build was '
+                                                   'compiled with '
+                                                   '--with-64-bit-indices. Source: '
+                                                   'cpp/demo/mixed_poisson/main.cpp:345-348.',
+                                    'Signal': '[Solver] dolfinx generators that '
+                                              'hardcode '
+                                              "petsc_options={'pc_factor_mat_solver_type': "
+                                              "'mumps', ...} (used in fracture, "
+                                              'nearly_incompressible_elasticity, '
+                                              'stokes_darcy, hyperelasticity, '
+                                              'helmholtz, reaction_diffusion, '
+                                              'mixed_poisson, and others) will FAIL on '
+                                              'a PETSc build with 64-bit indices '
+                                              '(--with-64-bit-indices, '
+                                              'sizeof(PetscInt) == 8). MUMPS does not '
+                                              'support 64-bit indices and PETSc raises '
+                                              "a runtime error like 'PCFactor: matrix "
+                                              'solver type mumps does not support '
+                                              "64-bit integers' / 'MatSolverType for "
+                                              "serial is not '. Diagnostic: `python -c "
+                                              '"from petsc4py import PETSc; '
+                                              'print(PETSc.IntType)"` returns int64 vs '
+                                              'int32. Workaround: switch to '
+                                              "'superlu_dist' (or 'pastix' / "
+                                              "'mkl_pardiso' if available) in "
+                                              'petsc_options, OR rebuild PETSc with '
+                                              'the default 32-bit indices. The '
+                                              'canonical compile-time dispatch from '
+                                              'the C++ mixed_poisson demo (line '
+                                              '345-348) is `sizeof(PetscInt) == 4 ? '
+                                              "'mumps' : 'superlu_dist'` — a runtime "
+                                              "Python equivalent is `'superlu_dist' if "
+                                              'PETSc.IntType().itemsize == 8 else '
+                                              "'mumps'`. Plus: 'mumps' requires the "
+                                              'PETSc build to have actually configured '
+                                              'MUMPS (--download-mumps); a 32-bit '
+                                              "PETSc without MUMPS gives 'Could not "
+                                              "locate solver type mumps' at runtime — "
+                                              'separate failure mode. (File walk '
+                                              'cpp/demo/mixed_poisson/main.cpp '
+                                              '2026-06-03.)'},
+ 'cross_mesh_interpolation': {'description': 'Non-matching-mesh interpolation: take a '
+                                             'Function on one mesh and evaluate it '
+                                             'onto a Function on a DIFFERENT mesh '
+                                             '(e.g., tet→hex transfer, mesh '
+                                             'convergence studies on independent '
+                                             'meshes, decoupled multiphysics with '
+                                             'separate meshes per field). Source: '
+                                             'cpp/demo/interpolation_different_meshes/main.cpp '
+                                             '+ Python wrappers '
+                                             'dolfinx.fem.create_interpolation_data '
+                                             'and Function.interpolate_nonmatching.',
+                              'python_api': {'step_1_build_pointownership': 'data = '
+                                                                            'dolfinx.fem.create_interpolation_data(V_to, '
+                                                                            'V_from, '
+                                                                            'cells, '
+                                                                            'padding=1e-14). '
+                                                                            'V_to is '
+                                                                            'the '
+                                                                            'TARGET '
+                                                                            'FunctionSpace '
+                                                                            '(the one '
+                                                                            'receiving '
+                                                                            'values), '
+                                                                            'V_from is '
+                                                                            'the '
+                                                                            'SOURCE. '
+                                                                            'cells is '
+                                                                            'the INT32 '
+                                                                            'array of '
+                                                                            'TARGET '
+                                                                            'mesh cell '
+                                                                            'indices '
+                                                                            'to '
+                                                                            'interpolate '
+                                                                            'onto '
+                                                                            '(typically '
+                                                                            'all '
+                                                                            'cells: '
+                                                                            '`np.arange(cell_map.size_local '
+                                                                            '+ '
+                                                                            'cell_map.num_ghosts, '
+                                                                            'dtype=np.int32)`). '
+                                                                            'padding '
+                                                                            '(default '
+                                                                            '1e-14) is '
+                                                                            'the '
+                                                                            'geometric '
+                                                                            'tolerance '
+                                                                            'for '
+                                                                            'point-in-cell '
+                                                                            'ownership '
+                                                                            'tests.',
+                                             'step_2_interpolate': 'u_to.interpolate_nonmatching(u_from, '
+                                                                   'cells, '
+                                                                   'interpolation_data=data). '
+                                                                   'NOT '
+                                                                   'u_to.interpolate(u_from) '
+                                                                   '— regular '
+                                                                   'interpolate only '
+                                                                   'works for '
+                                                                   'same-mesh '
+                                                                   'Function-to-Function '
+                                                                   'transfer.'},
+                              'Signal': '[API] FOUR common failure modes in cross-mesh '
+                                        'interpolation: (1) Calling '
+                                        'Function.interpolate(u_other_mesh) instead of '
+                                        'Function.interpolate_nonmatching(u, cells, '
+                                        'data) — the regular path tries same-mesh '
+                                        'shape-function evaluation and silently '
+                                        'produces garbage (sometimes zeros, sometimes '
+                                        'uninitialized memory) when meshes differ. No '
+                                        'clear error; the interpolated Function looks '
+                                        'plausibly-shaped but values are wrong. (2) '
+                                        'The Python create_interpolation_data default '
+                                        'padding is 1e-14 (machine-eps-tight) while '
+                                        'the C++ interpolation-different-meshes demo '
+                                        'uses 1e-8. Points lying on the geometric '
+                                        'boundary between source cells fall outside '
+                                        'any cell with the Python default and get '
+                                        'silently zeroed. For near-coincident meshes '
+                                        '(FSI fluid/solid interfaces, h-refined target '
+                                        'vs. coarser source) the 1e-8 default from the '
+                                        'C++ demo is safer; bump padding explicitly to '
+                                        '1e-10..1e-8 for boundary points. (3) The '
+                                        "`cells` argument is the TARGET mesh's cell "
+                                        "indices, NOT the source's. Common mistake: "
+                                        'passing source-mesh cells gets you garbage '
+                                        'ownership data with cells reading data they '
+                                        "don't own. (4) Argument order in "
+                                        'create_interpolation_data is (V_to, V_from, '
+                                        'cells, padding) but the '
+                                        'Function.interpolate_nonmatching signature is '
+                                        '(u_from, cells, interpolation_data) — the '
+                                        'FROM and TO directions are SWAPPED across the '
+                                        'two calls. Reading the function names instead '
+                                        'of the kwargs leads to swapped data. (File '
+                                        'walk '
+                                        'cpp/demo/interpolation_different_meshes/main.cpp '
+                                        '2026-06-03.)'},
+ 'mixed_domain_assembly': {'description': 'Co-dimension-0 mixed assembly: assemble '
+                                          'bilinear forms where trial and test spaces '
+                                          'live on DIFFERENT meshes (a parent mesh and '
+                                          'a submesh of a region of interest). Source: '
+                                          'cpp/demo/codim_0_assembly/main.cpp + '
+                                          'mixed_codim0.py.',
+                           'workflow': ['1. Mark cells with a MeshTags scalar (e.g. 2 '
+                                        'for the subregion, 1 elsewhere).',
+                                        '2. submesh, emap, v_map, g_map = '
+                                        'mesh.create_submesh(parent, tdim, subcells) — '
+                                        'RETURNS 4-TUPLE, not just submesh; the '
+                                        'EntityMap `emap` is REQUIRED for cross-mesh '
+                                        'form assembly. (Re-verified 2026-08-03: '
+                                        'dolfinx 0.10.0 returns tuple[Mesh, EntityMap, '
+                                        'EntityMap, NDArray[int32]].)',
+                                        '3. V = parent FunctionSpace, W = submesh '
+                                        'FunctionSpace.',
+                                        '4. integration_entities = '
+                                        'fem.compute_integration_domains(IntegralType.cell, '
+                                        'parent.topology, marker.find(2)).',
+                                        '5. subdomain_data = {IntegralType.cell: '
+                                        '[(<marker_id>, integration_entities)]} — '
+                                        'marker_id (e.g. 3) chosen at UFL '
+                                        "form-definition time as dx(3); it's the "
+                                        'form-side tag, NOT the MeshTags value (2 '
+                                        'above).',
+                                        '6. fem.create_form(form, [V, W], V.mesh, '
+                                        'subdomain_data, {}, {}, entity_maps=[emap]) — '
+                                        'the dolfinx 0.10 signature is '
+                                        'create_form(form, function_spaces, msh, '
+                                        'subdomains, coefficient_map, constant_map, '
+                                        'entity_maps=None). There is NO `parent_mesh=` '
+                                        'kwarg (the mesh is the 3rd POSITIONAL arg) '
+                                        'and no `coefficients=` / `constants=` kwargs '
+                                        '(they are `coefficient_map` / `constant_map`, '
+                                        'both positional-or-keyword and both '
+                                        'REQUIRED). (Signature re-verified against the '
+                                        'installed dolfinx 0.10.0 on 2026-08-03; the '
+                                        'older kwarg spelling raises TypeError.)',
+                                        'UFL-side idiom '
+                                        '(cpp/demo/codim_0_assembly/mixed_codim0.py): '
+                                        'the bilinear form is written as `a_mixed = '
+                                        'inner(p, v) * dx(domain=mesh, '
+                                        'subdomain_id=3)` with trial p on submesh W, '
+                                        'test v on parent mesh V. BOTH kwargs are '
+                                        'essential: domain=mesh picks the integration '
+                                        "domain (parent, not the trial-space's "
+                                        'submesh); subdomain_id=3 is the form-side '
+                                        'numeric tag bridged by the subdomain_data '
+                                        'dict at create_form time. The UFL file must '
+                                        'also expose a top-level `forms = [a_mixed, '
+                                        'a]` list for ffcx code generation.'],
+                           'Signal': '[API] Two distinct tag-id namespaces in '
+                                     'mixed-domain assembly that frequently confuse '
+                                     'users: (a) the MeshTags value (e.g. 2 for the '
+                                     'subregion in this demo) is what marks cells in '
+                                     'the PYTHON topology, while (b) the dx(N) marker '
+                                     "on the UFL FORM (e.g. 3 in the demo's "
+                                     'subdomain_data) is what the form expects at '
+                                     'assembly. The subdomain_data dict bridges them '
+                                     'by mapping form-tag -> (MeshTags-selected entity '
+                                     'list). Confusing the two yields either empty '
+                                     'assembly (no marker match) or an unrelated '
+                                     'subdomain getting integrated. Use distinct '
+                                     'numeric values (e.g. 2 in MeshTags, 3 in dx) '
+                                     "until you've validated the mapping. Plus: "
+                                     'dolfinx demos use '
+                                     'mesh.create_cell_partitioner(GhostMode.shared_facet, '
+                                     '2) for these mixed assemblies (extra overlap=2 '
+                                     'needed for cross-mesh entity matching). (File '
+                                     'walk cpp/demo/codim_0_assembly/main.cpp '
+                                     '2026-06-03.)'}}

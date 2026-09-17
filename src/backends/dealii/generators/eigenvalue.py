@@ -3,7 +3,7 @@
 Solves the step-36 problem (-laplacian(u) = lambda*u on the unit
 square) but WITHOUT SLEPc: conda-forge deal.II builds ship with
 neither PETSc nor SLEPc in ANY version (checked 9.1.1 and 9.3.2,
-2026-06-12), so the original SLEPcWrappers template could never
+), so the original SLEPcWrappers template could never
 compile for the most common install route. The template instead
 uses deflated inverse power iteration on deal.II's built-in serial
 SparseMatrix + SolverCG — compiles on every deal.II build, and the
@@ -261,16 +261,31 @@ KNOWLEDGE = {
     "pitfalls": [
         "[Integration] conda-forge deal.II ships WITHOUT PETSc and "
         "WITHOUT SLEPc in every version (verified on 9.1.1 and 9.3.2, "
-        "2026-06-12: config.h has '#undef DEAL_II_WITH_PETSC' and "
+        "config.h has '#undef DEAL_II_WITH_PETSC' and "
         "'#undef DEAL_II_WITH_SLEPC'). SLEPcWrappers code cannot even "
         "compile there — the slepc_solver.h include fails before any "
         "link step. Use the catalog template's deflated inverse power "
         "iteration (built-in SparseMatrix + SolverCG, works on every "
         "build) or compile deal.II from source with "
         "-DDEAL_II_WITH_PETSC=ON -DDEAL_II_WITH_SLEPC=ON for the "
-        "SLEPc path. Signal: 'fatal error: "
-        "deal.II/lac/slepc_solver.h: No such file or directory' at "
-        "compile time on a conda install.",
+        "SLEPc path. Signal: grep "
+        "$DEAL_II_DIR/include/deal.II/base/config.h for "
+        "'/* #undef DEAL_II_WITH_SLEPC */'. The COMPILER error "
+        "depends on how deal.II was installed, and the two differ: "
+        "(a) on a conda-forge PACKAGE the "
+        "header is absent -> 'fatal error: "
+        "deal.II/lac/slepc_solver.h: No such file or directory'; "
+        "(b) on a SOURCE build configured without SLEPc (the case "
+        "here) the header IS installed and includes cleanly — the "
+        "whole file body sits behind `#ifdef DEAL_II_WITH_SLEPC`, "
+        "so the failure only appears when you name a class: "
+        "\"error: 'dealii::SLEPcWrappers' has not been declared\". "
+        "Verified on deal.II 9.8. Do not use a header-not-found "
+        "compiler error as the availability test — that text would "
+        "come from the preprocessor, not from deal.II, and on a "
+        "source install it never appears; grep "
+        "$DEAL_II_DIR/include/deal.II/base/config.h for "
+        "'/* #undef DEAL_II_WITH_SLEPC */' instead.",
         "[Numerical] Inverse-power-iteration deflation must "
         "orthogonalize in the M-inner product (x -= (x' M v_j) v_j "
         "with M-normalized v_j), NOT the Euclidean one — K x = "
@@ -333,6 +348,19 @@ KNOWLEDGE = {
         "EPS::set_which_eigenpairs(EPS_TARGET_REAL) was set with "
         "target=100; the get_target_value query confirms target=100 "
         "was registered but ignored.",
+        "[Physics] RE-VERIFIED by execution on deal.II 9.8: the "
+        "catalog template (deflated inverse power iteration, built-in "
+        "SparseMatrix + SolverCG, 1089 DoFs) returns lambda = "
+        "19.7551, 49.4829, 49.4829, 79.2108, 99.3479 against the "
+        "analytic 2pi^2 = 19.7392, 5pi^2 = 49.3480 (double), "
+        "8pi^2 = 78.9568 — discretization error < 0.4%, and the "
+        "degenerate 5pi^2 pair is recovered to bit-identical "
+        "values, which is exactly the M-orthogonal-deflation and "
+        "spurious-mode behaviour the next three entries describe. "
+        "Signal: the printed lambda_1 and lambda_2 agree to all "
+        "digits (the degenerate 5pi^2 pair) and lambda_0 sits "
+        "within 0.5% of 19.7392 — if either fails, deflation or "
+        "the Dirichlet-DoF handling is wrong.",
         "[Physics] Exact eigenvalues on [0,1]^2 with zero Dirichlet "
         "BCs are lambda_mn = pi^2*(m^2 + n^2); the first few "
         "are 2 pi^2, 5 pi^2, 5 pi^2 (double), 8 pi^2. Use these "

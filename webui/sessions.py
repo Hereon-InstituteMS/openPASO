@@ -31,7 +31,7 @@ def new_session(model: str | None = None,
     return {
         "id": uuid.uuid4().hex[:12],
         "created_at": time.time(),
-        "model": model or config.DEFAULT_MODEL,
+        "model": model or config.default_model(),
         "mode": mode or config.DEFAULT_MODE,
         "mcp_servers": list(mcp_servers),
         "events": [],

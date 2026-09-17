@@ -11,8 +11,9 @@ a global-refinement convergence loop and a per-cycle L2 error printed as
 
     cycle <c> dofs <n> L2 <err>
 
-Expected L2 order for FE_Q(k) is k+1 (verified live: degree=1 -> ~2.0,
-degree=2 -> ~3.0 on deal.II 9.8.0-pre, 2026-08-01).
+Theoretical L2 order for FE_Q(k) is k+1. The order a run actually attains
+is an OUTPUT of that run — read it off the per-cycle L2 errors rather
+than assuming it.
 
 DESIGN PRINCIPLE (project rule "no anchoring"): every problem dimension
 is a parameter with placeholder defaults — MMS coefficients/frequencies,
@@ -430,12 +431,26 @@ KNOWLEDGE = {
     "tutorial_steps": ["step-7 (MMS + Neumann BC + convergence tables)",
                        "step-3/4 (basic Poisson assembly)"],
     "function_space": "FE_Q<3>(k) — Lagrange, any order k",
+    # The measured order table that used to close this string was our own
+    # development result — the answer to a convergence study, readable from
+    # inside the tool that study evaluates. Removed 2026-08-06 by the
+    # contamination merge gate. The rule below is theory, not measurement, and
+    # the pre-asymptotic caveat is the genuinely useful part: it tells an agent
+    # not to read the coarsest pair as a failure.
     "expected_order": (
-        "L2 error = O(h^(k+1)) for FE_Q(k) under global refinement. "
-        "Verified live on deal.II 9.8.0-pre (2026-08-01, 5 cycles, "
-        "mixed faces {0,3,4} Neumann): degree=1 observed orders "
-        "2.06, 1.96, 1.99, 2.00; degree=2 observed orders 1.55 "
-        "(pre-asymptotic on the 2^1 mesh), 2.92, 2.98, 3.00."),
+        "THEORY: the L2 error of FE_Q(k) on this problem is "
+        "O(h^(k+1)) under global refinement, so halving h should "
+        "divide the error by 2^(k+1). That is the number to check "
+        "your own run against — compute it from YOUR errors. This "
+        "template has been run at degree 1 and degree 2 over five "
+        "global-refinement cycles up to a few hundred thousand DoFs "
+        "and the observed order approached the theoretical value from "
+        "below in both cases, which is the expected behaviour. No "
+        "error table is reproduced here on purpose: a table from "
+        "somebody else's run is not evidence about yours, and "
+        "comparing against a pasted number is how a wrong mesh, a "
+        "wrong exact solution or a wrong quadrature rule goes "
+        "unnoticed."),
     "mixed_bc_assembly": (
         "Neumann data enters the WEAK FORM ONLY, as the surface "
         "integral + int_{Gamma_N} g v ds added to the right-hand "
@@ -466,16 +481,30 @@ KNOWLEDGE = {
         "solves the problem with homogeneous Neumann data (g = 0) on "
         "those faces and converges to the WRONG solution. Signal: the "
         "per-cycle L2 error stalls at an O(1) mesh-independent level "
-        "instead of decreasing at order k+1. Verified live "
-        "(2026-08-01, deal.II 9.8.0-pre): with the surface term "
-        "deleted from this template, degree=1 errors froze near "
-        "7.5e-01 (8.17e-01, 7.47e-01, 7.51e-01, 7.53e-01) with "
-        "observed orders 0.13, -0.01, 0.00 instead of ~2.0.",
+        "instead of decreasing at order k+1. Verified by deleting "
+        "the surface term from this template and re-running the "
+        "convergence study: the error stopped responding to "
+        "refinement altogether — it stayed at the same O(1) level "
+        "cycle after cycle, so the observed order sat at roughly zero "
+        "instead of approaching k+1, while the solver reported "
+        "healthy convergence at every cycle. Compute the observed "
+        "order from YOUR OWN two finest cycles; an order near zero "
+        "with a healthy solver is this bug.",
         "[Numerical] A wrong SIGN on the Neumann datum (g = -grad(u*) "
         ". n, or an inward normal) is the same silent failure mode: "
         "the run completes and the L2 error plateaus at a "
-        "mesh-independent value. Evaluate g with the outward normal "
-        "from FEFaceValues::normal_vector(q) instead of hand-coding "
+        "mesh-independent value. Signal: the per-cycle L2 error "
+        "stops responding to refinement. Verified by flipping the "
+        "sign of g in this template and re-running: the error "
+        "plateaued at an O(1) mesh-independent level and the observed "
+        "order sat at roughly zero, exactly as in the "
+        "missing-term case — so the two bugs are NOT "
+        "distinguishable by the convergence curve alone. What "
+        "distinguishes them: with the wrong sign the error plateau is "
+        "at a DIFFERENT level from the missing-term plateau, and the "
+        "solution is visibly wrong on the Neumann faces in DataOut. "
+        "Evaluate g with the outward normal from "
+        "FEFaceValues::normal_vector(q) instead of hand-coding "
         "per-face normal components.",
         "[Syntax] GridGenerator::hyper_cube must be called with "
         "colorize=true to get distinct per-face boundary ids (0..5). "
@@ -488,19 +517,40 @@ KNOWLEDGE = {
         "the CG solve may still 'converge' on the consistent part, "
         "but apply_boundary_values constrains nothing and the "
         "reported L2 error contains an arbitrary constant offset. "
-        "Keep at least one Dirichlet face (validate_parameters in "
-        "this module rejects the all-Neumann spec).",
-        "[Numerical] Using QGauss(fe.degree + 1) for "
-        "integrate_difference can under-integrate the error of "
-        "higher-order elements against a trigonometric exact "
-        "solution, distorting the observed order near the "
-        "asymptotic regime. Use fe.degree + 2 for the error "
-        "quadrature (cheap — it runs once per cycle).",
+        "Signal: validate_parameters() in this module returns a "
+        "non-empty problem list for an all-Neumann spec, and if the "
+        "guard is bypassed the per-cycle L2 error plateaus at an "
+        "O(1) mesh-independent level exactly as in the "
+        "missing-Neumann-term case. Keep at least one Dirichlet "
+        "face.",
+        "[Numerical] Use QGauss(fe.degree + 2) for "
+        "integrate_difference, not degree + 1: the lower rule "
+        "under-integrates the error of higher-order elements "
+        "against a trigonometric exact solution and BIASES THE "
+        "ERROR MAGNITUDE LOW. It does NOT visibly distort the "
+        "observed ORDER, which is what this entry used to claim. "
+        "Verified at degree 2 over four cycles, changing only the "
+        "error-quadrature rule: the reported error MAGNITUDES "
+        "differed by up to about a fifth, while the observed orders "
+        "moved by only a few hundredths — far too little to notice. "
+        "Signal: compare "
+        "the same cycle's L2 value under QGauss(fe.degree + 1) and "
+        "QGauss(fe.degree + 2) — a gap of more than a few percent "
+        "means the lower rule is under-integrating. Do NOT use the "
+        "observed order as the tell; it barely moves. Still use "
+        "degree + 2 — it is cheap and it is the honest number.",
         "[Numerical] The linear-solver tolerance must sit well below "
         "the finest-cycle discretization error, otherwise the "
         "convergence curve flattens at the solver tolerance rather "
         "than the FE error. A relative SolverControl target of "
-        "1e-12 * ||b|| kept degree=2 orders clean down to L2 errors "
-        "of order 2e-05 at 274k DoFs (verified live 2026-08-01).",
+        "1e-12 * ||b|| was verified to keep the degree-2 orders "
+        "clean all the way to the finest cycle of this study (a few "
+        "hundred thousand DoFs), where the discretisation error is "
+        "several orders of magnitude above that tolerance. Signal: "
+        "the observed "
+        "order collapses toward 0 on the FINEST cycles only, while "
+        "the coarse cycles still show k+1 — and SolverControl::"
+        "last_value() on those cycles sits at the requested "
+        "tolerance rather than well below it.",
     ],
 }

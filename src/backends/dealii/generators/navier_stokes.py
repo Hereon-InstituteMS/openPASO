@@ -61,10 +61,12 @@ int main()
   dof_handler.distribute_dofs(fe);
   DoFRenumbering::component_wise(dof_handler);
 
-  std::vector<types::global_dof_index> dofs_per_block(2);
   std::vector<unsigned int> block_component(dim + 1, 0);
   block_component[dim] = 1;
-  DoFTools::count_dofs_per_block(dof_handler, dofs_per_block, block_component);
+  // deal.II >= 9.2: DoFTools::count_dofs_per_block was renamed to
+  // count_dofs_per_fe_block and now RETURNS the vector.
+  const std::vector<types::global_dof_index> dofs_per_block =
+    DoFTools::count_dofs_per_fe_block(dof_handler, block_component);
   const unsigned int n_u = dofs_per_block[0], n_p = dofs_per_block[1];
   std::cout << "Navier-Stokes DOFs: u=" << n_u << " p=" << n_p << std::endl;
 
@@ -326,7 +328,13 @@ KNOWLEDGE = {
         "each solution as the next starting guess. Signal: "
         "SolverControl reports residual.l2_norm() > 1e3 on Newton "
         "iteration 1 at Re=200 from a zero initial guess, ending "
-        "in ExcMessage('iterative method failed to converge'); "
+        "in the INNER solve throwing SolverControl::NoConvergence, "
+        "whose real text is 'Iterative method reported convergence "
+        "failure in step <N>. The residual in the last step was "
+        "<R>.' — the string 'iterative method failed to converge' "
+        "this entry used to quote does not exist in deal.II, and the "
+        "Newton-level message has to be your own "
+        "AssertThrow(..., ExcMessage(...)); "
         "rerunning with the Re=100 solution stored in BlockVector "
         "as the initial guess converges in 4-6 Newton steps.",
         "[Numerical] For time-dependent: BDF2 or Crank-Nicolson "

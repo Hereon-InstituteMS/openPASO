@@ -68,9 +68,15 @@ def _python_for(backend: str) -> str:
     # Fallbacks by env name.
     home = Path.home()
     candidates = {
-        "fenics":  home / "miniconda3/envs/ofa-fenicsx/bin/python",
-        "ngsolve": home / "miniconda3/envs/ofa-ngsolve/bin/python",
-        "dune":    home / "miniconda3/envs/ofa-dune/bin/python",
+        "fenics":  next((p for p in (home / "miniconda3/envs/openpaso-fenicsx/bin/python",
+                                     home / "miniconda3/envs/ofa-fenicsx/bin/python") if p.exists()),
+                        home / "miniconda3/envs/openpaso-fenicsx/bin/python"),
+        "ngsolve": next((p for p in (home / "miniconda3/envs/openpaso-ngsolve/bin/python",
+                                     home / "miniconda3/envs/ofa-ngsolve/bin/python") if p.exists()),
+                        home / "miniconda3/envs/openpaso-ngsolve/bin/python"),
+        "dune":    next((p for p in (home / "miniconda3/envs/openpaso-dune/bin/python",
+                                     home / "miniconda3/envs/ofa-dune/bin/python") if p.exists()),
+                        home / "miniconda3/envs/openpaso-dune/bin/python"),
         "skfem":   _REPO / ".venv/bin/python",
         "kratos":  _REPO / ".venv/bin/python",
     }

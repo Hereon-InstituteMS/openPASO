@@ -1,0 +1,97 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* openPASO design tokens.
+
+   Coral is reserved: it marks openPASO's own voice and the primary action, and
+   nothing else. Depth comes from a surface ladder that moves 1.04 to 1.13 per
+   step plus one inset highlight, never from a drop shadow, because a shadow on
+   near black has no light source to fall from. */
+
+@theme {
+  --color-well:   #080B11;   /* the stage. Deliberately BELOW the page */
+  --color-canvas: #0D1117;   /* the brand dark the logo was drawn against */
+  --color-s1:     #12171F;
+  --color-s2:     #171E27;   /* default panel */
+  --color-s3:     #1D2530;
+  --color-s4:     #242E3B;   /* the only floating layer */
+
+  --color-coral:   #FF6B4A;
+  --color-coral-h: #FF8A6E;
+  --color-coral-p: #E85530;
+
+  --color-ink:     #F2F5F9;  /* 17.3:1 on canvas */
+  --color-ink2:    #E6EBF2;
+  --color-body:    #C7D0DB;
+  --color-muted:   #94A3B8;  /* 7.4:1. The floor for real text */
+  --color-graphit: #64748B;  /* 3.98:1. Eyebrows and disabled ONLY, never body */
+
+  --font-sans: "Inter Variable", Inter, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-ctl:   6px;
+  --radius-panel: 10px;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@layer base {
+  :root { color-scheme: dark; }
+  html, body, #root { background: var(--color-canvas); min-height: 100dvh; }
+  body {
+    font-family: var(--font-sans);
+    font-optical-sizing: auto;
+    color: var(--color-body);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "calt" 1, "cv05" 1, "cv08" 1;
+  }
+
+  /* Every number a solver produced is monospaced and tabular, or it reflows its
+     own width each time it changes. */
+  h1, h2, h3 { text-wrap: balance; }
+
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-coral);
+    outline-offset: 2px;
+    border-radius: var(--radius-ctl);
+  }
+
+  ::selection { background: rgb(255 107 74 / 0.32); }
+
+  .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+  .scroll::-webkit-scrollbar-thumb {
+    background: rgb(100 116 139 / 0.28); border-radius: 999px;
+  }
+}
+
+@utility line      { border-color: rgb(100 116 139 / 0.20); }
+@utility line-soft { border-color: rgb(100 116 139 / 0.12); }
+/* The only box-shadow in the system: a machined bevel catching the ambient. */
+@utility edge-top  { box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.055); }
+
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: var(--color-graphit);
+}
+
+/* Motion is motivated or it is absent, and it always collapses. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@utility border-strong { border-color: rgb(100 116 139 / 0.32); }

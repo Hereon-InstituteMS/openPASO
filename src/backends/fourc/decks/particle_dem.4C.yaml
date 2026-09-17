@@ -1,0 +1,103 @@
+# Discrete Element Method (DEM): 48 spheres settle under gravity inside a
+# closed box. The box walls are generated automatically from the binning
+# DOMAINBOUNDINGBOX (PARTICLE_WALL_SOURCE: BoundingBox), so no mesh is needed.
+PROBLEM TYPE:
+  PROBLEMTYPE: "Particle"
+IO:
+  STDOUTEVERY: 2000
+  VERBOSITY: "Standard"
+# The bin size must be at least the largest particle diameter.
+# The bounding box doubles as the rigid container.
+BINNING STRATEGY:
+  BIN_SIZE_LOWER_BOUND: 0.03
+  DOMAINBOUNDINGBOX: "-0.06 -0.06 0.0 0.06 0.06 0.2"
+PARTICLE DYNAMIC:
+  INTERACTION: "DEM"
+  DYNAMICTYPE: "VelocityVerlet"
+  RESULTSEVERY: 500
+  RESTARTEVERY: 20000
+  TIMESTEP: 2.5e-05
+  NUMSTEP: 20000
+  MAXTIME: 0.5
+  GRAVITY_ACCELERATION: "0.0 0.0 -9.81"
+  # two particle phases, each mapped to its own MAT_ParticleDEM
+  PHASE_TO_DYNLOADBALFAC: "phase1 1.0 phase2 1.0"
+  PHASE_TO_MATERIAL_ID: "phase1 1 phase2 2"
+  PARTICLE_WALL_SOURCE: "BoundingBox"
+  PARTICLE_WALL_MAT: 3
+# Contact law. REL_PENETRATION + MAX_VELOCITY fix the spring stiffness
+# k_n = 2/3*pi*r_max*rho_max*v_max^2/c^2; COEFF_RESTITUTION sets the damper.
+# Time step must stay below ~0.75*0.22*sqrt(m_min/k_n).
+PARTICLE DYNAMIC/DEM:
+  NORMALCONTACTLAW: "NormalLinearSpringDamp"
+  TANGENTIALCONTACTLAW: "TangentialLinSpringDamp"
+  MAX_RADIUS: 0.01
+  MAX_VELOCITY: 1.5
+  REL_PENETRATION: 0.05
+  COEFF_RESTITUTION: 0.6
+  DAMP_REG_FAC: 0.2
+  POISSON_RATIO: 0.3
+  FRICT_COEFF_TANG: 0.3
+  TENSION_CUTOFF: true
+  WRITE_PARTICLE_ENERGY: true
+MATERIALS:
+  - MAT: 1
+    MAT_ParticleDEM:
+      INITRADIUS: 0.01
+      INITDENSITY: 1000
+  - MAT: 2
+    MAT_ParticleDEM:
+      INITRADIUS: 0.008
+      INITDENSITY: 2500
+  - MAT: 3
+    MAT_ParticleWallDEM:
+      FRICT_COEFF_TANG: 0.3
+PARTICLES:
+  - "TYPE phase1 POS -0.0375 -0.0375 0.06"
+  - "TYPE phase1 POS -0.0125 -0.0375 0.06"
+  - "TYPE phase2 POS 0.0125 -0.0375 0.06"
+  - "TYPE phase2 POS 0.0375 -0.0375 0.06"
+  - "TYPE phase1 POS -0.0375 -0.0125 0.06"
+  - "TYPE phase1 POS -0.0125 -0.0125 0.06"
+  - "TYPE phase2 POS 0.0125 -0.0125 0.06"
+  - "TYPE phase2 POS 0.0375 -0.0125 0.06"
+  - "TYPE phase1 POS -0.0375 0.0125 0.06"
+  - "TYPE phase1 POS -0.0125 0.0125 0.06"
+  - "TYPE phase2 POS 0.0125 0.0125 0.06"
+  - "TYPE phase2 POS 0.0375 0.0125 0.06"
+  - "TYPE phase1 POS -0.0375 0.0375 0.06"
+  - "TYPE phase1 POS -0.0125 0.0375 0.06"
+  - "TYPE phase2 POS 0.0125 0.0375 0.06"
+  - "TYPE phase2 POS 0.0375 0.0375 0.06"
+  - "TYPE phase1 POS -0.0375 -0.0375 0.085"
+  - "TYPE phase1 POS -0.0125 -0.0375 0.085"
+  - "TYPE phase2 POS 0.0125 -0.0375 0.085"
+  - "TYPE phase2 POS 0.0375 -0.0375 0.085"
+  - "TYPE phase1 POS -0.0375 -0.0125 0.085"
+  - "TYPE phase1 POS -0.0125 -0.0125 0.085"
+  - "TYPE phase2 POS 0.0125 -0.0125 0.085"
+  - "TYPE phase2 POS 0.0375 -0.0125 0.085"
+  - "TYPE phase1 POS -0.0375 0.0125 0.085"
+  - "TYPE phase1 POS -0.0125 0.0125 0.085"
+  - "TYPE phase2 POS 0.0125 0.0125 0.085"
+  - "TYPE phase2 POS 0.0375 0.0125 0.085"
+  - "TYPE phase1 POS -0.0375 0.0375 0.085"
+  - "TYPE phase1 POS -0.0125 0.0375 0.085"
+  - "TYPE phase2 POS 0.0125 0.0375 0.085"
+  - "TYPE phase2 POS 0.0375 0.0375 0.085"
+  - "TYPE phase1 POS -0.0375 -0.0375 0.11"
+  - "TYPE phase1 POS -0.0125 -0.0375 0.11"
+  - "TYPE phase2 POS 0.0125 -0.0375 0.11"
+  - "TYPE phase2 POS 0.0375 -0.0375 0.11"
+  - "TYPE phase1 POS -0.0375 -0.0125 0.11"
+  - "TYPE phase1 POS -0.0125 -0.0125 0.11"
+  - "TYPE phase2 POS 0.0125 -0.0125 0.11"
+  - "TYPE phase2 POS 0.0375 -0.0125 0.11"
+  - "TYPE phase1 POS -0.0375 0.0125 0.11"
+  - "TYPE phase1 POS -0.0125 0.0125 0.11"
+  - "TYPE phase2 POS 0.0125 0.0125 0.11"
+  - "TYPE phase2 POS 0.0375 0.0125 0.11"
+  - "TYPE phase1 POS -0.0375 0.0375 0.11"
+  - "TYPE phase1 POS -0.0125 0.0375 0.11"
+  - "TYPE phase2 POS 0.0125 0.0375 0.11"
+  - "TYPE phase2 POS 0.0375 0.0375 0.11"

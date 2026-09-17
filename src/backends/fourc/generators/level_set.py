@@ -115,88 +115,83 @@ class LevelSetGenerator(BaseGenerator):
             },
             "pitfalls": [
                 (
-                    "[Input] DIFFUSIVITY should be 0 for a "
-                    "STANDARD level-set advection. Signal: "
-                    "adding any diffusion (DIFFUSIVITY > 0) "
-                    "smears the interface — visible "
-                    "thickening of the |phi| = 0 isoline "
-                    "over time, with smearing width "
-                    "proportional to sqrt(D*t). The level-"
-                    "set physics is pure advection, so "
-                    "diffusion changes the physics (not "
-                    "just numerics). (Audit 2026-06-02.)"
+                    '[Input] DIFFUSIVITY in the MAT_scatra material should be 0 for '
+                    'a standard level-set advection: any diffusion smears the '
+                    'interface and changes the physics, not just the numerics. '
+                    'Signal: 4C never warns about this. A run with and a run '
+                    'without diffusion both complete normally and both reach their '
+                    'result test; the only difference is that the diffused field is '
+                    'flatter at the interface, so the discrepancy shows up solely '
+                    'against a reference solution. Note that some upstream '
+                    'level-set decks are convection-DIFFUSION test cases whose '
+                    'non-zero DIFFUSIVITY is intentional, so do not copy it '
+                    'blindly. (Audit 2026-06-02; corrected by execution '
+                    '2026-08-06.)'
                 ),
                 (
-                    "[Numerical] Reinitialization is "
-                    "ESSENTIAL for long-time simulations — "
-                    "without it the level-set degrades and "
-                    "loses its signed-distance property. "
-                    "Signal: in a PROBLEMTYPE: Level_Set / "
-                    "SCALAR TRANSPORT DYNAMIC run, "
-                    "|grad(phi)| at the interface drifts "
-                    "away from 1 (>2 or <0.5) within ~50 "
-                    "time steps; interface location in the "
-                    ".pvd shows visible deformation errors > "
-                    "5%. Set LEVELSET CONTROL: "
-                    "REINITIALIZATION: signed_distance_function "
-                    "and REINITINTERVAL ~10 to restore the "
-                    "SDF. (Audit 2026-06-02.)"
+                    '[Numerical] Reinitialisation is essential for long runs, or '
+                    'the level-set field loses its signed-distance property. The '
+                    'section is LEVEL-SET CONTROL with the sub-section LEVEL-SET '
+                    'CONTROL/REINITIALIZATION, holding REINITIALIZATION, '
+                    'REINIT_INITIAL, REINITINTERVAL, REINITBAND and '
+                    'REINITBANDWIDTH. Signal: writing LEVELSET CONTROL without the '
+                    'hyphen is rejected as not a valid section name, and the enum '
+                    'is case-sensitive: the lower-case spelling '
+                    'signed_distance_function fails with '
+                    "'possible values: "
+                    "EllipticEq|None|Signed_Distance_Function|Sussman'. Use "
+                    'Signed_Distance_Function or EllipticEq exactly as spelled. '
+                    '(Audit 2026-06-02; corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Input] VELOCITYFIELD MUST be "
-                    "specified. For prescribed velocity use "
-                    "'function' with VELFUNCNO pointing to "
-                    "the velocity FUNCT. Signal: omitting "
-                    "VELOCITYFIELD defaults to ZERO — no "
-                    "advection, the interface STAYS PUT "
-                    "even with non-zero time stepping; "
-                    "level-set field appears time-"
-                    "independent. Set VELOCITYFIELD: "
-                    "function + VELFUNCNO: N. (Audit "
-                    "2026-06-02.)"
+                    '[Input] VELOCITYFIELD in SCALAR TRANSPORT DYNAMIC must be '
+                    "'function' with VELFUNCNO pointing at the velocity FUNCT. For "
+                    'PROBLEMTYPE Level_Set that is the ONLY accepted value, and '
+                    'omitting it does not quietly default to a stationary '
+                    'interface. Signal: levelset_dyn checks the value before '
+                    "anything is built and throws 'Other velocity fields than a "
+                    'field given by a function not yet supported for level-set '
+                    "problems' from 4C_levelset_dyn.cpp; 'Navier_Stokes' hits the "
+                    'same throw. The run never reaches a time step, so there is no '
+                    'time-independent field to notice. (Audit 2026-06-02; corrected '
+                    'by execution 2026-08-06.)'
                 ),
                 (
-                    "[Numerical] Stabilisation (SUPG) is "
-                    "important for advection-dominated "
-                    "level-set transport. Use DEFINITION_TAU: "
-                    "'Taylor_Hughes_Zarins' for robust "
-                    "stabilisation. Signal: STABTYPE: "
-                    "no_stabilization on a high-Pe level-"
-                    "set transport produces ringing across "
-                    "element edges (5-10% amplitude that "
-                    "does not damp). Taylor-Hughes-Zarins "
-                    "is the de-facto standard for "
-                    "advection-dominated scatra. (Audit "
-                    "2026-06-02.)"
+                    '[Numerical] Stabilisation matters for advection-dominated '
+                    'level-set transport; the default STABTYPE: SUPG with '
+                    'DEFINITION_TAU: Taylor_Hughes_Zarins is what the upstream '
+                    'level-set decks rely on. Signal: the failure mode of STABTYPE: '
+                    'no_stabilization is NOT visible ringing. The run completes, '
+                    'produces no NaN, and returns values that differ from the '
+                    'stabilised reference by well under the several percent usually '
+                    'quoted for oscillations, so it can only be caught by comparing '
+                    'against a reference rather than by eyeballing the field. '
+                    '(Audit 2026-06-02; corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Input] Initial level-set field should "
-                    "ideally be a SIGNED DISTANCE FUNCTION. "
-                    "If not, set REINIT_INITIAL: true to fix "
-                    "it before the first time step. Signal: "
-                    "an initial phi = (x - 0.5)^2 (not a "
-                    "SDF) gives wrong |grad(phi)| at the "
-                    "interface from t=0; interface velocity "
-                    "is wrong by factor of |grad(phi)|. "
-                    "Either initialise as a true SDF or "
-                    "enable REINIT_INITIAL. (Audit "
-                    "2026-06-02.)"
+                    '[Input] The initial level-set field should be a signed '
+                    'distance function. If it is not, set REINIT_INITIAL: true in '
+                    'LEVEL-SET CONTROL/REINITIALIZATION to correct it before the '
+                    'first time step. Signal: without it the raw initial field is '
+                    'used exactly as written, so a field whose gradient magnitude '
+                    'is not 1 produces nodal values scaled by that same wrong '
+                    'gradient, and every interface-position result is off by the '
+                    'corresponding factor. 4C prints no warning about the gradient '
+                    'or the missing signed-distance property. (Audit 2026-06-02; '
+                    'corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Numerical] CFL condition: time step "
-                    "must be small relative to mesh size "
-                    "and velocity magnitude to prevent "
-                    "oscillations. Signal: TIMESTEP in "
-                    "SCALAR TRANSPORT DYNAMIC set with dt > "
-                    "h / max(|u|) gives O(1) overshoots at "
-                    "the interface even when STABTYPE: SUPG "
-                    "with DEFINITION_TAU: "
-                    "Taylor_Hughes_Zarins is active — "
-                    "interface velocity exceeds one element "
-                    "per step, breaking upwind stability. "
-                    "Safety factor 0.5 * h / max(|u|) is "
-                    "conservative; CFL=1 is the strict "
-                    "bound. (Audit 2026-06-02.)"
+                    '[Numerical] Keep the time step small relative to element size '
+                    "over velocity for accuracy, but not for stability: 4C's scalar "
+                    'transport is implicit, so there is no upwind stability bound '
+                    'to break and no O(1) overshoot to look for. Signal: taking the '
+                    'same end time in far fewer, larger steps completes normally, '
+                    'produces no NaN, and prints no CFL or Courant warning of any '
+                    'kind, while every pinned value ends up BELOW the reference. '
+                    'The large step damps the profile rather than making it '
+                    'oscillate, which is why only a step-size study or a reference '
+                    'solution exposes it. (Audit 2026-06-02; corrected by execution '
+                    '2026-08-06.)'
                 ),
             ],
             "typical_experiments": [

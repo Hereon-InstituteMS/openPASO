@@ -26,7 +26,7 @@ from core.backend import (
 from core.registry import register_backend
 from .generators import GENERATORS, KNOWLEDGE
 
-logger = logging.getLogger("oasis.dune")
+logger = logging.getLogger("openpaso.dune")
 
 # Cache for the verified dune.fem interpreter. Probing candidates spawns a
 # subprocess per candidate (`import dune.fem`, up to 30 s each), so we only
@@ -34,12 +34,25 @@ logger = logging.getLogger("oasis.dune")
 # (used by tests).
 _DUNE_PYTHON_CACHE: dict = {}
 
+# THIS MESSAGE USED TO RECOMMEND A COMMAND TWO OTHER SERVED PASSAGES CALL
+# IMPOSSIBLE. It said `conda create -n ofa-dune -c conda-forge dune-fem`,
+# while _setup.py says that command "cannot succeed" and server.py says
+# "conda-forge has NO dune-fem package". An agent hits this text at exactly
+# the moment DUNE has failed, so it is the worst place in the codebase to
+# spend its budget on a command that cannot work.
 _DUNE_INSTALL_HINT = (
-    "dune.fem not importable in any candidate Python. "
-    "Try: conda create -n ofa-dune -c conda-forge dune-fem\n"
-    "Or point OASiS at an existing install:\n"
+    "dune.fem not importable in any candidate Python.\n"
+    "Install from PyPI, which is the working source — conda-forge has no "
+    "dune-fem package:\n"
+    "  pip install dune-fem mpi4py    (mpi4py is an undeclared dependency; "
+    "without it the first import stops)\n"
+    "Or point openPASO at an existing install:\n"
     "  DUNE_PYTHON=/path/to/env/bin/python   (explicit interpreter)\n"
-    "  DUNE_CONDA_PREFIX=/path/to/env        (conda env root)")
+    "  DUNE_CONDA_PREFIX=/path/to/env        (conda env root)\n"
+    "DUNE JIT-compiles C++ on first use, so a fresh install is slow before it "
+    "is fast. A cache built against a different Python fails at USE, not at "
+    "import: `import dune.fem` succeeds and the first grid dies with "
+    "'undefined symbol'. Remove ~/.cache/dune-py to rebuild it.")
 
 
 def _reset_dune_python_cache():
@@ -57,7 +70,7 @@ def _find_dune_python() -> Optional[str]:
 
     DUNE-fem is heavy enough that users typically install it into a
     dedicated conda env (ofa-dune is the convention mirroring
-    ofa-fenicsx / ofa-dealii). The MCP server runs in the oasis .venv
+    ofa-fenicsx / ofa-dealii). The MCP server runs in the openpaso .venv
     which usually does NOT have dune.fem.
 
     Resolution order:
@@ -121,7 +134,16 @@ def _find_dune_python() -> Optional[str]:
     for python in ordered:
         try:
             result = subprocess.run(
-                [python, "-c", "import dune.fem; print('OK')"],
+                # The probe must BUILD a JIT module, not just import the
+                # package. A conda env with a broken C-ABI passes
+                # `import dune.fem` with rc=0 and then raises
+                # 'undefined symbol: PyThreadState_GetUnchecked' the
+                # moment a generated module loads — so openPASO selected the
+                # poisoned interpreter (priority 0) over the working venv
+                # (priority 99, never reached) and four coupled runs died
+                # on it. structuredGrid triggers the JIT path.
+                [python, "-c", "from dune.grid import structuredGrid; "
+             "structuredGrid([0,0],[1,1],[2,2]); print('OK')"], stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=30,
             )
             if result.returncode == 0:
@@ -148,7 +170,7 @@ def _interpreter_prefix(python: str) -> str:
     import subprocess
     try:
         out = subprocess.run(
-            [python, "-c", "import sys; print(sys.prefix)"],
+            [python, "-c", "import sys; print(sys.prefix)"], stdin=subprocess.DEVNULL,
             capture_output=True, text=True, timeout=15,
         )
         if out.returncode == 0 and out.stdout.strip():
@@ -252,6 +274,19 @@ class DuneBackend(SolverBackend):
                 template_variants=["2d"],
             ),
             PhysicsCapability(
+                name="poisson_mms",
+                description=(
+                    "3D variable-coefficient Poisson manufactured-solution "
+                    "(MMS) convergence family — -div(kappa grad u) = f on "
+                    "[0,L]^3, affine kappa, exact Dirichlet data, uniform "
+                    "refinement with per-level L2/H1 error lines; "
+                    "theoretical L2 order k+1 / H1 order k"),
+                spatial_dims=[3],
+                element_types=["Lagrange-P1", "Lagrange-P2",
+                               "Lagrange-P3", "Lagrange-P4"],
+                template_variants=["3d_varcoeff"],
+            ),
+            PhysicsCapability(
                 name="heat",
                 description="Steady heat conduction (UFL)",
                 spatial_dims=[2],
@@ -289,6 +324,14 @@ class DuneBackend(SolverBackend):
             PhysicsCapability(
                 name="dg_advection",
                 description="DG method for pure advection equation (upwind flux)",
+                spatial_dims=[2],
+                element_types=["DG-Lagrange-P1", "DG-Lagrange-P2"],
+                template_variants=["2d"],
+            ),
+            PhysicsCapability(
+                name="dg_advection_diffusion",
+                description=("Steady advection-diffusion with upwind flux and "
+                             "SIPG diffusion on triangles"),
                 spatial_dims=[2],
                 element_types=["DG-Lagrange-P1", "DG-Lagrange-P2"],
                 template_variants=["2d"],
@@ -407,9 +450,30 @@ class DuneBackend(SolverBackend):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(work_dir),
                 env=_dune_subprocess_env(python),
+                start_new_session=True,
             )
             # DUNE JIT compiles on first run — can be slow
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+            # TIMEOUT MUST KILL THE SOLVER, AND THE WHOLE GROUP. Without this, a
+            # timed-out solve kept running forever: wait_for() abandoned the
+            # process but never terminated it, and a sweep found one such
+            # solver 3.2 CPU-hours later at 100%% of a core, its MPI daemon
+            # (orted) beside it. start_new_session puts the solver and every child
+            # it spawns into their own process group, so one killpg reaps MPI
+            # ranks too — the same idiom precice_config.py already uses, for the
+            # same reason. The kill re-raises, so each backend's own TimeoutError
+            # handling below is unchanged.
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                import os as _os, signal as _signal
+                try:
+                    _os.killpg(proc.pid, _signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                await proc.wait()
+                raise
+
             job.elapsed = time.time() - start
             job.return_code = proc.returncode
             job.pid = proc.pid

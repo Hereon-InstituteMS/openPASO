@@ -1,4 +1,4 @@
-# OASiS — Project Instructions
+# openPASO — Project Instructions
 
 ## How to Handle Complex Simulation Tasks
 

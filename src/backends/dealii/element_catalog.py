@@ -15,7 +15,7 @@ canonical descriptions, three places to maintain. For an LLM agent
 retrieving multiple physics in one call (the post-mortem
 breadcrumbs path already does this) the contradictions confuse
 canonical semantics with use-case applicability. Splitting them
-restores Open-FEM-Agent Principle 1 (generality over specificity):
+restores openPASO design Principle 1 (generality over specificity):
 the canonical layer is general, the applicability layer is
 specific, the diff tool checks canonical existence against the
 source scan ignoring applicability noise.
@@ -39,6 +39,23 @@ class ElementRecord:
     aliases: tuple = field(default_factory=tuple)
 
 
+# Re-verified by execution on deal.II 9.8.0-pre: one program
+# instantiates EVERY user-facing record below, in 2D and (where the
+# element exists in 3D) in 3D, and prints its degree, dofs_per_cell,
+# component count, conformity, reference cell and support-point
+# flags. It compiles and runs; the values recorded in the semantics
+# fields come from that run.
+#
+# COUNT DISCIPLINE. This header used to say "the 39 remaining records
+# each compiled and instantiated". There were 38, and 5 of them
+# (FE_Poly, FE_PolyFace, FE_PolyTensor, FE_Q_Base, FE_DGVector) are
+# template base classes with constructor == "(internal)" that CANNOT
+# be instantiated at all — so the sentence was wrong twice over. Do
+# not write a count here by hand; len(ELEMENTS) is the count, and the
+# instantiable ones are those whose constructor is not "(internal)".
+# FE_Base and FE_Series were REMOVED because no such classes exist
+# (see below).
+#
 # Each record's `name` MUST exactly match the class name as it
 # appears in the deal.II source scan (`scripts/scan_results/
 # dealii.json` -> ``elements:``) so the catalog-vs-scan diff can
@@ -114,22 +131,36 @@ ELEMENTS: dict[str, ElementRecord] = {
     "FE_RannacherTurek": ElementRecord(
         name="FE_RannacherTurek",
         header="deal.II/fe/fe_rannacher_turek.h",
-        math_space="H1",
-        semantics=("P1 non-conforming element on quads/hexes. "
-                   "Locking-free for nearly-incompressible "
-                   "elasticity (Poisson ratio approaching 0.5); "
-                   "inf-sup stable on quads when paired with FE_DGQ(0) "
-                   "pressure."),
-        constructor="FE_RannacherTurek<dim>()",
+        math_space="L2",
+        semantics=("Rannacher-Turek non-conforming element on "
+                   "quads/hexes; continuity only in the face-mean "
+                   "sense, so deal.II reports "
+                   "conforming_space == Conformity::L2, NOT H1 "
+                   "(verified by instantiation — this record "
+                   "claimed H1 until then). Locking-free for nearly-"
+                   "incompressible elasticity; inf-sup stable on quads "
+                   "when paired with FE_DGQ(0) pressure. CAVEAT: "
+                   "has_support_points() is false, so "
+                   "VectorTools::interpolate_boundary_values cannot be "
+                   "used on it (segfaults on a Release build) — use "
+                   "VectorTools::project_boundary_values instead."),
+        constructor=("FE_RannacherTurek<dim>(unsigned int order = 0, "
+                     "unsigned int n_face_support_points = 2)"),
     ),
     "FE_P1NC": ElementRecord(
         name="FE_P1NC",
         header="deal.II/fe/fe_p1nc.h",
-        math_space="H1",
-        semantics=("Park-Sheen non-conforming P1; like FE_RannacherTurek "
-                   "but on different reference shape. Same locking-"
-                   "free property for incompressible-limit elasticity."),
-        constructor="FE_P1NC<dim>()",
+        math_space="L2",
+        semantics=("Park-Sheen non-conforming P1 on 2D quads. Same "
+                   "locking-free property as FE_RannacherTurek for "
+                   "incompressible-limit elasticity. deal.II reports "
+                   "conforming_space == Conformity::L2 (this record "
+                   "claimed H1). NOT a class "
+                   "template: it is declared "
+                   "`class FE_P1NC : public FiniteElement<2, 2>` and "
+                   "`FE_P1NC<2>()` fails to compile with "
+                   "'dealii::FE_P1NC is not a template'."),
+        constructor="FE_P1NC()   # no template argument, 2D only",
     ),
     "FE_SimplexP": ElementRecord(
         name="FE_SimplexP",
@@ -320,11 +351,14 @@ ELEMENTS: dict[str, ElementRecord] = {
     "FE_BernardiRaugel": ElementRecord(
         name="FE_BernardiRaugel",
         header="deal.II/fe/fe_bernardi_raugel.h",
-        math_space="H1",
+        math_space="H(div)",
         semantics=("Vector-valued Lagrange enriched with edge "
                    "bubbles. Inf-sup stable when paired with "
                    "piecewise-constant pressure — a cheap "
-                   "alternative to Taylor-Hood Q2/Q1 for Stokes."),
+                   "alternative to Taylor-Hood Q2/Q1 for Stokes. "
+                   "deal.II classifies it as Conformity::Hdiv "
+                   "(verified by instantiation; this record said H1). "
+                   "Only degree 1 is implemented."),
         constructor="FE_BernardiRaugel<dim>(unsigned int degree)",
     ),
     "FE_Enriched": ElementRecord(
@@ -357,10 +391,14 @@ ELEMENTS: dict[str, ElementRecord] = {
     "FE_TraceQ": ElementRecord(
         name="FE_TraceQ",
         header="deal.II/fe/fe_trace.h",
-        math_space="H(1/2)",
+        math_space="L2",
         semantics=("Trace of FE_Q onto the cell skeleton — continuous "
                    "across faces, used as Lagrange-multiplier space "
-                   "in mortar / hybridised methods."),
+                   "in mortar / hybridised methods. Mathematically an "
+                   "H^{1/2} trace space, but deal.II reports "
+                   "conforming_space == Conformity::L2 (measured "
+                   "verified by instantiation); this record used to advertise the "
+                   "non-existent math_space value 'H(1/2)'."),
         constructor="FE_TraceQ<dim>(unsigned int degree)",
     ),
     "FE_Nothing": ElementRecord(
@@ -373,17 +411,122 @@ ELEMENTS: dict[str, ElementRecord] = {
                    "a solid region of an FSI problem."),
         constructor="FE_Nothing<dim>()",
     ),
+    # ── Simplex / wedge / pyramid cells (3D transition meshes) ───
+    # Every record below was instantiated and its reported reference
+    # cell, conformity and support-point flags recorded. They need
+    # QGaussSimplex quadrature and an explicitly-passed
+    # MappingFE(FE_SimplexP(1)); see the "simplex" block in the
+    # essentials knowledge.
+    "FE_SimplexDGP": ElementRecord(
+        name="FE_SimplexDGP",
+        header="deal.II/fe/fe_simplex_p.h",
+        math_space="L2",
+        semantics=("Discontinuous complete-polynomial element on "
+                   "simplices (triangle in 2D, tetrahedron in 3D). "
+                   "Reports Conformity::L2 and reference cell Tri / "
+                   "Tet; has point support, so its DoFs are nodal. "
+                   "The DG counterpart of FE_SimplexP."),
+        constructor="FE_SimplexDGP<dim>(unsigned int degree)",
+        version_added="9.3",
+    ),
+    "FE_SimplexP_Bubbles": ElementRecord(
+        name="FE_SimplexP_Bubbles",
+        header="deal.II/fe/fe_simplex_p_bubbles.h",
+        math_space="H1",
+        semantics=("Continuous simplex Lagrange enriched with "
+                   "interior bubble functions — the simplex analogue "
+                   "of FE_Q_Bubbles, used for inf-sup stability in "
+                   "mixed formulations (MINI-type pairs)."),
+        constructor="FE_SimplexP_Bubbles<dim>(unsigned int degree)",
+        version_added="9.3",
+    ),
+    "FE_WedgeP": ElementRecord(
+        name="FE_WedgeP",
+        header="deal.II/fe/fe_wedge_p.h",
+        math_space="H1",
+        semantics=("Continuous element on WEDGE (triangular-prism) "
+                   "3D cells. Exists only for dim==3; reports "
+                   "reference cell Wedge and Conformity::H1, and has "
+                   "point support. Used in transition meshes between "
+                   "hexahedral and tetrahedral regions, and for "
+                   "extruded triangular surface meshes."),
+        constructor="FE_WedgeP<3>(unsigned int degree)",
+        version_added="9.3",
+    ),
+    "FE_WedgeDGP": ElementRecord(
+        name="FE_WedgeDGP",
+        header="deal.II/fe/fe_wedge_p.h",
+        math_space="L2",
+        semantics=("Discontinuous counterpart of FE_WedgeP on wedge "
+                   "cells; reports Conformity::L2."),
+        constructor="FE_WedgeDGP<3>(unsigned int degree)",
+        version_added="9.3",
+    ),
+    "FE_PyramidP": ElementRecord(
+        name="FE_PyramidP",
+        header="deal.II/fe/fe_pyramid_p.h",
+        math_space="H1",
+        semantics=("Continuous element on PYRAMID (square-base) 3D "
+                   "cells. Exists only for dim==3; reports reference "
+                   "cell Pyramid and Conformity::H1, and has point "
+                   "support. The other half of a hex-to-tet "
+                   "transition layer, together with FE_WedgeP."),
+        constructor="FE_PyramidP<3>(unsigned int degree)",
+        version_added="9.3",
+    ),
+    "FE_PyramidDGP": ElementRecord(
+        name="FE_PyramidDGP",
+        header="deal.II/fe/fe_pyramid_p.h",
+        math_space="L2",
+        semantics=("Discontinuous counterpart of FE_PyramidP on "
+                   "pyramid cells; reports Conformity::L2."),
+        constructor="FE_PyramidDGP<3>(unsigned int degree)",
+        version_added="9.3",
+    ),
+    # ── Other classes present in the library but previously absent ─
+    "FE_Hermite": ElementRecord(
+        name="FE_Hermite",
+        header="deal.II/fe/fe_hermite.h",
+        math_space="H2",
+        semantics=("Hermite-interpolation element on hypercubes: "
+                   "carries derivative degrees of freedom, so it is "
+                   "C1 across faces. deal.II reports "
+                   "Conformity::H2, NOT H1 — which is why it is the "
+                   "element for fourth-order problems (biharmonic, "
+                   "Cahn-Hilliard) where an H1 element would need an "
+                   "interior-penalty or mixed reformulation. "
+                   "has_support_points() is FALSE, so use "
+                   "VectorTools::project_boundary_values, never "
+                   "interpolate_boundary_values."),
+        constructor="FE_Hermite<dim>(unsigned int degree)",
+        version_added="9.5",
+    ),
+    "FE_NedelecNodal": ElementRecord(
+        name="FE_NedelecNodal",
+        header="deal.II/fe/fe_nedelec_nodal.h",
+        math_space="H(curl)",
+        semantics=("Nedelec edge element with a nodal-interpolation "
+                   "degree-of-freedom setup, an alternative to the "
+                   "moment-based default. Convenient when coupling "
+                   "against nodal H(curl) data from another code."),
+        constructor="FE_NedelecNodal<dim>(unsigned int order)",
+        version_added="9.7",
+    ),
     # ── Internal / template base classes (not user-instantiable) ─
     # These appear in the scan but a community user should NOT pick
     # them directly; the catalog records them with a clear
     # `is_user_facing = False` so retrieval can filter them out.
-    "FE_Base": ElementRecord(
-        name="FE_Base",
-        header="deal.II/fe/fe_base.h",
-        math_space="Internal",
-        semantics=("Template base class; not user-instantiable."),
-        constructor="(internal)",
-    ),
+    #
+    # REMOVED 2026-08-03 after an execution pass on deal.II 9.8.0-pre:
+    #   * "FE_Base"   — no such class. `deal.II/fe/fe_base.h` is a
+    #     deprecated one-line shim that emits
+    #     DEAL_II_WARNING("This file is deprecated. Use
+    #     deal.II/fe/fe_data.h instead.") and declares nothing;
+    #     `FE_Base<2>()` fails with "'FE_Base' was not declared".
+    #   * "FE_Series" — no such class either. `fe_series.h` declares
+    #     the NAMESPACE `FESeries` (holding FESeries::Fourier and
+    #     FESeries::Legendre, both verified to compile); "FE_Series"
+    #     is a name that never existed.
     "FE_Poly": ElementRecord(
         name="FE_Poly",
         header="deal.II/fe/fe_poly.h",
@@ -424,14 +567,6 @@ ELEMENTS: dict[str, ElementRecord] = {
                    "Nedelec} family; not user-instantiable directly."),
         constructor="(internal)",
     ),
-    "FE_Series": ElementRecord(
-        name="FE_Series",
-        header="deal.II/fe/fe_series.h",
-        math_space="Internal",
-        semantics=("Internal helper class for series-expansion-based "
-                   "error estimation; not a finite element type."),
-        constructor="(internal)",
-    ),
 }
 
 
@@ -460,14 +595,21 @@ _GG = "deal.II/grid/grid_generator.h"
 MESH_GENERATORS: dict[str, MeshGeneratorRecord] = {
     "hyper_cube": MeshGeneratorRecord(
         name="hyper_cube", header=_GG,
-        signature="GridGenerator::hyper_cube(Triangulation<dim>&, double a, double b)",
+        signature="GridGenerator::hyper_cube(Triangulation<dim, spacedim>&, double left = 0., double right = 1., bool colorize = false)",
         semantics="Axis-aligned cube [a,b]^dim. Smallest canonical "
-                  "domain; one cell, refine globally."),
+                  "domain; one cell, refine globally. colorize=true "
+                  "assigns per-face boundary ids 0..2*dim-1 "
+                  "(2D {0,1,2,3}, 3D {0,...,5}); the default "
+                  "colorize=false puts every face on id 0 (measured "
+                  "verified by instantiation on deal.II 9.8)."),
     "hyper_rectangle": MeshGeneratorRecord(
         name="hyper_rectangle", header=_GG,
-        signature="GridGenerator::hyper_rectangle(Triangulation<dim>&, const Point<dim>& p1, const Point<dim>& p2)",
+        signature="GridGenerator::hyper_rectangle(Triangulation<dim, spacedim>&, const Point<dim>& p1, const Point<dim>& p2, bool colorize = false)",
         semantics="Axis-aligned box from p1 to p2. Aspect ratio "
-                  "control; one cell."),
+                  "control; one cell. Like hyper_cube it needs "
+                  "colorize=true for per-face ids — the default "
+                  "yields get_boundary_ids() == {0} (measured "
+                  "verified by instantiation on deal.II 9.8)."),
     "subdivided_hyper_cube": MeshGeneratorRecord(
         name="subdivided_hyper_cube", header=_GG,
         signature="GridGenerator::subdivided_hyper_cube(Triangulation<dim>&, unsigned int n, double a, double b)",
@@ -527,7 +669,11 @@ MESH_GENERATORS: dict[str, MeshGeneratorRecord] = {
     "cylinder": MeshGeneratorRecord(
         name="cylinder", header=_GG,
         signature="GridGenerator::cylinder(Triangulation<dim>&, double radius, double half_length)",
-        semantics="Circular cylinder (3D only — extruded disk)."),
+        semantics="Circular cylinder — an extruded disk in 3D "
+                  "(10 cells, ids {0,1,2}). NOT 3D-only: the 2D "
+                  "instantiation compiles and produces a single "
+                  "rectangular cell with ids {0,1,2} (measured "
+                  "verified by instantiation; this record used to say '3D only')."),
     "cylinder_shell": MeshGeneratorRecord(
         name="cylinder_shell", header=_GG,
         signature="GridGenerator::cylinder_shell(Triangulation<dim>&, double length, double inner_radius, double outer_radius, ...)",

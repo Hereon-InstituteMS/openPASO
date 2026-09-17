@@ -23,7 +23,7 @@ from core.backend import (
 )
 from core.registry import register_backend
 
-logger = logging.getLogger("oasis.fenics")
+logger = logging.getLogger("openpaso.fenics")
 
 # Conda environment with dolfinx
 _CONDA_PREFIX = os.environ.get("FENICS_CONDA_PREFIX", "")
@@ -83,7 +83,7 @@ def _find_fenics_python() -> Optional[Path]:
     import subprocess
     try:
         r = subprocess.run(
-            [sys.executable, "-c", "import dolfinx"],
+            [sys.executable, "-c", "import dolfinx"], stdin=subprocess.DEVNULL,
             capture_output=True, timeout=5,
         )
         if r.returncode == 0:
@@ -335,7 +335,7 @@ class FenicsBackend(SolverBackend):
         import subprocess
         try:
             result = subprocess.run(
-                [str(python), "-c", "import dolfinx; print(dolfinx.__version__)"],
+                [str(python), "-c", "import dolfinx; print(dolfinx.__version__)"], stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
@@ -442,7 +442,7 @@ class FenicsBackend(SolverBackend):
         import subprocess
         try:
             r = subprocess.run(
-                [str(python), "-c", "import dolfinx; print(dolfinx.__version__)"],
+                [str(python), "-c", "import dolfinx; print(dolfinx.__version__)"], stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, timeout=10
             )
             return r.stdout.strip() if r.returncode == 0 else None
@@ -459,7 +459,7 @@ class FenicsBackend(SolverBackend):
             import subprocess
             p = _find_fenics_python()
             if p:
-                r = subprocess.run([str(p), "-c", "import dolfinx; print(dolfinx.__version__)"],
+                r = subprocess.run([str(p), "-c", "import dolfinx; print(dolfinx.__version__)"], stdin=subprocess.DEVNULL,
                                    capture_output=True, text=True, timeout=5)
                 if r.returncode == 0:
                     ver = r.stdout.strip()
@@ -469,8 +469,18 @@ class FenicsBackend(SolverBackend):
                         "- NonlinearProblem requires petsc_options_prefix kwarg\n"
                         "- Use problem.solve() directly, NOT separate NewtonSolver\n"
                         "- LinearProblem also requires petsc_options_prefix\n"
-                        "- element.interpolation_points is a property, not a method\n"
+                        # 2026-08-03 adversarial re-verification against dolfinx
+                        # 0.10.0 / basix 0.10.0: `interpolation_points` is NOT an
+                        # attribute of a basix.ufl element at all any more (neither
+                        # property nor method) — AttributeError:
+                        # '_BasixElement' object has no attribute
+                        # 'interpolation_points'. The points now live on the
+                        # wrapped basix element as the `points` property.
+                        "- element has NO .interpolation_points in basix 0.10; "
+                        "use element.basix_element.points (ndarray property)\n"
                         "- For VTU output use VTXWriter or XDMFFile, read with pyvista (not meshio)\n"
+                        "- fem.assemble_scalar returns the RANK-LOCAL value; wrap "
+                        "in comm.allreduce(..., op=MPI.SUM) for a global norm\n"
                     )
         except Exception:
             pass
@@ -581,8 +591,29 @@ class FenicsBackend(SolverBackend):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(work_dir),
+                start_new_session=True,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+
+            # TIMEOUT MUST KILL THE SOLVER, AND THE WHOLE GROUP. Without this, a
+            # timed-out solve kept running forever: wait_for() abandoned the
+            # process but never terminated it, and a sweep found one such
+            # solver 3.2 CPU-hours later at 100%% of a core, its MPI daemon
+            # (orted) beside it. start_new_session puts the solver and every child
+            # it spawns into their own process group, so one killpg reaps MPI
+            # ranks too — the same idiom precice_config.py already uses, for the
+            # same reason. The kill re-raises, so each backend's own TimeoutError
+            # handling below is unchanged.
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            except asyncio.TimeoutError:
+                import os as _os, signal as _signal
+                try:
+                    _os.killpg(proc.pid, _signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                await proc.wait()
+                raise
+
             job.elapsed = time.time() - start
             job.return_code = proc.returncode
             job.pid = proc.pid

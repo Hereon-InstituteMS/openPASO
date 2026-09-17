@@ -35,33 +35,52 @@ class XFEMFluidGenerator(BaseGenerator):
                 "two-phase fronts.  Instead, the approximation space is "
                 "enriched with discontinuous shape functions along the "
                 "interface.  The interface geometry is defined either by a "
-                "level-set function (XFLUID DYNAMIC/LEVEL SET) or by an "
-                "embedded boundary mesh (cutter mesh).  The PROBLEM TYPE is "
-                "'Fluid_XFEM'.  The main dynamics section is 'XFLUID DYNAMIC' "
-                "which contains XFEM-specific parameters such as the "
-                "integration scheme for cut elements, ghost-penalty "
-                "stabilisation, and the interface coupling method "
-                "(Nitsche, penalty).  Standard FLUID DYNAMIC settings "
+                "level-set function (a FUNCT referenced through "
+                "LEVELSETFIELDNO from a DESIGN XFEM LEVELSET ... VOL "
+                "CONDITIONS block) or by an embedded boundary mesh (cutter "
+                "mesh: a separate structure discretisation carrying DESIGN "
+                "XFEM WEAK DIRICHLET SURF CONDITIONS and DESIGN XFEM "
+                "DISPLACEMENT SURF CONDITIONS with a common COUPLINGID).  "
+                "The PROBLEM TYPE is 'Fluid_XFEM'.  There is NO section "
+                "called 'XFLUID DYNAMIC'.  The XFEM settings are split over "
+                "two real top-level sections: 'XFEM GENERAL' (cut and "
+                "integration scheme, Gmsh debug output) and 'XFLUID "
+                "DYNAMIC/STABILIZATION' (interface coupling method, Nitsche "
+                "penalty, ghost penalty).  'XFLUID DYNAMIC/GENERAL' holds "
+                "the XFEM time-integration and fluid-fluid options.  These "
+                "slash-joined names are single literal top-level YAML keys, "
+                "not nested maps.  Standard FLUID DYNAMIC settings "
                 "(time integration, stabilisation) are also required.  "
-                "Elements use FLUID HEX8 or FLUID TET4 with NA: Euler."
+                "Elements use FLUID HEX8 or FLUID TET4 with NA: Euler.  "
+                "Result tests use RESULT DESCRIPTION entries named XFLUID, "
+                "not FLUID."
             ),
             "required_sections": [
                 "PROBLEM TYPE",
                 "PROBLEM SIZE",
                 "FLUID DYNAMIC",
-                "XFLUID DYNAMIC",
+                "XFEM GENERAL",
+                "XFLUID DYNAMIC/STABILIZATION",
                 "SOLVER 1",
                 "MATERIALS",
             ],
             "optional_sections": [
-                "XFLUID DYNAMIC/STABILIZATION",
-                "XFLUID DYNAMIC/GHOST PENALTY",
+                "XFLUID DYNAMIC/GENERAL",
+                "CUT GENERAL",
                 "FLUID DYNAMIC/RESIDUAL-BASED STABILIZATION",
+                "FLUID DYNAMIC/EDGE-BASED STABILIZATION",
                 "FLUID DYNAMIC/NONLINEAR SOLVER TOLERANCES",
                 "IO",
                 "IO/RUNTIME VTK OUTPUT",
                 "IO/RUNTIME VTK OUTPUT/FLUID",
-                "LEVEL SET GEOMETRY",
+                # Interface declaration -- one of these, NOT a geometry section:
+                "DESIGN XFEM LEVELSET WEAK DIRICHLET VOL CONDITIONS",
+                "DESIGN XFEM LEVELSET NEUMANN VOL CONDITIONS",
+                "DESIGN XFEM LEVELSET NAVIER SLIP VOL CONDITIONS",
+                "DESIGN XFEM WEAK DIRICHLET SURF CONDITIONS",
+                "DESIGN XFEM DISPLACEMENT SURF CONDITIONS",
+                "DESIGN XFEM NEUMANN SURF CONDITIONS",
+                "DESIGN XFEM NAVIER SLIP SURF CONDITIONS",
             ],
             "materials": {
                 "MAT_fluid": {
@@ -111,101 +130,137 @@ class XFEMFluidGenerator(BaseGenerator):
             },
             "xfem_parameters": {
                 "COUPLING_METHOD": (
-                    "Interface coupling: 'Nitsche' (weakly enforced, "
-                    "recommended) or 'penalty'.  Nitsche preserves "
-                    "consistency; penalty is simpler but less accurate."
+                    "In XFLUID DYNAMIC/STABILIZATION.  Interface coupling "
+                    "method.  The ONLY accepted values are 'Nitsche' "
+                    "(default, recommended), 'Hybrid_LM_Cauchy_stress' and "
+                    "'Hybrid_LM_viscous_stress'.  There is no 'penalty' "
+                    "option: 4C rejects it with 'Could not match this "
+                    "input' and lists the three legal values."
+                ),
+                "NIT_STAB_FAC": (
+                    "In XFLUID DYNAMIC/STABILIZATION.  The Nitsche penalty "
+                    "factor (default 35), with NIT_STAB_FAC_TANG for the "
+                    "tangential term.  Dimensionless: 4C applies the "
+                    "viscous and element-size scaling itself through "
+                    "VISC_STAB_TRACE_ESTIMATE and VISC_STAB_HK.  There is "
+                    "no NITSCHE_PENALTY_PARAMETER key anywhere in 4C."
                 ),
                 "GHOST_PENALTY": (
                     "Ghost-penalty stabilisation for small cut elements.  "
                     "Controls ill-conditioning caused by elements with "
-                    "very small cut volumes.  GHOST_PENALTY_FAC sets the "
-                    "scaling."
+                    "very small cut volumes.  All of its keys live in "
+                    "XFLUID DYNAMIC/STABILIZATION -- there is no "
+                    "'XFLUID DYNAMIC/GHOST PENALTY' section.  The keys are "
+                    "GHOST_PENALTY_STAB, GHOST_PENALTY_FAC, "
+                    "GHOST_PENALTY_TRANSIENT_STAB (note the _STAB suffix), "
+                    "GHOST_PENALTY_TRANSIENT_FAC, GHOST_PENALTY_2nd_STAB, "
+                    "GHOST_PENALTY_2nd_FAC, GHOST_PENALTY_2nd_STAB_NORMAL, "
+                    "GHOST_PENALTY_PRESSURE_2nd_FAC and "
+                    "GHOST_PENALTY_ADD_INNER_FACES.  All default to false "
+                    "or to a small factor, so ghost penalty is OFF unless "
+                    "you switch it on."
                 ),
                 "VOLUME_GAUSS_POINTS_BY": (
-                    "Integration scheme for cut elements: "
-                    "'Tessellation' (subdivide into sub-cells) or "
-                    "'MomentFitting' (moment-fitting quadrature)."
+                    "In XFEM GENERAL (NOT in any XFLUID DYNAMIC section).  "
+                    "Integration scheme for cut volume cells: "
+                    "'Tessellation' (default, subdivide into sub-cells), "
+                    "'DirectDivergence' (divergence-theorem quadrature) or "
+                    "'MomentFitting'.  Use Tessellation or "
+                    "DirectDivergence -- see the MomentFitting pitfall "
+                    "below.  BOUNDARY_GAUSS_POINTS_BY, same section and "
+                    "same three values, controls the boundary cells."
                 ),
             },
             "pitfalls": [
                 (
-                    "[Input] XFEM fluid does NOT use ALE mesh motion. "
-                    " The mesh is fixed (Eulerian) and the interface "
-                    "cuts through elements.  Do not include ALE "
-                    "DYNAMIC. Signal: parser warns `ALE DYNAMIC "
-                    "ignored under XFEM` or runtime "
-                    "`incompatible ALE+XFEM combination`; if ALE is "
-                    "active, the velocity field includes a "
-                    "non-physical mesh-displacement contribution. "
-                    "(Audit 2026-06-02.)"
+                    '[Input] XFEM fluid does NOT use ALE mesh motion. The mesh is '
+                    'fixed (Eulerian) and the interface cuts through elements. An '
+                    'ALE DYNAMIC section is NOT rejected, though: 4C reads it, '
+                    'ignores it, and says nothing, so the deck runs and reproduces '
+                    'the Eulerian answer. What does break is asking the fluid '
+                    'ELEMENT block for ALE kinematics. Signal: with NA: ALE the run '
+                    "parses and then aborts at the first assembly with 'Cannot find "
+                    "state {} in discretization {}' from "
+                    '4C_fem_discretization.hpp:1849 -- rendered as Cannot find '
+                    'state dispnp in discretization fluid, a missing-state message that '
+                    'names neither XFEM nor ALE. Keep NA: Euler; do not expect a '
+                    'warning about a leftover ALE DYNAMIC block. (Audit 2026-06-02; '
+                    'corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Numerical] Ghost-penalty stabilisation is "
-                    "critical for cut elements with very small volume "
-                    "fractions.  Without it, the system matrix "
-                    "becomes severely ill-conditioned or singular. "
-                    "Signal: linear solver fails on cut-cell time "
-                    "steps with `Belos: condition number > 1e16` or "
-                    "`solver diverged after 0 iterations`; the cut "
-                    "fraction at the failing step is < 1e-3. (Audit "
-                    "2026-06-02.)"
+                    '[Numerical] Ghost-penalty stabilisation matters for cut '
+                    'elements with very small volume fractions, but its absence is '
+                    'an ACCURACY failure, not a solver failure. Signal: with '
+                    'GHOST_PENALTY_STAB: false (or GHOST_PENALTY_FAC: 0.0) the run '
+                    "completes its Newton loop, reaches 'Checking results of N "
+                    "tests' and reports different values; no condition number is "
+                    'printed, no factorisation fails, and a direct solver such as '
+                    "UMFPACK is untroubled. There is no 'Belos: condition number' "
+                    "or 'solver diverged after 0 iterations' message in 4C. Detect "
+                    'this by comparing against a reference, not by watching the '
+                    'solver. (Audit 2026-06-02; corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Input] The interface must be described either "
-                    "by a level-set field or a cutter boundary mesh. "
-                    " If neither is provided, no XFEM enrichment is "
-                    "applied and the solution reverts to standard "
-                    "FEM. Signal: result matches a standard "
-                    "(non-enriched) reference exactly, with no jump "
-                    "in pressure/velocity at the expected interface "
-                    "location; XFEM diagnostic prints `0 enriched "
-                    "elements`. (Audit 2026-06-02.)"
+                    '[Input] The interface must be described by a level-set field '
+                    'or a cutter boundary mesh. If no XFEM coupling condition is '
+                    'present, 4C does NOT fall back to standard FEM. Signal: it '
+                    "aborts in Cut::CutWizard::safety_checks with 'You have to call "
+                    "PrepareCut() before you can call the Cut-routine' from "
+                    '4C_cut_cutwizard.cpp, before any time step completes, so no '
+                    'result test is reached and there is no non-enriched answer to '
+                    'compare with. 4C prints no count of enriched elements at any '
+                    'point. (Audit 2026-06-02; corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Input] For two-phase problems, two fluid "
-                    "materials must be defined -- one for each side "
-                    "of the interface.  The XFEM framework selects "
-                    "the correct material based on the sign of the "
-                    "level-set function. Signal: 4C aborts with "
-                    "`XFEM: material map needs MAT_NEGATIVE and "
-                    "MAT_POSITIVE` or the two-phase problem behaves "
-                    "as single-phase (density/viscosity uniform "
-                    "across the interface). (Audit 2026-06-02.)"
+                    '[Input] Two-phase level-set XFEM is not configured through a '
+                    'material map. DESIGN XFEM LEVELSET TWOPHASE VOL CONDITIONS '
+                    'takes only E, COUPLINGID, LEVELSETFIELDNO, BOOLEANTYPE and '
+                    'COMPLEMENTARY -- there are no MAT_NEGATIVE or MAT_POSITIVE '
+                    'keys anywhere in 4C, and adding them is rejected as unmatched '
+                    'condition input. Signal: a correctly spelled two-phase '
+                    'condition parses and then dies in Element::location_vector '
+                    "with 'wrong number of nodes' from 4C_fem_general_element.cpp; "
+                    'the only upstream decks that mention the condition leave it as '
+                    'an empty list. Treat two-phase XFEM as unavailable rather than '
+                    'mis-specified. (Audit 2026-06-02; corrected by execution '
+                    '2026-08-06.)'
                 ),
                 (
-                    "[Numerical] Cut elements require special "
-                    "integration rules.  The VOLUME_GAUSS_POINTS_BY "
-                    "parameter controls this.  'Tessellation' is "
-                    "more robust; 'MomentFitting' is more efficient "
-                    "but may fail for complex cut geometries. "
-                    "Signal: MomentFitting failures show runtime "
-                    "warning `MomentFitting did not converge for "
-                    "element X — falling back to Tessellation` or "
-                    "NaN residual on a cut step; switching to "
-                    "Tessellation removes the warning. (Audit "
-                    "2026-06-02.)"
+                    '[Numerical] Cut elements need a special integration rule, '
+                    'chosen with VOLUME_GAUSS_POINTS_BY. Tessellation and '
+                    'DirectDivergence are the usable values. Signal: MomentFitting '
+                    'does not warn and does not fall back -- it terminates the '
+                    'process with SIGSEGV inside '
+                    'Core::FE::GaussPointsComposite::num_points, so the log ends '
+                    'with the MPI runtime\'s signal block naming a segmentation '
+                    'fault, signal 11, and no 4C-level '
+                    'diagnostic at all. If a cut run dies without a PROC 0 ERROR '
+                    'block, check this key first. (Audit 2026-06-02; corrected by '
+                    'execution 2026-08-06.)'
                 ),
                 (
-                    "[Numerical] The Nitsche penalty parameter "
-                    "(NITSCHE_PENALTY_PARAMETER) must be large "
-                    "enough to enforce the interface condition but "
-                    "not so large that it causes ill-conditioning. "
-                    " Typical values are O(10)--O(100). Signal: too "
-                    "low -> interface jump condition violation > 5% "
-                    "(visible discontinuity offset in post-"
-                    "processing); too high -> linear-solver "
-                    "condition number > 1e14, Newton stalls. "
-                    "(Audit 2026-06-02.)"
+                    '[Numerical] The Nitsche penalty knob is NIT_STAB_FAC in XFLUID '
+                    'DYNAMIC/STABILIZATION (default 35), with NIT_STAB_FAC_TANG for '
+                    'the tangential term; the viscous scaling by element size is '
+                    'applied internally through VISC_STAB_TRACE_ESTIMATE and '
+                    'VISC_STAB_HK. There is no NITSCHE_PENALTY_PARAMETER key. '
+                    "Signal: the wrong name fails with 'Could not match this input' "
+                    "and 4C lists the section's real keys, including NIT_STAB_FAC. "
+                    'Mis-setting the real key gives wrong results rather than a '
+                    'solver stall, and on problems the space reproduces exactly it '
+                    "changes nothing, because Nitsche's method is consistent. "
+                    '(Audit 2026-06-02; corrected by execution 2026-08-06.)'
                 ),
                 (
-                    "[Output] Output for XFEM problems may produce "
-                    "multiple VTU files (one per sub-domain).  Use "
-                    "appropriate post-processing to visualise the "
-                    "enriched fields. Signal: visualize('list') "
-                    "shows fluid_subdomain_0-*.vtu, "
-                    "fluid_subdomain_1-*.vtu rather than a single "
-                    "fluid-*.vtu; loading just one of them shows "
-                    "only half the domain. (Audit 2026-06-02.)"
+                    '[Output] An XFEM fluid writes NO VTU files, per sub-domain or '
+                    'otherwise. Signal: with IO/RUNTIME VTK OUTPUT and IO/RUNTIME '
+                    'VTK OUTPUT/FLUID enabled, a plain Fluid problem produces '
+                    'fluid-*.vtu plus a .pvd, while the same configuration on a '
+                    'Fluid_XFEM problem produces neither, exits 0, and never '
+                    'mentions that the requested output was skipped. Read XFEM '
+                    'results from the legacy Ensight .result file, or set '
+                    'OUTPUT_GMSH with GMSH_SOL_OUT and read the Gmsh .pos files. '
+                    '(Audit 2026-06-02; corrected by execution 2026-08-06.)'
                 ),
             ],
             "typical_experiments": [
@@ -271,8 +326,12 @@ class XFEMFluidGenerator(BaseGenerator):
             #   node_set 2 = outlet
             #   node_set 3 = walls (no-slip)
             #
-            # Cutter/level-set: a separate boundary mesh or level-set
-            #   function defining the interface geometry.
+            # Cutter mesh: a SECOND file holding the boundary mesh, read as
+            #   the structure discretisation, with
+            #   element_block 1 = cutter body (HEX8)
+            #   node_set 1 = the cutting surface
+            #   (or drop it entirely and describe the interface with a
+            #   level-set FUNCT instead -- see the note at STRUCTURE GEOMETRY)
             # ---------------------------------------------------------------
             TITLE:
               - "3-D XFEM fluid -- generated template"
@@ -306,16 +365,27 @@ class XFEMFluidGenerator(BaseGenerator):
               CHARELELENGTH_PC: "root_of_volume"
 
             # == XFEM-specific settings =========================================
-            XFLUID DYNAMIC:
-              COUPLING_METHOD: "<coupling_method>"
+            # 'XFLUID DYNAMIC' is NOT a section on its own -- 4C aborts with
+            # "Section 'XFLUID DYNAMIC' is not a valid section name."  The real
+            # top-level keys are the slash-joined literals below, written as
+            # ONE key each (not nested maps).  Cut/integration settings live in
+            # the separate 'XFEM GENERAL' section.  There is no
+            # 'XFLUID DYNAMIC/GHOST PENALTY' section either: the ghost-penalty
+            # keys are part of XFLUID DYNAMIC/STABILIZATION.
+            XFEM GENERAL:
+              # Tessellation | DirectDivergence  (MomentFitting segfaults)
               VOLUME_GAUSS_POINTS_BY: "<volume_integration_scheme>"
               BOUNDARY_GAUSS_POINTS_BY: "<boundary_integration_scheme>"
-              NITSCHE_PENALTY_PARAMETER: <nitsche_penalty_parameter>
-              MAXITER_XFEM: <xfem_max_iterations>
-            XFLUID DYNAMIC/GHOST PENALTY:
+            XFLUID DYNAMIC/STABILIZATION:
+              # Nitsche | Hybrid_LM_Cauchy_stress | Hybrid_LM_viscous_stress
+              COUPLING_METHOD: "<coupling_method>"
+              # Nitsche penalty factor (default 35).  There is no
+              # NITSCHE_PENALTY_PARAMETER key in 4C.
+              NIT_STAB_FAC: <nitsche_penalty_factor>
+              NIT_STAB_FAC_TANG: <nitsche_penalty_factor_tangential>
               GHOST_PENALTY_STAB: true
               GHOST_PENALTY_FAC: <ghost_penalty_factor>
-              GHOST_PENALTY_TRANSIENT: true
+              GHOST_PENALTY_TRANSIENT_STAB: true
               GHOST_PENALTY_TRANSIENT_FAC: <ghost_penalty_transient_factor>
 
             # == Solver =========================================================
@@ -330,18 +400,31 @@ class XFEMFluidGenerator(BaseGenerator):
                 MAT_fluid:
                   DYNVISCOSITY: <fluid_dynamic_viscosity>
                   DENSITY: <fluid_density>
+              # Cutter (boundary-mesh) material -- the cutter is a structure
+              # discretisation, so it needs a structural material even when it
+              # only ever prescribes the interface geometry.
+              - MAT: <cutter_material_id>
+                MAT_Struct_StVenantKirchhoff:
+                  YOUNG: <cutter_Young_modulus>
+                  NUE: <cutter_Poisson_ratio>
+                  DENS: <cutter_density>
 
             # == Boundary Conditions ============================================
 
-            # Fluid: inlet velocity
+            # Fluid: inlet velocity.
+            # ENTITY_TYPE is REQUIRED whenever the geometry comes from a mesh
+            # FILE: without it 4C aborts with "legacy_id condition N uses
+            # legacy_id entity type but no legacy entities were defined".
             DESIGN SURF DIRICH CONDITIONS:
-              - E: <inlet_face_id>
+              - E: <inlet_node_set_id>
+                ENTITY_TYPE: "node_set_id"
                 NUMDOF: 4
                 ONOFF: [1, 1, 1, 0]
                 VAL: [<inlet_velocity_x>, <inlet_velocity_y>, <inlet_velocity_z>, 0.0]
                 FUNCT: [<inlet_ramp_function>, 0, 0, 0]
               # Fluid: no-slip walls
-              - E: <wall_face_id>
+              - E: <wall_node_set_id>
+                ENTITY_TYPE: "node_set_id"
                 NUMDOF: 4
                 ONOFF: [1, 1, 1, 0]
                 VAL: [0.0, 0.0, 0.0, 0.0]
@@ -361,12 +444,52 @@ class XFEMFluidGenerator(BaseGenerator):
                       MAT: 1
                       NA: Euler
 
-            # Cutter boundary mesh (defines the embedded interface)
-            XFEM BOUNDARY GEOMETRY:
+            # Cutter boundary mesh (defines the embedded interface).
+            # There is no 'XFEM BOUNDARY GEOMETRY' section -- 4C aborts with
+            # "Section 'XFEM BOUNDARY GEOMETRY' is not a valid section name."
+            # The cutter is an ordinary STRUCTURE discretisation; what makes it
+            # an XFEM interface is the coupling CONDITION below, not the
+            # geometry section.  (Alternative, needing no second mesh: drop
+            # this block and declare the interface as a level set -- a FUNCT
+            # whose zero iso-surface is the interface, referenced by
+            # LEVELSETFIELDNO from a DESIGN XFEM LEVELSET WEAK DIRICHLET VOL
+            # CONDITIONS entry on the fluid volume.)
+            STRUCTURE GEOMETRY:
               FILE: "<cutter_mesh_file>"
+              ELEMENT_BLOCKS:
+                - ID: 1
+                  SOLID:
+                    HEX8:
+                      MAT: <cutter_material_id>
+                      KINEM: nonlinear
 
+            # The interface itself: weak (Nitsche) Dirichlet on the cutter
+            # surface, plus how that surface moves.  Both blocks must carry the
+            # SAME COUPLINGID.  Without an XFEM coupling condition 4C does not
+            # fall back to standard FEM -- it aborts inside the cut wizard.
+            DESIGN XFEM WEAK DIRICHLET SURF CONDITIONS:
+              - E: <cutter_surface_node_set_id>
+                ENTITY_TYPE: "node_set_id"
+                COUPLINGID: 1
+                NUMDOF: 3
+                ONOFF: [1, 1, 1]
+                VAL: [<interface_velocity_x>, <interface_velocity_y>, <interface_velocity_z>]
+                FUNCT: [0, 0, 0]
+            DESIGN XFEM DISPLACEMENT SURF CONDITIONS:
+              - E: <cutter_surface_node_set_id>
+                ENTITY_TYPE: "node_set_id"
+                COUPLINGID: 1
+                EVALTYPE: "zero"
+                NUMDOF: 3
+                ONOFF: [0, 0, 0]
+                VAL: [0.0, 0.0, 0.0]
+                FUNCT: [0, 0, 0]
+
+            # Result tests on an XFEM fluid are named XFLUID, not FLUID.  A
+            # 'FLUID' entry parses but is never run: 4C then aborts with
+            # "expected N tests but performed 0".
             RESULT DESCRIPTION:
-              - FLUID:
+              - XFLUID:
                   DIS: "fluid"
                   NODE: <result_node_id>
                   QUANTITY: "velx"
@@ -408,19 +531,28 @@ class XFEMFluidGenerator(BaseGenerator):
                     f"DENSITY must be a positive number, got {density!r}."
                 )
 
-        # Check Nitsche penalty parameter
-        nitsche = params.get("NITSCHE_PENALTY_PARAMETER")
-        if nitsche is not None:
+        # Reject the fabricated Nitsche key outright: 4C has no such
+        # parameter and would abort with "Could not match this input".
+        if params.get("NITSCHE_PENALTY_PARAMETER") is not None:
+            issues.append(
+                "NITSCHE_PENALTY_PARAMETER does not exist in 4C.  The "
+                "Nitsche penalty factor is NIT_STAB_FAC (default 35) in "
+                "XFLUID DYNAMIC/STABILIZATION, with NIT_STAB_FAC_TANG for "
+                "the tangential term."
+            )
+
+        # Check Nitsche penalty factor (the real key)
+        for key in ("NIT_STAB_FAC", "NIT_STAB_FAC_TANG"):
+            nitsche = params.get(key)
+            if nitsche is None:
+                continue
             try:
                 n = float(nitsche)
                 if n <= 0:
-                    issues.append(
-                        f"NITSCHE_PENALTY_PARAMETER must be > 0, got {n}."
-                    )
+                    issues.append(f"{key} must be > 0, got {n}.")
             except (TypeError, ValueError):
                 issues.append(
-                    f"NITSCHE_PENALTY_PARAMETER must be a positive number, "
-                    f"got {nitsche!r}."
+                    f"{key} must be a positive number, got {nitsche!r}."
                 )
 
         # Check ghost penalty factor
@@ -438,14 +570,35 @@ class XFEMFluidGenerator(BaseGenerator):
                     f"got {gpf!r}."
                 )
 
-        # Check coupling method
+        # Check coupling method against 4C's actual enum
         coupling = params.get("COUPLING_METHOD")
         if coupling is not None and coupling not in (
-            "Nitsche", "penalty",
+            "Nitsche", "Hybrid_LM_Cauchy_stress", "Hybrid_LM_viscous_stress",
         ):
             issues.append(
-                f"COUPLING_METHOD should be 'Nitsche' or 'penalty', "
-                f"got {coupling!r}."
+                f"COUPLING_METHOD must be one of 'Nitsche', "
+                f"'Hybrid_LM_Cauchy_stress', 'Hybrid_LM_viscous_stress', "
+                f"got {coupling!r}.  ('penalty' is not a 4C value.)"
             )
+
+        # Check cut integration scheme
+        for key in ("VOLUME_GAUSS_POINTS_BY", "BOUNDARY_GAUSS_POINTS_BY"):
+            scheme = params.get(key)
+            if scheme is None:
+                continue
+            if scheme not in ("Tessellation", "DirectDivergence", "MomentFitting"):
+                issues.append(
+                    f"{key} must be one of 'Tessellation', "
+                    f"'DirectDivergence', 'MomentFitting', got {scheme!r}.  "
+                    f"It belongs in XFEM GENERAL, not in any XFLUID DYNAMIC "
+                    f"section."
+                )
+            elif scheme == "MomentFitting":
+                issues.append(
+                    f"{key}: 'MomentFitting' terminates 4C with SIGSEGV "
+                    f"inside Core::FE::GaussPointsComposite::num_points and "
+                    f"prints no diagnostic.  Use 'Tessellation' or "
+                    f"'DirectDivergence'."
+                )
 
         return issues

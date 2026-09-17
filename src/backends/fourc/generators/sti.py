@@ -36,16 +36,19 @@ class STIGenerator(BaseGenerator):
                 "temperature dependencies.  Conversely, exothermic or "
                 "endothermic reactions in the scalar field and Joule heating "
                 "generate volumetric heat sources for the thermal field.  "
-                "The PROBLEM TYPE is 'Scalar_Thermo_Interaction'.  Required "
-                "dynamics sections are SCALAR TRANSPORT DYNAMIC and "
-                "THERMAL DYNAMIC, plus the coupling section STI DYNAMIC.  "
-                "Both fields share the same mesh (via mesh cloning from "
-                "a common discretisation)."
+                "The PROBLEM TYPE is 'Scalar_Thermo_Interaction'.  The only "
+                "dynamics section is SCALAR TRANSPORT DYNAMIC, plus the "
+                "coupling section STI DYNAMIC.  There is NO THERMAL DYNAMIC "
+                "section in an STI deck: the thermo field is a cloned scatra "
+                "discretisation, it inherits SCALAR TRANSPORT DYNAMIC's time "
+                "control, and its initial field is set by STI DYNAMIC's "
+                "THERMO_INITIALFIELD / THERMO_INITFUNCNO.  Both fields share "
+                "the same mesh (via mesh cloning from a common "
+                "discretisation)."
             ),
             "required_sections": [
                 "PROBLEM TYPE",
                 "SCALAR TRANSPORT DYNAMIC",
-                "THERMAL DYNAMIC",
                 "STI DYNAMIC",
                 "STI DYNAMIC/MONOLITHIC",
                 "SOLVER 1",
@@ -56,25 +59,41 @@ class STIGenerator(BaseGenerator):
                 "ELCH CONTROL",
                 "SCALAR TRANSPORT DYNAMIC/STABILIZATION",
                 "SCALAR TRANSPORT DYNAMIC/NONLINEAR",
+                "SCALAR TRANSPORT DYNAMIC/S2I COUPLING",
+                "STI DYNAMIC/PARTITIONED",
                 "IO/RUNTIME VTK OUTPUT",
-                "THERMAL DYNAMIC/RUNTIME VTK OUTPUT",
             ],
             "materials": {
                 "MAT_soret": {
                     "description": (
-                        "Soret material for scalar transport with "
-                        "thermodiffusion (Soret effect).  Captures the "
-                        "species flux driven by temperature gradients."
+                        "The THERMO-field material, i.e. the TAR_MAT of the "
+                        "CLONING MATERIAL MAP -- not a scalar transport "
+                        "material.  It is MAT_Fourier plus one extra "
+                        "parameter, SORET, which carries the thermodiffusion "
+                        "(Soret) coupling back into the scalar field.  Only "
+                        "MAT_soret and MAT_Fourier are accepted as clone "
+                        "targets (STI::ScatraThermoCloneStrategy::"
+                        "check_material_type in sti/4C_sti_clonestrategy.cpp); "
+                        "anything else gives 'Material with ID N is not "
+                        "compatible with cloned transport element!'."
                     ),
                     "parameters": {
-                        "DIFFUSIVITY": {
-                            "description": "Diffusion coefficient [m^2/s]",
+                        "CAPA": {
+                            "description": "Volumetric heat capacity [J/(m^3 K)]",
                             "range": "> 0",
                         },
-                        "SORET_COEFFICIENT": {
+                        "CONDUCT": {
                             "description": (
-                                "Soret coefficient S_T [1/K] controlling "
-                                "thermodiffusion"
+                                "Thermal conductivity [W/(m K)].  A YAML "
+                                "mapping, written 'constant: [value]'."
+                            ),
+                            "range": "> 0",
+                        },
+                        "SORET": {
+                            "description": (
+                                "Soret coefficient controlling "
+                                "thermodiffusion.  NOTE the spelling: the key "
+                                "is SORET, not SORET_COEFFICIENT."
                             ),
                             "range": "any (positive or negative)",
                         },
@@ -83,8 +102,9 @@ class STIGenerator(BaseGenerator):
                 "MAT_Fourier": {
                     "description": (
                         "Fourier heat conduction material for the thermal "
-                        "field.  Defines volumetric heat capacity and "
-                        "thermal conductivity."
+                        "field.  Also legal as a CLONING MATERIAL MAP target, "
+                        "but it has no SORET parameter, so a deck that uses "
+                        "it has no thermo -> scatra half of the coupling."
                     ),
                     "parameters": {
                         "CAPA": {
@@ -96,13 +116,6 @@ class STIGenerator(BaseGenerator):
                             "range": "> 0",
                         },
                     },
-                },
-                "MAT_scatra_reaction_thermo": {
-                    "description": (
-                        "Temperature-dependent reaction material for the "
-                        "scalar transport field.  Reaction rate follows "
-                        "Arrhenius kinetics with activation energy."
-                    ),
                 },
             },
             "solver": {
@@ -116,87 +129,171 @@ class STIGenerator(BaseGenerator):
                 },
             },
             "time_integration": {
-                "STI_DYNAMIC": (
-                    "Controls the coupled STI time stepping.  NUMSTEP, "
-                    "TIMESTEP, MAXTIME define the global time loop.  "
-                    "COUPALGO selects monolithic or partitioned coupling."
+                "STI DYNAMIC": (
+                    "Carries NO time control at all.  Its complete key set "
+                    "is COUPLINGTYPE, SCATRATIMINTTYPE, THERMO_CONDENSATION, "
+                    "THERMO_INITIALFIELD, THERMO_INITFUNCNO and "
+                    "THERMO_LINEAR_SOLVER.  COUPLINGTYPE (NOT 'COUPALGO', "
+                    "which belongs to SSI CONTROL and SSTI CONTROL) selects "
+                    "the scheme; its values are Monolithic, "
+                    "OneWay_ScatraToThermo, OneWay_ThermoToScatra, "
+                    "TwoWay_ScatraToThermo, TwoWay_ThermoToScatra and the "
+                    "..._Aitken / ..._Aitken_Dofsplit variants -- plain "
+                    "words, not 'sti_Monolithic'."
                 ),
-                "SCALAR_TRANSPORT_DYNAMIC": (
-                    "SOLVERTYPE: 'nonlinear' for temperature-dependent "
-                    "coefficients.  TIMESTEP should match the STI global "
-                    "time step."
+                "SCALAR TRANSPORT DYNAMIC": (
+                    "This is where the STI time loop lives: TIMESTEP, "
+                    "NUMSTEP, MAXTIME, RESULTSEVERY, RESTARTEVERY.  The "
+                    "thermo field inherits every one of them.  SOLVERTYPE: "
+                    "'nonlinear' for temperature-dependent coefficients."
                 ),
-                "THERMAL_DYNAMIC": (
-                    "DYNAMICTYPE: 'OneStepTheta' for transient thermal "
-                    "analysis or 'Statics' for steady-state thermal."
+                "THERMAL DYNAMIC": (
+                    "Do NOT write this section in an STI deck.  It is a "
+                    "valid section name, so it parses, but nothing in the "
+                    "STI code path ever reads it -- the thermo field is a "
+                    "cloned scatra discretisation, not a Thermo field.  Its "
+                    "sub-section THERMAL DYNAMIC/RUNTIME VTK OUTPUT is "
+                    "equally inert; the thermo-*.vtu files are written "
+                    "regardless."
                 ),
             },
             "pitfalls": [
                 (
-                    "[Input] CLONING MATERIAL MAP is required "
-                    "to map the scalar-transport mesh "
-                    "material to the thermal field material — "
-                    "both fields share the same geometry via "
-                    "cloning. Signal: missing CLONING "
-                    "MATERIAL MAP aborts with 'cannot clone "
-                    "material for thermo' at setup; the two "
-                    "fields cannot inherit the same mesh. "
-                    "(Audit 2026-06-02.)"
+                    "[Input] CLONING MATERIAL MAP is required: "
+                    "STI builds the thermo field by cloning "
+                    "the scatra mesh, so the pairings run "
+                    "scatra -> thermo (one per material "
+                    "group).  There is no structural field to "
+                    "map from. Signal: omitting it gives the "
+                    "shared cloning utility's generic message, "
+                    "'At least one material pairing required "
+                    "in --CLONING MATERIAL MAP.' from "
+                    "core/fem/src/general/utils/"
+                    "4C_fem_general_utils_createdis.hpp, exit "
+                    "1 -- note it names neither STI nor thermo "
+                    "and still spells the section in the "
+                    "retired --SECTION dat form. (Verified by "
+                    "execution 2026-08-06; 'cannot clone "
+                    "material for thermo' does not exist in "
+                    "4C.)"
                 ),
                 (
-                    "[Input] Temperature-dependent diffusion "
-                    "coefficients require activation via "
-                    "appropriate material models (e.g. "
-                    "temperature scaling in MAT_electrode "
-                    "or MAT_soret). Signal: without "
-                    "T-dependent diffusion, the coupling is "
-                    "ONE-WAY — temperature changes do not "
-                    "affect species diffusion, the result "
-                    "looks identical to a constant-D model. "
-                    "Use MAT_soret for Soret-effect "
-                    "thermodiffusion or temperature-scaled "
-                    "Arrhenius for electrode kinetics. "
-                    "(Audit 2026-06-02.)"
+                    "[Input] The thermo -> scatra half of the "
+                    "coupling is carried by MAT_soret's SORET "
+                    "coefficient.  A temperature-scaling "
+                    "function on the diffusion coefficient is "
+                    "NOT needed for two-way coupling: 4C's own "
+                    "monolithic STI decks leave every "
+                    "DIFF_COEF_TEMP_SCALE_FUNCT and "
+                    "COND_TEMP_SCALE_FUNCT at 0 and are still "
+                    "two-way. Signal: set SORET to 0 and the "
+                    "species field moves, not just the "
+                    "temperature -- that is the test for "
+                    "whether your coupling is live.  Use the "
+                    "temperature-scaling functions for "
+                    "Arrhenius electrode kinetics, which is a "
+                    "different effect. (Verified by execution "
+                    "2026-08-06.)"
                 ),
                 (
-                    "[Numerical] Scalar transport and thermal "
-                    "fields must use COMPATIBLE time steps. "
-                    "Signal: mismatched TIMESTEP values lead "
-                    "to temporal interpolation errors at the "
-                    "coupling — the coupled-iteration "
-                    "tolerance never converges below "
-                    "max(dt_scatra, dt_thermal) / "
-                    "min(...) factor. Set TIMESTEP equal in "
-                    "both DYNAMIC sections. (Audit "
-                    "2026-06-02.)"
+                    "[Numerical] STI has ONE time step, "
+                    "SCALAR TRANSPORT DYNAMIC's; the thermo "
+                    "field inherits it.  There is no second "
+                    "DYNAMIC section to keep in step. Signal: "
+                    "STI DYNAMIC has no TIMESTEP parameter at "
+                    "all -- and no NUMSTEP, MAXTIME, "
+                    "RESULTSEVERY, RESTARTEVERY or COUPALGO "
+                    "either; its complete key set is "
+                    "COUPLINGTYPE, SCATRATIMINTTYPE, "
+                    "THERMO_CONDENSATION, THERMO_INITIALFIELD, "
+                    "THERMO_INITFUNCNO, THERMO_LINEAR_SOLVER. "
+                    "Writing any of the others is a parse "
+                    "abort, 'Could not match this input' from "
+                    "core/io/src/4C_io_input_spec_builders.cpp "
+                    "with the STI DYNAMIC block echoed -- "
+                    "while a THERMAL DYNAMIC section with "
+                    "its own TIMESTEP and NUMSTEP is accepted, "
+                    "silently ignored, and changes nothing. "
+                    "The real hazard is that second case: a "
+                    "thermal time step you believe you set. "
+                    "(Verified by execution 2026-08-06; "
+                    "re-verified 2026-08-07 -- adding THERMAL "
+                    "DYNAMIC with TIMESTEP 12345 / NUMSTEP 999 "
+                    "to an upstream STI deck left DT at 1.0, "
+                    "the step count at 20 and all 28 result "
+                    "verdicts bit-identical.  The predicted "
+                    "interpolation error from mismatched steps "
+                    "cannot occur.)"
                 ),
                 (
-                    "[Input] Thermal Neumann BCs use "
-                    "'DESIGN SURF THERMO NEUMANN "
-                    "CONDITIONS' while scalar BCs use "
-                    "'DESIGN SURF TRANSPORT DIRICH "
-                    "CONDITIONS'. Signal: mixing them (e.g. "
-                    "putting a thermal flux under TRANSPORT "
-                    "NEUMANN) aborts with 'condition does "
-                    "not apply to this field' from "
-                    "4C_io_input_spec_builders.cpp — the "
-                    "vocabulary distinguishes by FIELD "
-                    "(THERMO vs TRANSPORT) before condition "
-                    "TYPE. (Audit 2026-06-02.)"
+                    "[Input] The thermo field is a cloned "
+                    "scatra discretisation, so its result "
+                    "checks are SCATRA entries with DIS: "
+                    "'thermo' and QUANTITY: 'phi' -- never "
+                    "THERMAL entries and never QUANTITY: "
+                    "'temp'.  This is the same reason there is "
+                    "no THERMAL DYNAMIC section. Signal: "
+                    "RESULT DESCRIPTION/THERMAL is a valid "
+                    "path, so a '- THERMAL:' block parses "
+                    "without complaint and the whole "
+                    "simulation runs to the end; only after "
+                    "the last step does it abort with "
+                    "'expected 28 tests but performed 27' from "
+                    "core/utils/src/result_test/"
+                    "4C_utils_result_test.cpp, which names "
+                    "neither THERMAL nor the field nor the "
+                    "block it skipped.  Count your result "
+                    "entries against that number to find it. "
+                    "(Verified by execution 2026-08-07 on "
+                    "sti_mono_2D_quad4_elch_s2i_"
+                    "butlervolmerpeltier_diabatic.)"
+                ),
+                (
+                    "[Input] The FIELD PREFIX in a condition "
+                    "section name silently decides which field "
+                    "gets the load.  DESIGN SURF NEUMANN, "
+                    "DESIGN SURF THERMO NEUMANN and DESIGN "
+                    "SURF TRANSPORT NEUMANN CONDITIONS are ALL "
+                    "valid section names, so nothing is "
+                    "checked when the file is read. Signal: "
+                    "moving a block between them either kills "
+                    "the run mid-solve with 'The NUMDOF you "
+                    "have entered in your TRANSPORT NEUMANN "
+                    "CONDITION does not equal the number of "
+                    "scalars.' from scatra_ele/"
+                    "4C_scatra_ele_boundary_calc.cpp -- which "
+                    "says TRANSPORT even when your section "
+                    "said THERMO, because the thermo field is "
+                    "itself a scatra discretisation -- or, "
+                    "worse, completes with NO diagnostic and a "
+                    "different answer.  Check the section "
+                    "prefix against the field you meant. "
+                    "(Verified by execution 2026-08-06; "
+                    "'condition does not apply to this field' "
+                    "is not in the binary and there is no "
+                    "parse-time field check.)"
                 ),
                 (
                     "[Input] For STI with electrochemistry, "
-                    "include ELCH CONTROL and set "
-                    "SCATRATIMINTTYPE: 'Elch' to enable "
-                    "Joule heating as a volumetric heat "
-                    "source. Signal: without these, the "
-                    "current density does not contribute "
-                    "to the thermal RHS — Joule heating "
-                    "is ZERO and temperature stays at "
-                    "initial conditions despite electrical "
-                    "activity. The thermal RHS gets "
-                    "rho_e * |J|^2 / sigma when Elch is "
-                    "enabled. (Audit 2026-06-02.)"
+                    "include ELCH CONTROL and set STI "
+                    "DYNAMIC/SCATRATIMINTTYPE: 'Elch'.  "
+                    "Neither omission degrades gracefully. "
+                    "Signal: without ELCH CONTROL, 'Invalid "
+                    "type of closing equation for electric "
+                    "potential!' from scatra_ele/"
+                    "4C_scatra_ele_parameter_elch.cpp, exit 1. "
+                    "With SCATRATIMINTTYPE left at its default "
+                    "'Standard', the run parses, builds both "
+                    "fields, writes its t=0 output and then "
+                    "dies on a raw SIGFPE -- the MPI runtime "
+                    "names the floating point exception, "
+                    "signal 8, and 4C names nothing -- while "
+                    "constructing "
+                    "ScaTraEleCalcElchElectrodeSTIThermo -- no "
+                    "PROC 0 ERROR banner, no source file, and "
+                    "SCATRATIMINTTYPE is never mentioned. "
+                    "(Verified by execution 2026-08-06; there "
+                    "is no quiet zero-Joule-heating run.)"
                 ),
             ],
             "typical_experiments": [
@@ -206,8 +303,9 @@ class STIGenerator(BaseGenerator):
                         "A domain with a temperature gradient driving "
                         "species transport via the Soret effect.  Tests "
                         "two-way coupling between thermal and scalar "
-                        "fields.  Uses monolithic STI with MAT_soret "
-                        "and MAT_Fourier."
+                        "fields.  Uses monolithic STI with MAT_scatra on "
+                        "the scalar field and MAT_soret as the cloned "
+                        "thermo material."
                     ),
                     "template_variant": "monolithic_3d",
                 },
@@ -276,11 +374,17 @@ class STIGenerator(BaseGenerator):
               INTERVAL_STEPS: <output_interval_steps>
 
             # == Scalar Transport ==============================================
+            # This is the ONLY time-control section in an STI deck.  The
+            # thermo field is a clone of this discretisation and inherits
+            # TIMESTEP / NUMSTEP / MAXTIME from here.  Do NOT add a THERMAL
+            # DYNAMIC section: it parses but is never read.
             SCALAR TRANSPORT DYNAMIC:
               SOLVERTYPE: "nonlinear"
-              TIMESTEP: <scalar_timestep>
-              NUMSTEP: <scalar_num_steps>
-              MAXTIME: <scalar_max_time>
+              TIMESTEP: <timestep>
+              NUMSTEP: <number_of_steps>
+              MAXTIME: <end_time>
+              RESULTSEVERY: <results_output_interval>
+              RESTARTEVERY: <restart_interval>
               MATID: <scalar_material_id>
               INITIALFIELD: "field_by_function"
               INITFUNCNO: <initial_scalar_function_id>
@@ -291,25 +395,18 @@ class STIGenerator(BaseGenerator):
               ITEMAX: <max_nonlinear_iterations>
               CONVTOL: <nonlinear_convergence_tolerance>
 
-            # == Thermal =======================================================
-            THERMAL DYNAMIC:
-              DYNAMICTYPE: "OneStepTheta"
-              TIMESTEP: <thermal_timestep>
-              NUMSTEP: <thermal_num_steps>
-              MAXTIME: <thermal_max_time>
-              LINEAR_SOLVER: 1
-            THERMAL DYNAMIC/RUNTIME VTK OUTPUT:
-              OUTPUT_THERMO: true
-              TEMPERATURE: true
-
             # == STI coupling ==================================================
+            # STI DYNAMIC has NO time-control keys.  Its whole key set is
+            # COUPLINGTYPE, SCATRATIMINTTYPE, THERMO_CONDENSATION,
+            # THERMO_INITIALFIELD, THERMO_INITFUNCNO, THERMO_LINEAR_SOLVER.
+            # The thermal initial condition is set HERE, not in a thermal
+            # dynamics section.
             STI DYNAMIC:
-              NUMSTEP: <number_of_steps>
-              MAXTIME: <end_time>
-              TIMESTEP: <timestep>
-              RESULTSEVERY: <results_output_interval>
-              RESTARTEVERY: <restart_interval>
-              COUPALGO: "sti_Monolithic"
+              COUPLINGTYPE: "Monolithic"
+              SCATRATIMINTTYPE: "Standard"
+              THERMO_INITIALFIELD: "field_by_function"
+              THERMO_INITFUNCNO: <initial_temperature_function_id>
+              THERMO_LINEAR_SOLVER: 1
             STI DYNAMIC/MONOLITHIC:
               LINEAR_SOLVER: 1
 
@@ -324,12 +421,15 @@ class STIGenerator(BaseGenerator):
               - MAT: 1
                 MAT_scatra:
                   DIFFUSIVITY: <diffusion_coefficient>
-              # Fourier heat conduction (thermal field)
+              # Thermo material (clone target).  MAT_soret = MAT_Fourier +
+              # SORET; the SORET coefficient IS the thermo -> scatra half of
+              # the coupling.  Note the key is SORET, not SORET_COEFFICIENT.
               - MAT: 2
-                MAT_Fourier:
+                MAT_soret:
                   CAPA: <volumetric_heat_capacity>
                   CONDUCT:
                     constant: [<thermal_conductivity>]
+                  SORET: <soret_coefficient>
 
             # Clone scalar mesh -> thermal mesh
             CLONING MATERIAL MAP:
@@ -338,9 +438,11 @@ class STIGenerator(BaseGenerator):
                 TAR_FIELD: "thermo"
                 TAR_MAT: 2
 
-            # == Initial condition function ====================================
+            # == Initial condition functions ===================================
             FUNCT<initial_scalar_function_id>:
               - SYMBOLIC_FUNCTION_OF_SPACE_TIME: "<initial_scalar_expression>"
+            FUNCT<initial_temperature_function_id>:
+              - SYMBOLIC_FUNCTION_OF_SPACE_TIME: "<initial_temperature_expression>"
 
             # == Boundary Conditions ===========================================
 
@@ -376,6 +478,11 @@ class STIGenerator(BaseGenerator):
                       MAT: 1
                       TYPE: Std
 
+            # The thermo field is a scatra discretisation, so BOTH result
+            # entries are SCATRA entries and the quantity is "phi" on both.
+            # A "- THERMAL:" entry parses but is never executed under
+            # Scalar_Thermo_Interaction and aborts the run at the end with
+            # "expected N tests but performed N-1".
             RESULT DESCRIPTION:
               - SCATRA:
                   DIS: "scatra"
@@ -383,10 +490,10 @@ class STIGenerator(BaseGenerator):
                   QUANTITY: "phi"
                   VALUE: <expected_scalar_value>
                   TOLERANCE: <result_tolerance>
-              - THERMAL:
+              - SCATRA:
                   DIS: "thermo"
                   NODE: <result_node_id>
-                  QUANTITY: "temp"
+                  QUANTITY: "phi"
                   VALUE: <expected_temperature>
                   TOLERANCE: <result_tolerance>
         """)

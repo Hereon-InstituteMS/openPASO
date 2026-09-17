@@ -1,6 +1,8 @@
 cff-version: 1.2.0
-title: "OASiS: an open-source multi-physics and multi-code framework for verified computer simulations"
-message: "If you use this software, please cite it using the metadata in this file."
+title: "openPASO: open Platform for Agentic Simulation and Optimization"
+message: >-
+  openPASO is the experimental fork. The citable, archived release is the
+  upstream OASiS project, and the DOIs below point at it. Please cite that.
 type: software
 authors:
   - family-names: Hermann
@@ -22,14 +24,15 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.20543501
     description: "Zenodo archive of v1.1.0"
-repository-code: "https://github.com/Hereon-InstituteMS/OASiS"
+repository-code: "https://github.com/Hereon-InstituteMS/openPASO"
 url: "https://github.com/Hereon-InstituteMS/OASiS"
 doi: 10.5281/zenodo.20543501
 abstract: >-
-  OASiS is an open-source Model Context Protocol (MCP) server
-  that connects general-purpose LLM coding agents to eight independently
-  developed finite element solvers (FEniCSx, deal.II, 4C Multiphysics,
-  NGSolve, scikit-fem, Kratos Multiphysics, DUNE-fem, FEBio). It exposes a
+  openPASO is an open-source Model Context Protocol (MCP) server
+  that connects general-purpose LLM coding agents to nine independently
+  developed simulation codes (FEniCSx, deal.II, 4C Multiphysics,
+  NGSolve, scikit-fem, Kratos Multiphysics, DUNE-fem, FEBio, and the
+  experimental SPARTA DSMC backend). It exposes a
   small set of shared tools for solver discovery, simulation
   preparation, mesh generation, run execution, multi-solver coupling,
   in-place solver development, and visualisation. A curated pitfall

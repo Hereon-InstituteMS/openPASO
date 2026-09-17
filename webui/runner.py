@@ -25,6 +25,7 @@ import sys
 import time
 import traceback
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -150,8 +151,13 @@ def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent"):
             return result
 
         def _run(self, *args, **kwargs):
-            return asyncio.get_event_loop().run_until_complete(
-                self._arun(*args, **kwargs))
+            # asyncio.get_event_loop() is deprecated and, from Python 3.12, raises
+            # "There is no current event loop" once anything in the process has
+            # already run asyncio.run() and closed the loop behind itself. The
+            # failure therefore depends on what ran before, which is the worst
+            # kind. asyncio.run() makes and closes its own loop, and refuses just
+            # the same as the old code did if one is already running.
+            return asyncio.run(self._arun(*args, **kwargs))
 
     return Gated()
 
@@ -163,11 +169,12 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
                             workdir: Path,
                             emitter,
                             get_mode,
-                            gate: ApprovalGate):
+                            gate: ApprovalGate,
+                            _mcp_tools=None):
     """Build a LangGraph ReAct agent with all WebUI hooks wired in.
 
     * ``model`` is a key from ``config.MODELS``. ``mock`` skips vLLM.
-    * ``mcp_on`` attaches OASiS via langchain-mcp-adapters when True.
+    * ``mcp_on`` attaches openPASO via langchain-mcp-adapters when True.
     * ``emitter`` is an async function ``(event_dict) -> None`` used to
       stream events back over the WebSocket.
     * ``get_mode`` is a callable returning the current mode string.
@@ -178,6 +185,17 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
     # ── LLM
     if model == "mock":
         llm = _mock_chat_model()
+    elif model in config.OPENROUTER_MODELS:
+        key = config.openrouter_key()
+        if not key:
+            raise ValueError(
+                "No OpenRouter key. Copy .env.example to .env and paste your "
+                "key after OPENROUTER_API_KEY=, then pick this model again.")
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            base_url=config.OPENROUTER_URL, api_key=key, model=model,
+            temperature=0.2, timeout=600,
+        )
     else:
         if model not in config.MODELS:
             raise ValueError(f"unknown model: {model}")
@@ -196,24 +214,13 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
             disable_streaming=True,
         )
 
-    # ── OASiS MCP tools (optional).
-    # ``_load_oasis_mcp_tools`` does ``asyncio.run()`` internally, so we
-    # cannot call it from a running event loop. The WebUI is normally
-    # invoked from inside the WebSocket handler's loop; offload to a
-    # worker thread which gets its own loop.
-    mcp_tools = []
-    if mcp_on:
-        try:
-            running = asyncio.get_running_loop()
-        except RuntimeError:
-            running = None
-        if running:
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                mcp_tools = ex.submit(la._load_oasis_mcp_tools).result(
-                    timeout=120)
-        else:
-            mcp_tools = la._load_oasis_mcp_tools()
+    # Stateful MCP tools must be supplied by open_agent_for_session(), whose
+    # context stays alive until the WebSocket session closes.
+    if mcp_on and _mcp_tools is None:
+        raise RuntimeError(
+            "MCP-enabled WebUI agents must be built with "
+            "open_agent_for_session() so server state persists across calls")
+    mcp_tools = list(_mcp_tools or [])
 
     # ── Host tools (bash/read/write/web_search/spawn_subagent)
     host = []
@@ -291,20 +298,42 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
                         agent_label="main") for t in mcp_tools + host]
 
     from langgraph.prebuilt import create_react_agent
-    # Use the EXACT same system prompts as the langgraph_eval driver
-    # (la.BARE_SYSTEM / la.MCP_SYSTEM) — including the MANDATORY CRITIC
-    # paragraph. Softening them in the WebUI would change the agent's
-    # behaviour relative to the paper claim, and any failure mode the
-    # strict prompt causes on small models is a real finding, not a
-    # bug to paper over.
-    prompt = (la.MCP_SYSTEM if mcp_on else la.BARE_SYSTEM)
+    # Use the EXACT same system prompts as the langgraph_eval driver, including
+    # the MANDATORY CRITIC paragraph. Softening them in the WebUI would change
+    # the agent's behaviour relative to the paper claim, and any failure mode
+    # the strict prompt causes on small models is a real finding, not a bug to
+    # paper over.
+    #
+    # The openPASO arm's text became a function when the server's own
+    # instructions became its source, so it is built per call rather than read
+    # from a constant. Calling the private name is deliberate: the guarantee
+    # above is that these are the same bytes the driver uses, and a local copy
+    # would quietly stop being that.
+    prompt = (la._mcp_system_prompt() if mcp_on else la.BARE_SYSTEM)
     return create_react_agent(llm, tools=gated, prompt=prompt)
+
+
+@asynccontextmanager
+async def open_agent_for_session(**kwargs):
+    """Yield one WebUI agent and keep its MCP process alive across turns."""
+    import agent as la
+
+    workdir = kwargs["workdir"]
+    try:
+        if kwargs.get("mcp_on"):
+            async with la.openpaso_mcp_tools_session(workdir) as mcp_tools:
+                yield build_agent_for_session(
+                    **kwargs, _mcp_tools=mcp_tools)
+        else:
+            yield build_agent_for_session(**kwargs)
+    finally:
+        la.cleanup_sandbox_scratch(workdir)
 
 
 # ───────────────────────────────────────────────────────────────────
 # Streamed turn
 # ───────────────────────────────────────────────────────────────────
-async def stream_turn(*, agent, user_text: str, emitter):
+async def stream_turn(*, agent, user_text: str, emitter, emit_done: bool = True):
     """Run one user turn. Streams chunks/events via ``emitter`` and
     returns the final message text. Emits a 'thinking' status as soon
     as we start so the user sees activity even before the first model
@@ -314,7 +343,13 @@ async def stream_turn(*, agent, user_text: str, emitter):
     inputs = {"messages": [("user", user_text)]}
     await emitter({"type": "status", "message": "thinking…"})
     try:
-        async for event in agent.astream_events(inputs, version="v2"):
+        # LangGraph's default ceiling is 25 steps, which a simulation task
+        # passes while it is still reading documentation: a real run died at it
+        # having written its solver but never run it. openPASO's own rule is
+        # that there is one budget and it is the clock, so the step ceiling sits
+        # well above anything the wall time can reach.
+        async for event in agent.astream_events(
+                inputs, version="v2", config={"recursion_limit": 400}):
             kind = event.get("event")
             name = event.get("name")
             if kind == "on_chat_model_stream":
@@ -342,11 +377,11 @@ async def stream_turn(*, agent, user_text: str, emitter):
                     last = msgs[-1]
                     final_text = (getattr(last, "content", "")
                                   or final_text)
-    except Exception as e:
-        await emitter({"type": "error",
-                       "message": f"{type(e).__name__}: {e}",
-                       "traceback": traceback.format_exc()[-4000:]})
-        await emitter({"type": "done", "final_text": ""})
-        return ""
-    await emitter({"type": "done", "final_text": final_text})
+    except Exception:
+        # The caller decides the terminal state and reports it. Emitting a
+        # "done" here as well is what let a crashed run read as "finished".
+        raise
+    if emit_done:
+        await emitter({"type": "done", "final_text": final_text,
+                       "outcome": "completed"})
     return final_text

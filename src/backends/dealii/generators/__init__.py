@@ -215,6 +215,17 @@ def get_knowledge(physics: str) -> dict:
         if patched:
             knowledge = new_knowledge
 
+    # Prepend the install/build/API facts that decide whether ANY
+    # deal.II program works. They are identical for every physics and
+    # are NOT discoverable from a physics section, so serving them only
+    # under some special topic= string means the consumer never sees
+    # them. Inserted FIRST so it survives truncation, and only into
+    # dicts that already carry pitfalls — injecting into an empty dict
+    # would make an unknown physics look covered.
+    if isinstance(knowledge, dict) and knowledge.get("pitfalls"):
+        from backends.dealii.generators._critical import CRITICAL_KNOWLEDGE
+        knowledge = {"deal_II_essentials": CRITICAL_KNOWLEDGE, **knowledge}
+
     _KNOWLEDGE_CACHE[physics] = knowledge
     return knowledge
 

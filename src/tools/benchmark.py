@@ -12,7 +12,8 @@ from mcp.server.fastmcp import FastMCP
 from core.registry import available_backends, get_backend
 from core.post_processing import post_process_file, compare_results
 
-_BENCHMARK_DIR = Path(__file__).resolve().parents[2] / "benchmarks" / "results"
+from core.output_paths import output_dir as _output_dir  # noqa: E402
+_BENCHMARK_DIR = _output_dir("benchmark_results")
 
 
 def register_benchmark_tools(mcp: FastMCP):

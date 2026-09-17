@@ -1,8 +1,8 @@
 """
-preCICE coupling — a first-class member of OASiS.
+preCICE coupling — a first-class member of openPASO.
 
 preCICE (precice.org) is the field-standard library for black-box coupling of
-independent simulation codes. In OASiS it is the native coupling path for genuinely
+independent simulation codes. In openPASO it is the native coupling path for genuinely
 forced multi-paradigm couplings — e.g. a DSMC particle code (SPARTA) coupled to a FEM
 solid (FEniCS) for conjugate heat transfer — that the file-handshake driver cannot
 express as cleanly.
@@ -17,7 +17,7 @@ import logging
 import os
 from pathlib import Path
 
-logger = logging.getLogger("oasis.precice")
+logger = logging.getLogger("openpaso.precice")
 
 # Location of libprecice.so.* — pyprecice loads it at import time.
 PRECICE_LIB_DIR = os.environ.get("PRECICE_LIB_DIR", "/opt/precice/lib")
@@ -64,6 +64,104 @@ def check_precice_available() -> tuple[bool, str]:
         return False, f"preCICE present but unusable: {e}"
 
 
+# Data names that carry a flux/force/traction — an INTEGRATED quantity. Mapping
+# those with constraint="consistent" across non-matching meshes preserves the
+# nodal value and NOT the integral, so the total crossing the interface is not
+# conserved; the run completes cleanly and nothing says so.
+_CONSERVATIVE_HINTS = ("flux", "force", "traction", "load", "heatflux",
+                       "heat-flux", "heat_flux", "pressure-force")
+
+
+def validate_precice_spec(participants: list, data: list, exchanges: list, *,
+                          scheme: str = "serial-explicit",
+                          time_window: float = 1.0,
+                          max_time: float = 10.0) -> list[str]:
+    """Refuse a preCICE configuration that would run but not couple.
+
+    Every check here corresponds to a config the generator used to emit happily:
+    an empty exchange list (preCICE aborts on a blank <exchange> block, but only
+    after every solver has started, so it reads as a solver failure), a
+    participant that reads a field nobody sends it (a bare KeyError out of the
+    generator, or worse a full receive-mesh block with no m2n behind it), a third
+    participant that appears in no exchange and therefore runs an uncoupled solo
+    time loop and exits 0, and a serial-implicit acceleration on data flowing the
+    wrong way, which preCICE refuses to load.
+
+    Returns advisory notes (worth saying, not worth refusing over) and raises
+    ValueError, naming the offending entry, for the rest.
+    """
+    notes: list[str] = []
+    names = [p.get("name") for p in participants]
+    if len(names) != len(set(names)):
+        raise ValueError(f"duplicate participant names: {names}")
+    if len(participants) < 2:
+        raise ValueError("a preCICE coupling needs at least 2 participants")
+    data_names = {d["name"] for d in data}
+    if not exchanges:
+        raise ValueError(
+            "no exchanges: an empty exchange list generates a config with no data "
+            "transfer at all. preCICE rejects it only once every solver has "
+            "started, so it looks like a solver failure rather than a setup one.")
+    for ex in exchanges:
+        for key in ("data", "from", "to"):
+            if key not in ex:
+                raise ValueError(f"exchange {ex!r} is missing '{key}'")
+        if ex["data"] not in data_names:
+            raise ValueError(f"exchange sends undeclared data {ex['data']!r}; "
+                             f"declared: {sorted(data_names)}")
+        for key in ("from", "to"):
+            if ex[key] not in names:
+                raise ValueError(f"exchange {key}={ex[key]!r} is not a participant; "
+                                 f"participants: {names}")
+        if ex["from"] == ex["to"]:
+            raise ValueError(f"exchange {ex['data']!r} goes from {ex['from']} to itself")
+    delivered = {(ex["data"], ex["to"]) for ex in exchanges}
+    sent = {(ex["data"], ex["from"]) for ex in exchanges}
+    for p in participants:
+        for dn in p.get("reads", []):
+            if (dn, p["name"]) not in delivered:
+                raise ValueError(
+                    f"participant {p['name']!r} declares reads={dn!r} but no "
+                    "exchange delivers it there. preCICE would still be handed a "
+                    "receive-mesh and a read-data tag, and the participant would "
+                    "read zeros forever without any error.")
+        for dn in p.get("writes", []):
+            if (dn, p["name"]) not in sent:
+                notes.append(f"{p['name']} writes {dn} but no exchange carries it "
+                             "anywhere — that data goes nowhere")
+    touched = {n for ex in exchanges for n in (ex["from"], ex["to"])}
+    orphan = [n for n in names if n not in touched]
+    if orphan:
+        raise ValueError(
+            f"participant(s) {orphan} take part in no exchange. preCICE accepts "
+            "that config, gives them no m2n and no place in the coupling scheme, "
+            "and they run an uncoupled solo time loop and exit 0.")
+    if len(participants) > 2:
+        raise ValueError(
+            f"{len(participants)} participants: this generator emits a two-participant "
+            "coupling scheme (<participants first=... second=.../>), so a third "
+            "participant is silently left out of it. A genuine N>2 coupling needs "
+            "<coupling-scheme:multi>, which is not generated here.")
+    if time_window > max_time:
+        raise ValueError(f"time-window {time_window} exceeds max-time {max_time}: "
+                         "no coupling window would ever complete")
+    if "implicit" in scheme and "serial" in scheme:
+        if not [ex for ex in exchanges if ex["to"] == names[0]]:
+            raise ValueError(
+                f"serial-implicit needs data flowing from the second participant "
+                f"({names[1]}) back to the first ({names[0]}) to accelerate on; no "
+                "exchange does. preCICE refuses to load such a config.")
+    for ex in exchanges:
+        if any(h in ex["data"].lower() for h in _CONSERVATIVE_HINTS):
+            notes.append(
+                f"{ex['data']} looks like an integrated quantity (flux/force/"
+                'traction) but is mapped with constraint="consistent", which '
+                "preserves nodal values and NOT the integral. On non-matching "
+                "interface meshes the total crossing the interface is then not "
+                "conserved, and nothing in the run reports it.")
+    return notes
+
+
 def generate_precice_config(
     participants: list,
     data: list,
@@ -77,6 +175,8 @@ def generate_precice_config(
     convergence_tol: float = 1e-6,
     acceleration: dict = None,
     mapping: str = "nearest-neighbor",
+    strict: bool = False,
+    initial_relaxation: float = 0.5,
 ) -> str:
     """Generate a preCICE XML config for an ARBITRARY cross-code coupling.
 
@@ -104,6 +204,8 @@ def generate_precice_config(
     implicit = "implicit" in scheme
     names = [p["name"] for p in participants]
     mesh_of = {p["name"]: p["mesh"] for p in participants}
+    validate_precice_spec(participants, data, exchanges, scheme=scheme,
+                          time_window=time_window, max_time=max_time)
     # writer (participant, mesh) of each data field, from the exchange list
     writer_mesh = {}
     for ex in exchanges:
@@ -163,11 +265,33 @@ def generate_precice_config(
           exch_xml]
     if implicit:
         cs.append(f'    <max-iterations value="{max_iterations}" />')
-        conv_data = exchanges[0]["data"]
-        cs.append(f'    <relative-convergence-measure limit="{convergence_tol}" '
-                  f'data="{conv_data}" mesh="{writer_mesh[conv_data][1]}" />')
-        acc = acceleration or {"type": "aitken", "data": conv_data,
-                               "mesh": writer_mesh[conv_data][1], "initial_relaxation": 0.5}
+        # A convergence measure PER EXCHANGED FIELD. With a measure on only one
+        # field (this used to be exchanges[0], i.e. whichever the caller happened
+        # to list first) the scheme declares convergence while every other
+        # exchanged quantity is still moving — the same masking the file-handshake
+        # driver guards against with per-block residuals.
+        for ex in exchanges:
+            dn = ex["data"]
+            cs.append(f'    <relative-convergence-measure limit="{convergence_tol}" '
+                      f'data="{dn}" mesh="{writer_mesh[dn][1]}"'
+                      + (' strict="true"' if strict else '') + ' />')
+        # preCICE requires the acceleration datum of a SERIAL-implicit scheme to
+        # be exchanged second -> first. The old default (exchanges[0]) produced a
+        # config preCICE refuses to load, which is how both convenience wrappers
+        # in this file shipped broken.
+        if "serial" in scheme:
+            back = [ex["data"] for ex in exchanges if ex["to"] == names[0]]
+            if acceleration and acceleration.get("data") not in back:
+                raise ValueError(
+                    "serial-implicit acceleration must use data exchanged from "
+                    f"{names[1]} to {names[0]}; {acceleration.get('data')!r} is not "
+                    f"(candidates: {back}). preCICE refuses such a config.")
+            acc_data = acceleration["data"] if acceleration else back[0]
+        else:
+            acc_data = acceleration["data"] if acceleration else exchanges[0]["data"]
+        acc = acceleration or {"type": "aitken", "data": acc_data,
+                               "mesh": writer_mesh[acc_data][1],
+                               "initial_relaxation": initial_relaxation}
         cs.append(f'    <acceleration:{acc["type"]}>')
         cs.append(f'      <data mesh="{acc["mesh"]}" name="{acc["data"]}" />')
         cs.append(f'      <initial-relaxation value="{acc.get("initial_relaxation",0.5)}" />')
@@ -178,7 +302,7 @@ def generate_precice_config(
     return (
         '<?xml version="1.0" encoding="UTF-8" ?>\n'
         '<precice-configuration>\n'
-        '  <!-- generated by OASiS generate_precice_config (general) -->\n'
+        '  <!-- generated by openPASO generate_precice_config (general) -->\n'
         f'{data_xml}\n\n{mesh_xml}\n\n{part_xml}\n\n{m2n_xml}\n\n{cs_xml}\n'
         '</precice-configuration>\n'
     )
@@ -228,7 +352,10 @@ def generate_heat_coupling_config(
         scheme="serial-implicit", dimensions=2, time_window=time_window,
         max_time=time_window, max_iterations=max_iterations,
         convergence_tol=convergence_tol,
-        acceleration={"type": "aitken", "data": data_name, "mesh": mesh_name_a,
+        # preCICE accelerates a SERIAL-implicit scheme on data flowing from the
+        # second participant back to the first, i.e. the FLUX here. Naming the
+        # temperature produced a config preCICE refuses to load.
+        acceleration={"type": "aitken", "data": flux_name, "mesh": mesh_name_b,
                       "initial_relaxation": relaxation},
     )
 
@@ -265,8 +392,9 @@ def generate_tsi_coupling_config(
         scheme="serial-implicit", dimensions=3, time_window=time_window,
         max_time=time_window, max_iterations=max_iterations,
         convergence_tol=convergence_tol,
-        acceleration={"type": "aitken", "data": temperature_name, "mesh": mesh_name_a,
-                      "initial_relaxation": 0.5},
+        # Same serial-implicit rule: accelerate on Structure -> Thermal data.
+        acceleration={"type": "aitken", "data": displacement_name,
+                      "mesh": mesh_name_b, "initial_relaxation": 0.5},
     )
 
 
@@ -322,7 +450,7 @@ def run_precice_coupling(
 ) -> dict:
     """Run a GENERAL preCICE coupling of arbitrary codes, end-to-end.
 
-    OASiS generates the preCICE config and launches every participant's solver command,
+    openPASO generates the preCICE config and launches every participant's solver command,
     then waits for the coupling to finish. This is the physics-agnostic, code-agnostic
     coupling orchestrator — the same call drives heat DN, TSI, FSI, DSMC<->FEM, etc.
 
@@ -339,39 +467,200 @@ def run_precice_coupling(
     Returns:
         {"converged": bool, "returncodes": {name: rc}, "config": path, "logs": {name: tail}}
     """
+    import signal
     import subprocess
+    import time as _time
     _ensure_lib_on_path()
     work_dir = Path(work_dir); work_dir.mkdir(parents=True, exist_ok=True)
+    notes = validate_precice_spec(participants, data, exchanges, scheme=scheme,
+                                  time_window=time_window, max_time=max_time)
     cfg = generate_precice_config(
         participants=[{k: p[k] for k in ("name", "mesh", "writes", "reads")} for p in participants],
         data=data, exchanges=exchanges, scheme=scheme, dimensions=dimensions,
         max_time=max_time, time_window=time_window, **config_kw)
     cfg_path = work_dir / "precice-config.xml"
     cfg_path.write_text(cfg)
+    # preCICE APPENDS to its per-participant iteration logs. Stale ones from an
+    # earlier run in the same directory would be read as this run's evidence.
+    for stale in list(work_dir.glob("precice-*-iterations.log")) + \
+            list(work_dir.glob("precice-*-convergence.log")):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = PRECICE_LIB_DIR + ":" + env.get("LD_LIBRARY_PATH", "")
     if extra_env:
         for k, v in extra_env.items():
             env[k] = v + ":" + env.get(k, "") if k.endswith("PATH") else v
-    procs = {}
-    for p in participants:
-        lf = open(work_dir / f"{p['name']}.out", "w")
-        procs[p["name"]] = (subprocess.Popen(p["command"], cwd=work_dir, env=env,
-                                             stdout=lf, stderr=subprocess.STDOUT, text=True), lf)
-    rcs, logs = {}, {}
+
+    procs: dict = {}
+    rcs: dict = {}
+    logs: dict = {}
+    error = None
+
+    def _kill_all():
+        for pr, _lf in procs.values():
+            if pr.poll() is None:
+                try:
+                    os.killpg(pr.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pr.kill()
+
     try:
-        for name, (proc, lf) in procs.items():
-            proc.wait(timeout=timeout)
-            rcs[name] = proc.returncode
-            lf.close()
-            logs[name] = (work_dir / f"{name}.out").read_text(errors="replace")[-600:]
-    except subprocess.TimeoutExpired:
-        for proc, lf in procs.values():
-            proc.kill(); lf.close()
-        return {"converged": False, "returncodes": rcs, "config": str(cfg_path),
-                "error": f"coupling timed out after {timeout}s", "logs": logs}
-    converged = all(rc == 0 for rc in rcs.values())
-    return {"converged": converged, "returncodes": rcs, "config": str(cfg_path), "logs": logs}
+        for p in participants:
+            lf = open(work_dir / f"{p['name']}.out", "w")
+            # start_new_session so an MPI-launched participant's whole process
+            # group can be killed; pr.kill() alone orphans the ranks.
+            procs[p["name"]] = (subprocess.Popen(
+                p["command"], cwd=work_dir, env=env, stdout=lf,
+                stderr=subprocess.STDOUT, text=True, start_new_session=True), lf)
+        # ONE shared deadline, and stop the moment a participant dies badly.
+        # Waiting per participant with the FULL timeout meant a partner that
+        # crashed in milliseconds still cost the whole timeout (N x timeout in the
+        # worst case) while the survivor sat blocked on the m2n handshake — and
+        # the hung participant's log, the only one that could explain the hang,
+        # was never captured, because it was read only after a successful wait.
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            for name, (pr, _lf) in procs.items():
+                if name not in rcs and pr.poll() is not None:
+                    rcs[name] = pr.returncode
+            if len(rcs) == len(procs):
+                break
+            if any(rc != 0 for rc in rcs.values()):
+                dead = {n: rc for n, rc in rcs.items() if rc != 0}
+                error = (f"participant(s) {dead} exited non-zero; the rest were "
+                         "killed rather than left blocked on the coupling socket")
+                _kill_all()
+                break
+            _time.sleep(0.05)
+        else:
+            error = f"coupling timed out after {timeout}s"
+            _kill_all()
+    finally:
+        for name, (pr, lf) in procs.items():
+            if name not in rcs:
+                try:
+                    rcs[name] = pr.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    rcs[name] = None
+            try:
+                lf.close()
+            except OSError:
+                pass
+            f = work_dir / f"{name}.out"
+            logs[name] = f.read_text(errors="replace") if f.exists() else ""
+
+    ev = precice_run_evidence(work_dir, [p["name"] for p in participants], logs,
+                              implicit="implicit" in scheme)
+    out = {"returncodes": rcs, "config": str(cfg_path),
+           "logs": {n: t[-600:] for n, t in logs.items()},
+           "exit_codes_ok": bool(rcs) and all(rc == 0 for rc in rcs.values()),
+           "exchanged": ev["exchanged"],
+           "coupling_converged": ev["converged"],
+           "evidence": ev["detail"],
+           "config_notes": notes}
+    if error:
+        out["error"] = error
+    # `converged` used to mean "every process exited 0", which two no-op scripts
+    # that never touch preCICE also satisfy. It now means what it says, and is
+    # ABSENT when preCICE measured nothing (an explicit scheme has no notion of
+    # convergence at all) rather than defaulting to True.
+    if ev["converged"] is not None:
+        out["converged"] = bool(ev["converged"]) and out["exit_codes_ok"]
+    return out
+
+
+def precice_run_evidence(work_dir, names: list, logs: dict,
+                         implicit: bool = False) -> dict:
+    """Read preCICE's OWN record of what happened, not the process exit codes.
+
+    preCICE writes `precice-<Participant>-iterations.log` next to the config, with
+    a `Convergence` column (1/0) per time window for implicit schemes. An implicit
+    scheme that exhausts `max-iterations` without meeting its measure logs
+    `Convergence 0`, prints NO warning, and EXITS 0 — so exit codes cannot tell a
+    converged coupling from one that gave up, and two scripts that never call
+    preCICE at all satisfy them equally.
+
+    Returns {"exchanged": bool, "converged": bool|None, "detail": [...], "windows": int}.
+    converged is None when preCICE measured no convergence (explicit schemes), so
+    "not measured" stays distinguishable from "measured and fine".
+    """
+    from pathlib import Path as _P
+    wd = _P(work_dir)
+    detail: list[str] = []
+    ran: dict[str, bool] = {}
+    conv: list[bool] = []
+    windows = 0
+    for name in names:
+        text = logs.get(name, "") or ""
+        it_log = wd / f"precice-{name}-iterations.log"
+        started = ("This is preCICE version" in text) or it_log.exists()
+        ran[name] = started
+        if not started:
+            detail.append(f"{name}: no preCICE banner and no iterations log — this "
+                          "participant never initialised preCICE, so nothing was "
+                          "exchanged with it")
+            continue
+        if "ERROR:" in text:
+            line = next((ln.strip() for ln in text.splitlines() if "ERROR:" in ln), "")
+            detail.append(f"{name}: preCICE reported an error — {line[:200]}")
+        # EXPLICIT schemes write no iterations log at all, so its absence is not
+        # evidence of a dead coupling; preCICE's own per-window log line is.
+        completed = text.count("Time window completed")
+        if not it_log.exists():
+            if completed:
+                windows = max(windows, completed)
+                detail.append(f"{name}: {completed} time window(s) completed; this "
+                              "scheme keeps no iteration record, so convergence "
+                              "was NOT established")
+            else:
+                ran[name] = False
+                detail.append(f"{name}: preCICE started but completed no coupling "
+                              "time window")
+            continue
+        rows = [ln.split() for ln in it_log.read_text(errors="replace").splitlines()
+                if ln.strip()]
+        if not rows:
+            windows = max(windows, completed)
+            if not completed:
+                ran[name] = False
+            detail.append(f"{name}: iterations log is empty — {completed} time "
+                          "window(s) completed per the run log")
+            continue
+        header = rows[0]
+        # Index by HEADER NAME: the column count differs per participant (the
+        # second one carries extra quasi-Newton columns), so a positional read of
+        # the last column silently reports a different quantity entirely.
+        if "Convergence" not in header:
+            detail.append(f"{name}: {len(rows) - 1} time window(s) completed; this "
+                          "scheme measures no convergence")
+            windows = max(windows, len(rows) - 1)
+            continue
+        ci = header.index("Convergence")
+        flags = [r[ci] == "1" for r in rows[1:] if len(r) > ci]
+        windows = max(windows, len(flags))
+        if not flags:
+            detail.append(f"{name}: no completed time window in the iterations log")
+            continue
+        conv.append(all(flags))
+        if not all(flags):
+            bad = [i + 1 for i, f in enumerate(flags) if not f]
+            detail.append(
+                f"{name}: preCICE recorded NON-CONVERGENCE in time window(s) {bad} "
+                "— the implicit scheme hit max-iterations without meeting its "
+                "convergence measure. preCICE logs this and exits 0.")
+    exchanged = bool(names) and all(ran.get(n) for n in names) and windows > 0
+    if not exchanged and all(ran.get(n) for n in names):
+        detail.append("no completed coupling time window was recorded — the "
+                      "participants started preCICE but exchanged nothing")
+    converged = (all(conv) if conv else None)
+    if implicit and converged is None:
+        detail.append("this implicit scheme recorded no convergence column, so "
+                      "whether it converged was NOT established")
+    return {"exchanged": exchanged, "converged": converged, "detail": detail,
+            "windows": windows}
 
 
 def verify_precice_coupling(work_dir: Path = None, timeout: int = 60) -> tuple[bool, str]:

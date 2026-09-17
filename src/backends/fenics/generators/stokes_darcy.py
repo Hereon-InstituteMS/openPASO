@@ -26,6 +26,17 @@ mixed-dimensional dolfinx examples.
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['stokes_darcy'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": (
         "Coupled Stokes (free fluid) / Darcy (porous "
         "medium) flow. Two common formulations: (a) full "
@@ -70,12 +81,22 @@ KNOWLEDGE = {
         "uniform-K Stokes solution, with no Darcy "
         "behavior in the porous region.",
         "[API] dolfinx 0.10+ MeshTags constructor: "
-        "mesh.meshtags(domain, dim, indices, values) — "
-        "indices and values are numpy int32 arrays. "
-        "Signal: passing Python lists raises "
-        "'TypeError: indices must be numpy array', or "
-        "passing float values raises 'TypeError: values "
-        "must be int32'.",
+        "mesh.meshtags(domain, dim, indices, values). The "
+        "int32-array requirement this entry used to state is NOT "
+        "enforced and the two quoted TypeErrors do not exist. "
+        "Measured: Python lists are accepted (values come back as "
+        "int64), float64 values are accepted and STAY float64, and "
+        "int64 indices are accepted — all four spellings then select "
+        "the same facets through ufl.Measure('ds', subdomain_data=mt) "
+        "and assemble the identical number (0.8535533905932737 on the "
+        "test case). The only rejection is a non-numeric dtype: a "
+        "'<U1' string array gives 'NotImplementedError: Type <U1 not "
+        "supported.'. Signal: there is none — this failure mode is "
+        "SILENT, so do not write an except-TypeError guard around the "
+        "constructor and read its silence as proof of correct dtypes. "
+        "If a downstream consumer needs int32, assert "
+        "mt.values.dtype yourself. (Verified by execution 2026-08-07, "
+        "dolfinx 0.10.0.)",
         "[Physics] Full BJS-coupled formulation requires "
         "separate Stokes velocity and Darcy pressure "
         "spaces with interface mortar coupling. The "

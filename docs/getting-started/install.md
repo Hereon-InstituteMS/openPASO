@@ -1,0 +1,88 @@
+# Install
+
+!!! important "openPASO is not useful on its own"
+    openPASO is the part that drives the solvers. The thinking is done by an AI model, which you
+    bring. Before you install, know which of the two ways below you will use. The install itself is
+    the same either way.
+
+| | Option A: an AI app | Option B: your own API key |
+|---|---|---|
+| **You need** | Claude Code, Claude Desktop or Cursor | an account at openrouter.ai |
+| **Extra cost** | none beyond your subscription | you pay for what you use |
+| **Choice of model** | whatever the app offers | any model on OpenRouter |
+| **Good for** | trying it out, everyday work | scripting, experiments, cheap models |
+
+Not sure whether your app works? If you have Claude Code, type `claude mcp list` in a terminal. If
+the command exists, use Option A.
+
+## What you need
+
+- **Python 3.10 to 3.13**
+- **at least one** solver. You do not need all nine; openPASO tells you what is missing and how to get it.
+
+Check your Python:
+
+```bash
+python3 --version    # 3.10, 3.11 or 3.12: go straight on. 3.13: read the box below.
+```
+
+??? warning "On Python 3.13 you need a C compiler"
+    The install takes about two minutes longer. openPASO keeps numpy below version 2, because the
+    preCICE coupling library requires that, and for Python 3.13 no ready-made numpy below version 2
+    exists, so `pip` has to compile it.
+
+    - Debian or Ubuntu: `sudo apt install build-essential`
+    - macOS: `xcode-select --install`
+    - Fedora or RHEL: `sudo dnf install gcc gcc-c++ make`
+    - Windows: install [Build Tools for Visual Studio](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+      with "Desktop development with C++", **or, much simpler, install Python 3.12** from
+      <https://www.python.org/downloads/>.
+
+    Without a compiler the install stops on numpy with `Unknown compiler(s)` and
+    `metadata-generation-failed`. Python 3.14 and newer are untested.
+
+    **If your Python is older than 3.10 or newer than 3.13**, install a supported one beside it. They
+    live side by side without conflict. With conda: `conda create -n paso python=3.12 && conda activate paso`.
+
+## Install openPASO
+
+```bash
+git clone https://github.com/Hereon-InstituteMS/openPASO.git
+cd openPASO
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e .
+pip install scikit-fem            # the easiest solver to start with
+```
+
+Then install the agent packages. Only Option B uses them, but installing them now costs nothing:
+
+```bash
+pip install -r langgraph_eval/requirements-langgraph.txt
+```
+
+!!! note "Windows"
+    Use `python -m venv .venv` and then `.venv\Scripts\activate`. A few other commands differ:
+    `copy` instead of `cp`, `dir` instead of `ls`, `set` instead of `export`. openPASO is developed
+    and tested on Linux. It should work on Windows, but we do not measure that, and the solvers that
+    build from source (4C, SPARTA, deal.II) are the least likely to.
+
+## More solvers
+
+Each solver has its own page with the exact install command and what openPASO knows about it:
+see [Solvers](../solvers/index.md). In short:
+
+```bash
+pip install ngsolve scikit-fem meshio      # into the same .venv
+pip install KratosMultiphysics-all         # Kratos: use the -all package
+pip install dune-fem mpi4py                # DUNE-fem: mpi4py is a hidden requirement
+conda create -n fenics -c conda-forge fenics-dolfinx   # FEniCSx: its own conda environment
+```
+
+Any `export NAME=value` line only lasts until you close the terminal. To keep it, add the same line
+to the end of `~/.bashrc` (or `~/.zshrc`).
+
+**If a solver will not install**, ask openPASO once it is connected:
+
+> How do I install 4C on Ubuntu? Use the knowledge tool.
+
+Next: [check that it works](check.md).

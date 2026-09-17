@@ -5,6 +5,17 @@ Variants: 3d
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['hyperelasticity'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": "Nonlinear hyperelasticity (Neo-Hookean) with large deformation",
     "weak_form": "δΠ(u;v) = 0, Π = ∫(μ/2)(I_C-3) - μ*ln(J) + (λ/2)(ln(J))² dx",
     "function_space": "Vector Lagrange order 1, geometry-nonlinear",
@@ -42,11 +53,19 @@ KNOWLEDGE = {
         "[API] In dolfinx 0.9+ the nonlinear solve uses "
         "dolfinx.fem.petsc.NonlinearProblem + NewtonSolver, or the "
         "PETSc SNES API directly. Old dolfin nonlinear_variational "
-        "patterns are removed. Signal: a script using "
-        "NonlinearVariationalProblem raises ImportError 'No module "
-        "named dolfinx.fem.NonlinearVariationalProblem'; the "
-        "correct call is `from dolfinx.fem.petsc import "
-        "NonlinearProblem`. (Audit 2026-06-02.)",
+        "patterns are removed. Signal: the way a script actually "
+        "reaches for it — `from dolfinx.fem import "
+        "NonlinearVariationalProblem` — raises \"ImportError: cannot "
+        "import name 'NonlinearVariationalProblem' from 'dolfinx.fem'\" "
+        "followed by the path of dolfinx/fem/__init__.py. The "
+        "previously quoted 'No module named "
+        "dolfinx.fem.NonlinearVariationalProblem' is a "
+        "ModuleNotFoundError and only appears if the name is fed to "
+        "importlib.import_module as a dotted MODULE path, which is not "
+        "how anyone writes it; match on ImportError, not on that text. "
+        "The correct call is `from dolfinx.fem.petsc import "
+        "NonlinearProblem`. (Verified by execution 2026-08-07, "
+        "dolfinx 0.10.0.)",
     ],
 }
 

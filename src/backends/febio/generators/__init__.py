@@ -26,6 +26,11 @@ from .polar_fluid import GENERATORS as _pf_gen, KNOWLEDGE as _pf_kn
 from .damage import GENERATORS as _dm_gen, KNOWLEDGE as _dm_kn
 from .growth_remodeling import GENERATORS as _gr_gen, KNOWLEDGE as _gr_kn
 from .elasticity_mms import GENERATORS as _mms_gen, KNOWLEDGE as _mms_kn
+from .deck_structure import (
+    DECK_KNOWLEDGE as _deck_kn,
+    FEBIO_MODULES,
+    FEBIO_ANALYSIS_VALUES,
+)
 
 
 GENERATORS: dict[str, callable] = {}
@@ -48,12 +53,186 @@ for _k in (_le_kn, _he_kn, _bi_kn, _ht_kn,
 
 KNOWLEDGE["_general"] = {
     "description": "FEBio general capabilities and C++ embedding surface",
+    # Executed-verified .feb authoring surface (deck_structure.py).
+    # Kept as a sub-block of _general rather than a new top-level
+    # KNOWLEDGE key so the catalog's physics-key count is unchanged
+    # — this is reference material, not a physics row.
+    "deck_authoring": _deck_kn,
     "adaptive_mesh_refinement": {
         "description": (
-            "FEAMR module (FEBio::FEAMR library) registers .feb XML tag "
-            "names users type in the <Adaptive> / <Step> blocks. "
-            "Source: FEAMR/FEAMR.cpp -> FEAMR::InitModule()."
+            "FEAMR module (FEBio::FEAMR library). Mesh adaptation is "
+            "driven from a top-level <MeshAdaptor> section whose "
+            "children are <mesh_adaptor> elements. EXECUTED on FEBio "
+            "4.12.0.86045466d: a uniaxial-stretch hex8 cube refines "
+            "under `hex_refine`, and the node count grows on each "
+            "adaptor iteration. The XML shape below is the one that "
+            "works — read it before anything else in this entry, "
+            "because the obvious shape is silently ignored."
         ),
+        # ---- EXECUTED. Load-bearing; read this first. -------------
+        "required_xml_shape": (
+            "The section is <MeshAdaptor> and its CHILDREN are "
+            "<mesh_adaptor> elements. The type= and elem_set= "
+            "attributes go on the CHILD, never on the section. "
+            "Complete runnable block, place it after </LoadData>:\n"
+            "  <MeshAdaptor>\n"
+            "    <mesh_adaptor type=\"hex_refine\" "
+            "elem_set=\"AllElems\">\n"
+            "      <max_iters>1</max_iters>\n"
+            "      <criterion type=\"element_selection\">\n"
+            "        <element_list>1,2</element_list>\n"
+            "      </criterion>\n"
+            "    </mesh_adaptor>\n"
+            "  </MeshAdaptor>\n"
+            "REQUIRED: the <mesh_adaptor> child, its type= attribute, "
+            "and a <criterion> child. OPTIONAL: elem_set= (defaults to "
+            "the whole mesh; it accepts either an <ElementSet> name or "
+            "an <Elements> block name — both executed) and <max_iters> "
+            "(how many adaptor passes per converged time step)."),
+        "how_to_tell_it_worked": (
+            "Three things appear in the .log ONLY when the adaptor was "
+            "actually registered and applied. Check for all three; the "
+            "termination banner tells you nothing here. "
+            "(1) a ` MESH ADAPTOR DATA` block in the model echo, "
+            "(2) `=== Applying mesh adaptors: iteration N`, "
+            "(3) a `Refinement info:` block with `Elements to refine`, "
+            "`Facets to refine`, `Edges to refine`, followed by "
+            "`Hanging nodes ............ : N`. The decisive check is "
+            "the `Number of nodes` line: FEBio re-echoes the model "
+            "after each adaptation, so a working refinement prints an "
+            "increasing sequence of node counts. If it prints the "
+            "original count once, nothing was refined. "
+            "(Executed 2026-08-03, FEBio 4.12.0.86045466d.)"),
+        "pitfalls": [
+            (
+                "[Syntax] Putting type= on the <MeshAdaptor> SECTION "
+                "instead of on a <mesh_adaptor> CHILD is silently "
+                "ignored. FEBioMeshAdaptorSection::Parse only looks at "
+                "children named `mesh_adaptor`; anything else in the "
+                "section is walked past without comment, so no adaptor "
+                "is ever added to the model. "
+                "WRONG: <MeshAdaptor type=\"hex_refine\" "
+                "elem_set=\"AllElems\"><max_iters>1</max_iters>"
+                "</MeshAdaptor>. "
+                "RIGHT: <MeshAdaptor><mesh_adaptor type=\"hex_refine\" "
+                "elem_set=\"AllElems\"><max_iters>1</max_iters>"
+                "<criterion type=\"element_selection\">"
+                "<element_list>1,2</element_list></criterion>"
+                "</mesh_adaptor></MeshAdaptor>. "
+                "Signal: NONE. The deck reads `...SUCCESS!`, the run "
+                "ends in `N O R M A L   T E R M I N A T I O N` with "
+                "exit 0, and the mesh is never touched. Even a "
+                "deliberately non-existent adaptor type is not "
+                "diagnosed in this form. Detect it by the absence of "
+                "the three log markers listed under "
+                "how_to_tell_it_worked. In the CORRECT form a bad type "
+                "IS diagnosed: tag mesh_adaptor (line N) : `invalid "
+                "value for attribute \"type\"`. "
+                "(Executed 2026-08-03, FEBio 4.12.0.86045466d.)"
+            ),
+            (
+                "[Syntax] A wrong-form <MeshAdaptor type=...> that "
+                "contains ANY CHILD WHICH ITSELF HAS CHILDREN "
+                "swallows every top-level section after it. Placed "
+                "before <Material> "
+                "and <Mesh>, it produces an EMPTY MODEL — zero nodes, "
+                "zero materials — that still exits 0 with a normal "
+                "termination banner. This is the worst silent failure "
+                "found in the FEBio surface. "
+                "WRONG: a <MeshAdaptor type=\"hex_refine\"> block "
+                "holding a <criterion> child, placed anywhere above "
+                "the sections you need. "
+                "RIGHT: the <mesh_adaptor> child form, placed after "
+                "</LoadData>. "
+                "Signal: `Number of nodes ...... : 0` and `Number of "
+                "materials ...... : 0` in the model echo, with "
+                "`N O R M A L   T E R M I N A T I O N` and exit 0. "
+                "ALWAYS check the echoed node and material counts "
+                "against the deck you wrote. Executed across five "
+                "shapes of the wrong form: a <criterion> child and an "
+                "arbitrary made-up nested child BOTH destroy the "
+                "model, while a leaf child such as "
+                "<max_iters>1</max_iters>, an empty block and a "
+                "self-closing tag are merely ignored — so the trigger "
+                "is nesting depth, not the particular tag, and the two "
+                "failure modes look different from the outside. "
+                "(Executed 2026-08-03, FEBio 4.12.0.86045466d.)"
+            ),
+            (
+                "[Syntax] `max_elems` is a parameter of the "
+                "`erosion` adaptor -- that exact lower-case spelling "
+                "is the registered type string, "
+                "REGISTER_FECORE_CLASS(FEErosionAdaptor, \"erosion\") "
+                "in FEAMR/FEAMR.cpp:49 -- and is "
+                "not accepted by hex_refine. FEHexRefine registers "
+                "max_elem_refine, max_value and criterion; its base "
+                "FERefineMesh adds max_iters, max_elements, map_data, "
+                "nnc, nsdim, transfer_method. Note max_elementS on the "
+                "refiners versus max_elemS on erosion. "
+                "WRONG: <mesh_adaptor type=\"hex_refine\">"
+                "<max_elems>0</max_elems></mesh_adaptor>. "
+                "RIGHT: <mesh_adaptor type=\"hex_refine\">"
+                "<max_elements>0</max_elements></mesh_adaptor>. "
+                "Signal: tag \"max_elems\" (line N) : `unrecognized "
+                "tag` and `Reading file ...FAILED!` — but ONLY in the "
+                "correct <mesh_adaptor> child form. In the wrong form "
+                "above it is accepted in silence like everything else. "
+                "(Executed 2026-08-03, FEBio 4.12.0.86045466d.)"
+            ),
+            (
+                "[Syntax] The `relative error` and `max_variable` "
+                "criteria REQUIRE a nested <data> property naming "
+                "another criterion, and that inner type must itself be "
+                "registered — `element stress` is not, `stress` is. "
+                "WRONG: <criterion type=\"relative error\">"
+                "<error>0.05</error></criterion>, or a <data "
+                "type=\"element stress\"/> child, or "
+                "<criterion type=\"max_variable\"><max>1e-12</max>"
+                "</criterion>. "
+                "RIGHT: <criterion type=\"relative error\">"
+                "<error>0.05</error><data type=\"stress\"/></criterion>. "
+                "Signal: for the missing property, `Component \"\" "
+                "needs to have property \"data\" defined (line N)`; for "
+                "the unregistered inner type, tag \"data\" (line N) : `"
+                "invalid value for attribute \"type\"`; for the wrong "
+                "parameter name, tag \"max\" (line N) : `unrecognized "
+                "tag`. The simplest criterion that needs no <data> "
+                "child at all is `element_selection` with an "
+                "<element_list>. "
+                "(Executed 2026-08-03, FEBio 4.12.0.86045466d.)"
+            ),
+            (
+                "[Numerical] hex_refine splits elements without "
+                "splitting their neighbours, so every refinement "
+                "introduces HANGING NODES which FEBio ties back with "
+                "linear constraints. Refining on a stress criterion "
+                "escalates fast: on a uniaxial-stretch cube a "
+                "`relative error` criterion with a loose tolerance "
+                "refined the whole domain twice in one time step and "
+                "the node count grew by more than an order of "
+                "magnitude, whereas an `element_selection` criterion "
+                "naming two elements grew it by a few dozen. Bound the "
+                "work with <max_iters> and <max_elements>, not with the "
+                "criterion alone. "
+                "Signal: `Hanging nodes ............ : N` and `Added "
+                "linear constraints . : N` after each `Refinement "
+                "info:` block; a run whose node count multiplies "
+                "between adaptor iterations is about to become "
+                "unaffordable. "
+                "(Executed 2026-08-03, FEBio 4.12.0.86045466d, on a "
+                "hex8 cube at two criterion settings.)"
+            ),
+        ],
+        "note_on_the_material_below": (
+            "Everything after this point is SOURCE-DERIVED (file walks "
+            "of FEAMR/*.cpp), not executed. It is retained because it "
+            "documents parameter semantics that no single run reveals — "
+            "sort orders, enum spellings, default values, and known "
+            "header/implementation disagreements. Treat the XML shapes "
+            "in it as needing the <mesh_adaptor> child wrapper "
+            "documented above: several of the older notes describe an "
+            "<Adaptive> / <Step> placement that FEBio 4.12 does not "
+            "use."),
         "mesh_adaptors": {
             "erosion":       "FEErosionAdaptor — remove elements failing a criterion",
             "hex_refine":    "FEHexRefine — uniform 3D hex split",
@@ -616,10 +795,20 @@ KNOWLEDGE["_general"] = {
         ),
     },
     "cmake_embedding": {
-        "find_package": "find_package(FEBio) — defined by FEBioConfig.cmake "
-                        "at the FEBio source tree root; detects in-tree-build "
-                        "vs install layout automatically via "
-                        "_FEBIO_IS_SOURCE_TREE.",
+        "find_package": (
+            "find_package(FEBio) — defined by FEBioConfig.cmake at the "
+            "FEBio SOURCE TREE ROOT (not in a lib/cmake subdirectory), "
+            "so REQUIRED alongside it is the hint that says where that "
+            "root is:\n"
+            "  cmake -S . -B build -DFEBio_DIR=/path/to/febio-src\n"
+            "It detects in-tree-build vs install layout automatically "
+            "(_FEBIO_IS_SOURCE_TREE, decided by whether "
+            "<config>/../../../include exists) and then globs for a "
+            "*build* directory containing libfecore.so, so a cmake "
+            "build directory named cbuild or build2 is found as "
+            "readily as one named build. EXECUTED 2026-08-03 against "
+            "the FEBio 4.12.0.86045466d source tree: FEBio_FOUND=1 and "
+            "all eleven imported targets resolve."),
         "imported_targets": [
             "FEBio::FECore     — core FE framework",
             "FEBio::FEBioMech  — solid-mechanics module",
@@ -640,17 +829,27 @@ KNOWLEDGE["_general"] = {
                                 "users (Visual Studio) get correct per-config "
                                 "binaries.",
         "Signal": (
-            "[Output] FEBioConfig.cmake sets FEBio_FOUND=FALSE if ANY of "
-            "the 11 imported targets fails to locate its library — the "
-            "config aborts with `return()` after the first missing lib. "
-            "A partial build (e.g. only Release + FECore + FEBioMech, no "
-            "FEImgLib because OpenCV wasn't installed) makes "
-            "find_package(FEBio) report not-found even though the "
-            "subset would suffice for mechanics-only embedding. "
-            "Workaround: build all 11 libs even if the user only needs a "
-            "subset, OR maintain a local fork of FEBioConfig.cmake with "
-            "the unwanted libs removed from _FEBIO_LIBS. "
-            "(File-walk audit of FEBioConfig.cmake 2026-06-02.)"
+            "[Output] FEBioConfig.cmake demands ALL ELEVEN libraries and "
+            "gives up on the first one it cannot find: it prints "
+            "`FEBio library '<name>' could not be found.` and `Expected "
+            "under: <prefix>`, then sets FEBio_FOUND=FALSE and returns. "
+            "A partial build — say no FEImgLib because OpenCV was not "
+            "installed — makes find_package(FEBio) report not-found even "
+            "though the remaining subset would be enough for "
+            "mechanics-only embedding. "
+            "THE TRAP: the imported targets created BEFORE the missing "
+            "one still exist. Executed 2026-08-03 with libfeimglib.so "
+            "removed from a copy of the prefix: FEBio_FOUND came back 0 "
+            "and `if(TARGET FEBio::FECore)` was nevertheless TRUE. So a "
+            "CMakeLists that calls find_package(FEBio) WITHOUT REQUIRED "
+            "and then tests for a target concludes FEBio is usable and "
+            "fails later at link time. Always branch on FEBio_FOUND, or "
+            "pass REQUIRED and let the configure step fail loudly. "
+            "Workaround for a deliberate partial build: keep a local "
+            "fork of FEBioConfig.cmake with the unwanted names removed "
+            "from _FEBIO_LIBS. "
+            "(Executed 2026-08-03 against FEBio 4.12.0.86045466d, both "
+            "the complete prefix and a prefix with one library removed.)"
         ),
     },
 }

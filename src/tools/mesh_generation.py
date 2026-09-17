@@ -18,9 +18,10 @@ import tempfile
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
-logger = logging.getLogger("oasis.mesh")
+logger = logging.getLogger("openpaso.mesh")
 
-_MESH_OUTPUT_DIR = Path(__file__).resolve().parents[2] / "meshes"
+from core.output_paths import output_dir as _output_dir  # noqa: E402
+_MESH_OUTPUT_DIR = _output_dir("meshes")
 
 
 def _generate_l_domain_2d(mesh_size: float = 0.05, output_path: Path = None) -> Path:

@@ -24,15 +24,13 @@ KNOWLEDGE = {
         },
         "solver_types": ["potential_flow_solver (linear/nonlinear)"],
         "pitfalls": [
-                        '[Numerical] Far-field BC: use PotentialWallCondition for solid walls '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Physics] Freestream: set FREESTREAM_VELOCITY and MACH_INFINITY '
-                        'Signal: the post-processed VtkOutput .post.bin shows the integrated_flux / max_displacement / PRESSURE channels disagreeing with analytic / textbook reference by 10-100%.',
-                        '[Numerical] Transonic: requires shock-capturing stabilization '
-                        "Signal: solver reports 'Convergence is not achieved' / 'iteration count exceeded' / oscillating residual; reported quantity disagrees with analytic reference by an order-of-magnitude factor.",
-                        '[Physics] Lift/drag computed from pressure integration on body surface '
-                        'Signal: the post-processed VtkOutput .post.bin shows the integrated_flux / max_displacement / PRESSURE channels disagreeing with analytic / textbook reference by 10-100%.',
-                    ],
+            "[Numerical] Far-field BC: use PotentialWallCondition for solid walls Signal: CreateNewCondition with the bare name raises RuntimeError 'The Condition \"PotentialWallCondition\" is not registered!'; the registered spellings carry a dimension-and-node-count suffix (PotentialWallCondition2D2N / 3D3N).",
+            "[Physics] Freestream conditions are set through FREE_STREAM_VELOCITY, FREE_STREAM_MACH and FREE_STREAM_DENSITY, which are attributes of CompressiblePotentialFlowApplication. There is no FREESTREAM_VELOCITY (one word) and no MACH_INFINITY ('infinity' spelled out): neither name exists anywhere in Kratos, including its 48-application C++ source, and an earlier version of this entry prescribed both. Signal: dotting either non-existent name off the application or off core raises AttributeError at attribute access, before any value is assigned; the FREE_STREAM_* spellings resolve.",
+        ],
+        "guidance": [
+            "[Numerical] Transonic: requires shock-capturing stabilization",
+            "[Physics] Lift/drag computed from pressure integration on body surface",
+        ]
     },
 }
 

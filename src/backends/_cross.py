@@ -721,7 +721,7 @@ _TURBULENCE_PITFALLS = [
     "no-slip + ad-hoc damping (allows fine wall meshes, y+ < 1 "
     "OK) but the damping constants differ from standard "
     "Launder-Spalding. NGSolve and dolfinx have no built-in "
-    "RANS — users write custom UFL forms; OASIS (a fenics-"
+    "RANS — users write custom UFL forms; OPENPASO (a fenics-"
     "based RANS solver) defaults to standard wall functions. "
     "FEBio has no fluid-turbulence support. Signal: SAME k-eps "
     "channel-flow problem on the SAME mesh produces different "

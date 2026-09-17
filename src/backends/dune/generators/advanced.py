@@ -69,6 +69,7 @@ summary = {{
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print("Maxwell/Helmholtz solve complete.")
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -79,106 +80,92 @@ print("Maxwell/Helmholtz solve complete.")
 def _eigenvalue_2d(params: dict) -> str:
     """FORMAT TEMPLATE — values are defaults, determine appropriate values for your specific problem.
 
-    Eigenvalue problem  -Δu = λu  solved via shift-invert / inverse iteration — DUNE-fem.
+    Laplace eigenvalue problem -Delta u = lambda u, Dirichlet, via
+    assembled matrices + scipy shift-invert — DUNE-fem.
     """
-    nx = params.get("nx", 32)
+    nx = params.get("nx", 24)
     order = params.get("order", 1)
     n_modes = params.get("n_modes", 4)
-    n_iter = params.get("n_iter", 200)
-    shift = params.get("shift", 0.0)
-    tol = params.get("tol", 1e-10)
     return f'''\
-"""Eigenvalue problem: -Δu = λu  on [0,1]² — inverse iteration — DUNE-fem
+"""Eigenvalue problem  -Delta u = lambda u  on [0,1]^2, u = 0 on the
+boundary — DUNE-fem.
 
-Analytical eigenvalues for unit square:
-    λ_{{m,n}} = π²(m² + n²)  =>  λ_{{1,1}} ≈ 19.739
+dune-fem has NO eigenvalue solver. The route that works is: assemble the
+stiffness and mass matrices with dune.fem.assemble, pull them out as
+scipy sparse matrices with .as_numpy, drop the boundary rows/columns,
+and call scipy.sparse.linalg.eigsh.
+
+Exact answer for the unit square:  lambda_(m,n) = pi^2 (m^2 + n^2)
+    -> 2*pi^2 = 19.7392,  5*pi^2 = 49.3480 (twice),  8*pi^2 = 78.9568
 """
 from dune.grid import structuredGrid
 from dune.fem.space import lagrange
-from dune.fem.scheme import galerkin
-from dune.ufl import DirichletBC
-from ufl import TrialFunction, TestFunction, dot, grad, dx
+from dune.fem import assemble
+from ufl import TrialFunction, TestFunction, SpatialCoordinate, as_vector, \
+    dot, grad, dx
 import numpy as np
+import scipy.sparse.linalg as spla
 import json
 
-gridView = structuredGrid([0, 0], [1, 1], [{nx}, {nx}])
-space = lagrange(gridView, order={order})
+nx = {nx}
+order = {order}
+n_modes = {n_modes}
 
+gridView = structuredGrid([0, 0], [1, 1], [nx, nx])
+space = lagrange(gridView, order=order)
 u = TrialFunction(space)
 v = TestFunction(space)
 
-sigma = {shift}   # shift for shift-invert iteration
+# dune.fem.assemble(bilinear form) -> LinearOperator; .as_numpy is
+# ALREADY a scipy csr_matrix, so it can be sliced directly. The
+# .tocsr() below is a measured no-op kept only for explicitness.
+A = assemble(dot(grad(u), grad(v)) * dx).as_numpy.tocsr()   # stiffness
+M = assemble(u * v * dx).as_numpy.tocsr()                   # mass
 
-# Shifted stiffness: (grad u, grad v) - sigma*(u, v)
-a_shift = (dot(grad(u), grad(v)) - sigma * u * v) * dx
-b_mass  = u * v * dx
+# Dirichlet rows must be REMOVED, not zeroed: a galerkin scheme's
+# constrained rows would add spurious eigenvalues at the identity value.
+# Lagrange dofs are point evaluations, so nodal coordinates come from
+# interpolating the coordinate field into a dimRange=2 space of the SAME
+# order; the two spaces share the dof ordering.
+coord_space = lagrange(gridView, dimRange=2, order=order)
+xv = SpatialCoordinate(coord_space)
+X = np.array(coord_space.interpolate(
+    as_vector([xv[0], xv[1]]), name="X").as_numpy).reshape(-1, 2)
+assert X.shape[0] == A.shape[0], "coordinate/space dof mismatch"
 
-dbc = DirichletBC(space, 0)
-scheme_shift = galerkin([a_shift == b_mass, dbc], solver="cg")
-scheme_mass  = galerkin([b_mass == u * v * dx, dbc], solver="cg")
+tol = 1e-10
+on_bnd = ((X[:, 0] < tol) | (X[:, 0] > 1 - tol) |
+          (X[:, 1] < tol) | (X[:, 1] > 1 - tol))
+inner_dofs = ~on_bnd
+Ai = A[inner_dofs][:, inner_dofs]
+Mi = M[inner_dofs][:, inner_dofs]
 
-# Inverse iteration: q_{{k+1}} = A^{{-1}} M q_k / ||A^{{-1}} M q_k||
-# Rayleigh quotient: lambda = (grad(q), grad(q)) / (q, q)
+# sigma=0 shift-invert: smallest eigenvalues of the generalised problem
+lam = np.sort(spla.eigsh(Ai, k=n_modes, M=Mi, sigma=0.0, which="LM",
+                         return_eigenvectors=False))
 
-n_modes = {n_modes}
-eigenvalues = []
+# analytic lambda_(m,n) = pi^2 (m^2 + n^2), sorted
+mn = sorted(np.pi**2 * (m*m + n*n) for m in range(1, 6) for n in range(1, 6))
+exact = np.array(mn[:n_modes])
 
-for mode in range(n_modes):
-    # Random initial vector orthogonalised against already-found modes
-    q = space.interpolate(0, name=f"q_{{mode}}")
-    import math
-    # Perturb initial guess for each mode
-    q.interpolate(
-        (1.0 + mode * 0.3) * (1.0 - q if mode % 2 == 0 else q)
-        if False else 1.0
-    )
-    # Re-interpolate a sensible nonzero starting guess
-    from ufl import SpatialCoordinate, sin, pi as ufl_pi
-    x = SpatialCoordinate(space)
-    q.interpolate(sin((mode + 1) * ufl_pi * x[0]) * sin(ufl_pi * x[1]))
+print(f"total dofs {{A.shape[0]}}, interior dofs {{int(inner_dofs.sum())}}")
+for i, (l, e) in enumerate(zip(lam, exact)):
+    print(f"mode {{i}}: lambda = {{l:.6f}}   exact = {{e:.6f}}   "
+          f"rel error = {{abs(l - e) / e:.3e}}")
 
-    prev_lam = 0.0
-    for it in range({n_iter}):
-        # Solve (A - sigma M) w = M q
-        rhs_fn = space.interpolate(q, name="rhs")
-        w = space.interpolate(0, name="w")
-        scheme_shift.solve(target=w)
-
-        # Rayleigh quotient  lambda = (grad(q), grad(q)) / (q, q)
-        q_arr = np.array(q.as_numpy)
-        w_arr = np.array(w.as_numpy)
-        norm_w = float(np.sqrt(w_arr @ w_arr))
-        if norm_w < 1e-300:
-            break
-        w_arr /= norm_w
-        q.as_numpy[:] = w_arr
-
-        # Approximate Rayleigh quotient (finite difference of norms)
-        lam = 1.0 / norm_w + sigma  # shift-invert eigenvalue estimate
-
-        if abs(lam - prev_lam) < {tol}:
-            print(f"Mode {{mode}}: lambda = {{lam:.8f}} (converged at iter {{it+1}})")
-            break
-        prev_lam = lam
-
-    eigenvalues.append(prev_lam)
-
-# For reference, compute just mode 0 cleanly with a simpler estimate
-vals = np.array(q.as_numpy)
-print(f"Computed eigenvalues: {{eigenvalues}}")
-print(f"Expected lambda_11 (analytical): {{2 * 3.14159265358979**2:.6f}}")
-
-gridView.writeVTK("result", pointdata={{"eigenfunction": q}})
+gridView.writeVTK("result", pointdata={{"mesh": space.interpolate(0, name="z")}})
 summary = {{
-    "eigenvalues": eigenvalues,
-    "n_dofs": len(vals),
-    "order": {order},
-    "shift": sigma,
-    "analytical_lambda_11": 2 * 3.14159265358979**2,
+    "eigenvalues": [float(l) for l in lam],
+    "analytic_eigenvalues": [float(e) for e in exact],
+    "rel_errors": [float(abs(l - e) / e) for l, e in zip(lam, exact)],
+    "n_dofs": int(A.shape[0]),
+    "n_interior_dofs": int(inner_dofs.sum()),
+    "order": order,
 }}
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print("Eigenvalue solve complete.")
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -224,15 +211,19 @@ t_val  = {traction}
 gridView = structuredGrid([0, 0], [1, 1], [{nx}, {nx}])
 space = lagrange(gridView, dimRange=2, order={order})
 
-# Solution field (displacement, initially zero)
-uh = space.interpolate([0, 0], name="displacement")
-
-v = TestFunction(space)
-x = SpatialCoordinate(space)
+# Write the residual in the TRIAL function. dune-fem differentiates the
+# UFL form symbolically to build the tangent, so it needs a form with
+# TWO arguments; the natural "residual written with the current
+# iterate" spelling — F = I + grad(uh) — has only the test function and
+# is rejected at scheme construction with
+#   ValueError: Integrands model requires form with at least two arguments.
+u   = TrialFunction(space)
+v   = TestFunction(space)
+x   = SpatialCoordinate(space)
 
 # Deformation gradient F = I + grad(u)
 I   = Identity(2)
-F   = I + grad(uh)
+F   = I + grad(u)
 C   = F.T * F
 Ic  = tr(C)
 J   = det(F)
@@ -249,15 +240,24 @@ P = mu_val * (F - F_inv_T) + lam_val * ln(J) * F_inv_T
 res = inner(P, grad(v)) * dx
 
 # Neumann traction on right boundary (x=1): t = [t_val, 0]
-n = FacetNormal(space)
 res -= conditional(lt(1.0 - x[0], 0.01), t_val * v[0], 0.0) * ds
 
 # Dirichlet: u = 0 on left boundary (x=0)
 dbc = DirichletBC(space, as_vector([0, 0]), conditional(lt(x[0], 0.01), 1, 0))
 
-# DUNE automatically computes Jacobian (tangent stiffness) and does Newton
-scheme = galerkin([res == 0, dbc], solver="cg")
-scheme.solve(target=uh)
+# DUNE automatically computes Jacobian (tangent stiffness) and does Newton.
+# The finite-strain tangent is NOT symmetric, so cg is the wrong Krylov
+# method here — use bicgstab (or gmres).
+scheme = galerkin([res == 0, dbc], solver="bicgstab",
+                  parameters={{"nonlinear.tolerance": 1e-8,
+                               "nonlinear.maxiterations": 50,
+                               "linear.tolerance": 1e-10,
+                               "linear.maxiterations": 20000}})
+uh = space.interpolate([0, 0], name="displacement")
+info = scheme.solve(target=uh)
+print(f"Newton iterations: {{info['iterations']}}, "
+      f"linear: {{info['linear_iterations']}}, "
+      f"converged: {{info['converged']}}")
 
 vals = np.array(uh.as_numpy).reshape(-1, 2)
 u_x_max = float(vals[:, 0].max())
@@ -277,6 +277,7 @@ summary = {{
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print("Hyperelasticity solve complete.")
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -287,113 +288,126 @@ print("Hyperelasticity solve complete.")
 def _navier_stokes_2d(params: dict) -> str:
     """FORMAT TEMPLATE — values are defaults, determine appropriate values for your specific problem.
 
-    Incompressible Navier-Stokes (lid-driven cavity) — Picard iteration — DUNE-fem.
+    Steady incompressible Navier-Stokes, Newton on a composite
+    Taylor-Hood space — DUNE-fem.
     """
     nx = params.get("nx", 16)
-    Re = params.get("Re", 100.0)
-    n_picard = params.get("n_picard", 20)
-    picard_tol = params.get("picard_tol", 1e-6)
+    Re = params.get("Re", 40.0)
     order_v = params.get("order_v", 2)
     order_p = params.get("order_p", 1)
     return f'''\
-"""Incompressible Navier-Stokes — lid-driven cavity — Picard — DUNE-fem
+"""Steady incompressible Navier-Stokes on [0,1]^2 — DUNE-fem.
 
-Re = {Re:.1f}  (nu = 1/Re)
-Velocity: P{order_v} Lagrange (vector),  Pressure: P{order_p} Lagrange
-Picard: solve linear Oseen problem (b.grad(u)) iteratively
+    (u . grad) u - nu*Laplace(u) + grad p = 0,   div u = 0
+
+Taylor-Hood P{order_v}/P{order_p} on ONE composite space. The residual is written
+in the TRIAL function so dune-fem can differentiate it symbolically and
+run Newton; there is no hand-written Picard loop.
+
+Verification: Kovasznay flow (Kovasznay 1948) is a closed-form steady
+Navier-Stokes solution with a genuinely non-zero convective term:
+    lam = Re/2 - sqrt(Re^2/4 + 4*pi^2)
+    u = (1 - exp(lam*x)*cos(2*pi*y),  lam/(2*pi)*exp(lam*x)*sin(2*pi*y))
+    p = (1 - exp(2*lam*x)) / 2
+It is imposed as Dirichlet data on three sides; on the outflow x=1 the
+matching EXACT TRACTION is imposed as the natural boundary term, which
+is what makes the pressure level well determined.
 """
 from dune.grid import structuredGrid
-from dune.fem.space import lagrange
+from dune.fem.space import lagrange, composite
 from dune.fem.scheme import galerkin
 from dune.ufl import DirichletBC
-from ufl import (
-    TrialFunction, TestFunction, SpatialCoordinate, Identity,
-    dot, grad, div, inner, dx, as_vector, conditional, lt, ge,
-)
+from dune.fem import integrate
+from ufl import (TrialFunction, TestFunction, SpatialCoordinate, FacetNormal,
+                 as_vector, inner, dot, grad, div, dx, ds, exp, cos, sin, pi,
+                 conditional, lt, gt)
 import numpy as np
 import json
 
-Re   = {Re}
-nu   = 1.0 / Re
+Re = {Re}
+nu = 1.0 / Re
+lam = Re / 2.0 - np.sqrt(Re * Re / 4.0 + 4.0 * np.pi * np.pi)
+print(f"Re = {{Re}}, nu = {{nu:.6g}}, Kovasznay lambda = {{lam:.6f}}")
 
 gridView = structuredGrid([0, 0], [1, 1], [{nx}, {nx}])
-
-# Velocity space (vector P{order_v}) and pressure space (scalar P{order_p})
 V = lagrange(gridView, dimRange=2, order={order_v})
 Q = lagrange(gridView, order={order_p})
+W = composite(V, Q, components=["velocity", "pressure"])
 
-x = SpatialCoordinate(V)
+trial = TrialFunction(W)
+test = TestFunction(W)
+u = as_vector([trial[0], trial[1]])
+p = trial[2]
+v = as_vector([test[0], test[1]])
+q = test[2]
 
-# Lid velocity: u = (1,0) on top (y=1), zero elsewhere
-lid_vel = as_vector([
-    conditional(ge(x[1], 1.0 - 1e-10), 1.0, 0.0),
-    0.0,
-])
+x = SpatialCoordinate(W)
+n = FacetNormal(W)
+tol = 1e-8
 
-# Picard iteration: given b (convection velocity), solve Oseen problem
-# (b.grad u, v) + nu*(grad u, grad v) - (p, div v) + (q, div u) = 0
-# Starting guess: zero
-b_vel = V.interpolate([0, 0], name="b_vel")   # convection velocity
-uh    = V.interpolate([0, 0], name="velocity")
-ph    = Q.interpolate(0, name="pressure")
+u_exact = as_vector([1.0 - exp(lam * x[0]) * cos(2 * pi * x[1]),
+                     lam / (2 * pi) * exp(lam * x[0]) * sin(2 * pi * x[1])])
+p_exact = 0.5 * (1.0 - exp(2 * lam * x[0]))
 
-picard_tol = {picard_tol}
-n_picard   = {n_picard}
+# CONVECTION: (u.grad)u_i = u_j du_i/dx_j = dot(grad(u), u).
+# dot(u, grad(u)) * v is a rank error — UFL raises
+# "ValueError: Invalid ranks 1 and 1 in product."
+res = (inner(dot(grad(u), u), v)
+       + nu * inner(grad(u), grad(v))
+       - p * div(v)
+       - q * div(u)) * dx
 
-for it in range(n_picard):
-    u = TrialFunction(V)
-    v = TestFunction(V)
+# natural (traction) BC on the outflow, matching the exact solution
+traction = nu * dot(grad(u_exact), n) - p_exact * n
+res -= conditional(gt(x[0], 1 - tol), 1.0, 0.0) * inner(traction, v) * ds
 
-    # Oseen operator (frozen convection b)
-    a_v = (dot(b_vel, grad(u)) * v + nu * inner(grad(u), grad(v))) * dx
+on_dirichlet = conditional(lt(x[0], tol), 1,
+                           conditional(lt(x[1], tol), 1,
+                                       conditional(gt(x[1], 1 - tol), 1, 0)))
+bc = DirichletBC(W, [u_exact[0], u_exact[1], None], on_dirichlet)
 
-    # Continuity constraint via penalty (p handled explicitly)
-    # Simple approach: solve velocity with grad-div stabilization, then update pressure
-    gamma = 1.0e4 / Re   # grad-div penalty
-    a_v  += gamma * div(u) * div(v) * dx
+# res == 0 is legal because res still holds BOTH a trial and a test
+# function. A residual written in the CURRENT ITERATE instead would have
+# only one argument and be rejected with
+# "ValueError: Integrands model requires form with at least two arguments."
+scheme = galerkin([res == 0, bc], solver=("suitesparse", "umfpack"),
+                  parameters={{"nonlinear.tolerance": 1e-11,
+                               "nonlinear.maxiterations": 30}})
 
-    b_v   = as_vector([0.0, 0.0])
-    rhs_v = dot(b_v, v) * dx
+wh = W.interpolate([0, 0, 0], name="solution")
+info = scheme.solve(target=wh)
 
-    # BCs: no-slip everywhere, lid on top
-    dbc_no_slip = DirichletBC(V, as_vector([0.0, 0.0]),
-                              conditional(lt(x[1], 1e-10), 1, 0))   # bottom
-    dbc_sides   = DirichletBC(V, as_vector([0.0, 0.0]),
-                              conditional(lt(x[0], 1e-10), 1,
-                              conditional(ge(x[0], 1.0 - 1e-10), 1, 0)))
-    dbc_lid     = DirichletBC(V, as_vector([1.0, 0.0]),
-                              conditional(ge(x[1], 1.0 - 1e-10), 1, 0))
+uh = as_vector([wh[0], wh[1]])
+ph = wh[2]
 
-    scheme_v = galerkin(
-        [a_v == rhs_v, dbc_no_slip, dbc_sides, dbc_lid], solver="gmres"
-    )
-    scheme_v.solve(target=uh)
+err_u = np.sqrt(integrate(inner(uh - u_exact, uh - u_exact),
+                          gridView=gridView, order=8))
+nrm_u = np.sqrt(integrate(inner(u_exact, u_exact), gridView=gridView, order=8))
+err_p = np.sqrt(integrate((ph - p_exact) ** 2, gridView=gridView, order=8))
+nrm_p = np.sqrt(integrate(p_exact ** 2, gridView=gridView, order=8))
+div_u = np.sqrt(integrate(div(uh) ** 2, gridView=gridView, order=8))
 
-    # Check convergence
-    diff = np.array(uh.as_numpy) - np.array(b_vel.as_numpy)
-    res_norm = float(np.sqrt(diff @ diff))
-    print(f"Picard it {{it+1:3d}}: ||u - b||_2 = {{res_norm:.3e}}")
+print(f"Newton iterations: {{info['iterations']}}, "
+      f"converged: {{info['converged']}}")
+print(f"relative velocity error vs Kovasznay: {{err_u / nrm_u:.4e}}")
+print(f"relative pressure error vs Kovasznay: {{err_p / nrm_p:.4e}}")
+print(f"||div u||_L2: {{div_u:.3e}}")
+print("Both relative errors must FALL when you increase nx; if they "
+      "stall, the convection term or a boundary term is wrong.")
 
-    b_vel.interpolate(uh)
-
-    if res_norm < picard_tol:
-        print(f"Picard converged after {{it+1}} iterations.")
-        break
-
-vals_u = np.array(uh.as_numpy).reshape(-1, 2)
-u_max  = float(np.abs(vals_u).max())
-print(f"Navier-Stokes: max |u| = {{u_max:.6f}}")
-
-gridView.writeVTK("result", pointdata={{"velocity": uh}})
+gridView.writeVTK("result", pointdata={{"velocity": uh, "pressure": ph}})
 summary = {{
     "Re": Re,
-    "max_velocity": u_max,
-    "n_dofs_v": len(vals_u) * 2,
-    "picard_residual": res_norm,
+    "newton_iterations": int(info["iterations"]),
+    "rel_error_velocity": float(err_u / nrm_u),
+    "rel_error_pressure": float(err_p / nrm_p),
+    "div_u_l2": float(div_u),
+    "n_dofs": int(W.size),
 }}
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print("Navier-Stokes solve complete.")
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -468,6 +482,7 @@ summary = {{
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print("Helmholtz solve complete.")
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -565,6 +580,7 @@ summary = {{
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print("Transient heat solve complete.")
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -575,100 +591,109 @@ print("Transient heat solve complete.")
 def _mixed_methods_2d(params: dict) -> str:
     """FORMAT TEMPLATE — values are defaults, determine appropriate values for your specific problem.
 
-    Mixed Poisson: find (sigma, u) in H(div) x L² such that
-        sigma + grad(u) = 0,   div(sigma) = -f
-    Uses Raviart-Thomas RT0 elements — DUNE-fem.
+    Mixed (dual / Darcy) Poisson: solve for the FLUX and the potential
+    together on one composite space — DUNE-fem.
     """
-    nx = params.get("nx", 16)
-    f_val = params.get("f", 1.0)
-    order = params.get("order", 0)
+    nx = params.get("nx", 8)
+    order_flux = params.get("order_flux", 2)
+    order_pot = params.get("order_pot", 1)
     return f'''\
-"""Mixed Poisson — Raviart-Thomas RT{order} + DG-P{order} — DUNE-fem
+"""Mixed (dual) Poisson on [0,1]^2 — DUNE-fem.
 
-Saddle-point system:
-    (sigma, tau) + (u, div tau) = 0           for all tau in H(div)
-    (div sigma, v)              = -(f, v)     for all v in L²
+Find the flux sigma and the potential u together:
+    sigma + grad(u) = 0        div(sigma) = f
 
-Manufactured solution: u = sin(pi*x)*sin(pi*y)  =>
-    sigma = -grad(u),  f = 2*pi^2*sin(pi*x)*sin(pi*y)
+Weak form (sigma in [P{order_flux}]^2, u in P{order_pot}, one composite space):
+    (sigma, tau) - (u, div tau) + <u_D, tau.n>_bnd = 0   for all tau
+    (div sigma, v)              = (f, v)                 for all v
+
+WHY NOT RAVIART-THOMAS: on dune-fem 2.12.0.2 a raviartThomas space
+CANNOT be put inside product()/composite() — the composite space fails
+to BUILD, in C++, with a CompileError. The RT space works perfectly on
+its own (see the pitfalls for this physics); it just cannot be one leg
+of a tuple space. The inf-sup stable Lagrange pair used here is the
+route that runs.
+
+Closed-form answer this script checks itself against:
+    u = 1 - x       sigma = -grad(u) = (1, 0)       f = div(sigma) = 0
+Both are inside the discrete spaces, so a CORRECT run reproduces them
+to solver tolerance.
 """
 from dune.grid import structuredGrid
-from dune.fem.space import raviartThomas, dglagrange
+from dune.fem.space import lagrange, composite
 from dune.fem.scheme import galerkin
 from dune.ufl import DirichletBC
-from ufl import (
-    TrialFunctions, TestFunctions, SpatialCoordinate,
-    dot, div, dx, sin, pi as ufl_pi, as_vector,
-)
+from dune.fem import integrate
+from ufl import (TrialFunction, TestFunction, SpatialCoordinate, FacetNormal,
+                 as_vector, inner, dot, div, dx, ds, conditional, lt, gt)
 import numpy as np
 import json
 
-f_val = {f_val}
-order = {order}   # RT order (0 = RT0, 1 = RT1, ...)
+nx = {nx}
+gridView = structuredGrid([0, 0], [1, 1], [nx, nx])
 
-gridView = structuredGrid([0, 0], [1, 1], [{nx}, {nx}])
+# REQUIRED: velocity-like space one order HIGHER than the scalar space,
+# exactly as for Stokes — the div coupling needs the same inf-sup
+# condition.
+S = lagrange(gridView, dimRange=2, order={order_flux})   # flux
+V = lagrange(gridView, order={order_pot})                # potential
+W = composite(S, V, components=["flux", "potential"])
 
-# Flux space H(div) and scalar space L²
-Sigma = raviartThomas(gridView, order=order)
-V     = dglagrange(gridView,   order=order)
+trial = TrialFunction(W)
+test = TestFunction(W)
+sigma = as_vector([trial[0], trial[1]])
+u = trial[2]
+tau = as_vector([test[0], test[1]])
+v = test[2]
 
-# Mixed function: (sigma, u)
-from dune.fem.space import product as product_space
-W = product_space(Sigma, V)
+x = SpatialCoordinate(W)
+n = FacetNormal(W)
+tol = 1e-8
 
-sigma_u = TrialFunctions(W)
-tau_v   = TestFunctions(W)
+u_D = 1.0 - x[0]      # potential prescribed on the boundary (NATURAL here)
 
-sigma, u = sigma_u
-tau,   v = tau_v
+a = (inner(sigma, tau) - u * div(tau) + div(sigma) * v) * dx
+L = -u_D * dot(tau, n) * ds        # the Dirichlet data enters WEAKLY
 
-x = SpatialCoordinate(Sigma)
+# In the mixed form the roles swap: the potential is natural and the
+# NORMAL FLUX is essential. sigma.n = 0 on y=0 and y=1 means sigma_y=0
+# there, so only the second component is constrained.
+bc_flux = DirichletBC(W, [None, 0, None],
+                      conditional(lt(x[1], tol), 1,
+                                  conditional(gt(x[1], 1 - tol), 1, 0)))
 
-# Bilinear form (symmetric saddle point)
-a  = (dot(sigma, tau) + dot(u, div(tau)) + dot(div(sigma), v)) * dx
+# REQUIRED: a direct solver — the mixed system is INDEFINITE.
+scheme = galerkin([a == L, bc_flux], solver=("suitesparse", "umfpack"))
+wh = W.interpolate([0, 0, 0], name="solution")
+info = scheme.solve(target=wh)
 
-# RHS: manufactured source
-f_mms = 2.0 * ufl_pi**2 * sin(ufl_pi * x[0]) * sin(ufl_pi * x[1])
-b = -f_mms * v * dx   # -(f, v) contribution
+sigma_h = as_vector([wh[0], wh[1]])
+u_h = wh[2]
 
-# Natural BC: sigma.n = -du/dn on boundary (zero here via strong BC on sigma.n)
-scheme = galerkin([a == b], solver="gmres")
+sigma_ex = as_vector([1.0, 0.0])
+err_u = np.sqrt(integrate((u_h - u_D) ** 2, gridView=gridView, order=6))
+nrm_u = np.sqrt(integrate(u_D ** 2, gridView=gridView, order=6))
+err_s = np.sqrt(integrate(inner(sigma_h - sigma_ex, sigma_h - sigma_ex),
+                          gridView=gridView, order=6))
+div_s = np.sqrt(integrate(div(sigma_h) ** 2, gridView=gridView, order=6))
 
-wh = W.interpolate([*[0.0] * Sigma.localBlockSize, 0.0], name="mixed")
-scheme.solve(target=wh)
+print(f"converged={{info['converged']}} dofs={{W.size}}")
+print(f"relative potential error: {{err_u / nrm_u:.3e}}")
+print(f"flux error ||sigma_h - (1,0)||_L2: {{err_s:.3e}}")
+print(f"||div sigma_h||_L2 (must match f = 0): {{div_s:.3e}}")
 
-sigma_h = wh.subfunctions[0]
-u_h     = wh.subfunctions[1]
-
-u_arr   = np.array(u_h.as_numpy)
-sig_arr = np.array(sigma_h.as_numpy)
-
-# Error vs. MMS
-u_ex  = Sigma.interpolate(
-    as_vector([-ufl_pi * sin(ufl_pi * x[0]) * sin(ufl_pi * x[1]),
-               -ufl_pi * sin(ufl_pi * x[0]) * sin(ufl_pi * x[1])]),
-    name="sigma_exact"
-)
-u_ex_p = V.interpolate(sin(ufl_pi * x[0]) * sin(ufl_pi * x[1]), name="u_exact")
-err_u  = np.array(u_h.as_numpy) - np.array(u_ex_p.as_numpy)
-l2_err = float(np.sqrt(err_u @ err_u) / max(len(err_u), 1))
-
-print(f"Mixed Poisson RT{order}: max(u) = {{u_arr.max():.8f}}")
-print(f"L2 nodal error: {{l2_err:.4e}}")
-print(f"DOFs sigma: {{len(sig_arr)}},  DOFs u: {{len(u_arr)}}")
-
-gridView.writeVTK("result", pointdata={{"pressure": u_h, "flux": sigma_h}})
+gridView.writeVTK("result",
+                  pointdata={{"potential": u_h, "flux": sigma_h}})
 summary = {{
-    "max_u": float(u_arr.max()),
-    "l2_nodal_error_u": l2_err,
-    "n_dofs_sigma": len(sig_arr),
-    "n_dofs_u": len(u_arr),
-    "rt_order": order,
-    "f": f_val,
+    "rel_error_potential": float(err_u / nrm_u),
+    "flux_error": float(err_s),
+    "div_sigma_l2": float(div_s),
+    "n_dofs": int(W.size),
 }}
 with open("results_summary.json", "w") as f:
     json.dump(summary, f, indent=2)
 print("Mixed Poisson solve complete.")
+print("DUNE_TEMPLATE_COMPLETE")
 '''
 
 
@@ -699,11 +724,20 @@ KNOWLEDGE = {
             ),
             (
                 "[Numerical] Helmholtz is INDEFINITE for "
-                "k^2 > pi^2 — CG diverges, use GMRES or "
-                "direct LU. Signal: CG on -Δu - k^2*u = f "
-                "with k=10 raises 'matrix not positive "
-                "definite' or stalls; GMRES converges in "
-                "~ O(k) iterations. (Audit 2026-06-02.)"
+                "k^2 > pi^2, so prefer GMRES or a direct "
+                "solver — but nothing warns you. Signal: "
+                "measured 2026-08-03, CG on "
+                "-Laplace(u) - k^2 u = f with k=10 on a "
+                "16x16 P1 grid raised NOTHING and reported "
+                "{'converged': True, 'iterations': 0, "
+                "'linear_iterations': 1}. Judge it by the "
+                "answer, not by the solver's own verdict. "
+                "CORRECTED by adversarial audit 2026-08-03: "
+                "an earlier revision claimed CG raises "
+                "'matrix not positive definite', which is "
+                "not a string this install contains or "
+                "emits. (Audit 2026-06-02; Signal "
+                "re-measured 2026-08-03.)"
             ),
             (
                 "[Numerical] Rule of thumb: >= 10 DOFs "
@@ -730,61 +764,124 @@ KNOWLEDGE = {
     },
     "eigenvalue": {
         "description": (
-            "Eigenvalue problem -Δu = λu via shift-invert / inverse iteration. "
-            "Computes smallest eigenvalues of the Laplace operator on a domain."
-        ),
-        "solver": "Inverse iteration with shift-invert; Rayleigh quotient convergence",
-        "spaces": "lagrange(gridView, order=k) — higher order for better accuracy",
-        "analytical_reference": "Unit square: λ_{m,n} = pi²(m²+n²); λ_11 ≈ 19.739",
+            "Laplace eigenvalue problem -Delta u = lambda u. dune-fem "
+            "has NO eigenvalue solver of its own: assemble the "
+            "stiffness and mass matrices, hand them to scipy."),
+
+        "required_calls_in_order": [
+            "space = dune.fem.space.lagrange(gridView, order=k)",
+            "A = dune.fem.assemble(dot(grad(u),grad(v))*dx)"
+            ".as_numpy.tocsr()",
+            "M = dune.fem.assemble(u*v*dx).as_numpy.tocsr()",
+            "identify the boundary dofs and DELETE those rows and "
+            "columns from A and M (do not zero them)",
+            "scipy.sparse.linalg.eigsh(Ai, k=n, M=Mi, sigma=0.0, "
+            "which='LM', return_eigenvectors=False)",
+        ],
+        "required_vs_optional": {
+            "REQUIRED": [
+                "dune.fem.assemble(form) — it returns a LinearOperator "
+                "whose .as_numpy is ALREADY a scipy csr_matrix "
+                "(measured 2026-08-03: .format == 'csr' and "
+                "A.tocsr() is A), so you can slice it directly",
+                "removal (not zeroing) of the constrained rows and "
+                "columns",
+                "sigma=0.0 with which='LM' — shift-invert, otherwise "
+                "eigsh returns the LARGEST eigenvalues, which are the "
+                "mesh-resolution garbage at the top of the spectrum",
+            ],
+            "OPTIONAL": [
+                "higher Lagrange order — order 2 buys roughly two "
+                "digits per mode at the same dof count",
+                "eigenvectors — pass return_eigenvectors=True and "
+                "write them back into a discrete function for VTK",
+            ],
+        },
+        "how_to_find_the_boundary_dofs": (
+            "Lagrange dofs are point evaluations, so interpolate the "
+            "coordinate field into a lagrange(gridView, dimRange=dim, "
+            "order=SAME k) space and reshape .as_numpy to (-1, dim): "
+            "row i of that array is the coordinate of dof i of the "
+            "SCALAR space. Measured 2026-08-03 on a 24x24 P1 grid: 625 "
+            "coordinate rows against 625 scalar dofs, 529 of them "
+            "interior. Assert the two counts match before you trust "
+            "the mask."),
+        "verification_you_can_run": (
+            "Unit square with homogeneous Dirichlet data has "
+            "lambda_(m,n) = pi^2 (m^2 + n^2) — 19.7392, 49.3480 "
+            "(double), 78.9568. Executed 2026-08-03, 24x24 "
+            "structuredGrid, P1, scipy eigsh with sigma=0: 19.7674, "
+            "49.5881, 49.5881, 79.4088, i.e. relative errors 1.4e-03 "
+            "to 5.7e-03, all from ABOVE. Discrete Dirichlet "
+            "eigenvalues of a conforming method are always upper "
+            "bounds, so a computed value BELOW the exact one means the "
+            "boundary rows were not removed properly."),
+
         "pitfalls": [
             (
-                "[Numerical] Shift sigma CLOSE TO BUT BELOW "
-                "target eigenvalue accelerates shift-"
-                "invert convergence. Signal: passing a sigma "
-                "kwarg to the scipy.sparse.linalg.eigsh "
-                "shift_invert solver far from any eigenvalue "
-                "gives slow inverse_iteration (10s of "
-                "iters); sigma > target jumps to a different "
-                "eigenvalue. For the first eigenpair on the "
-                "dune.fem lagrange Space, sigma slightly "
-                "below 0 works (Laplacian eigenvalues are "
-                "positive). (Audit 2026-06-02.)"
+                "[API] There is no eigenvalue solver in dune-fem. "
+                "Signal: dune.fem has no eig/eigen/eigs attribute of "
+                "any kind and 'import dune.fem.solver' raises "
+                "ModuleNotFoundError, so the only route is assemble -> "
+                "scipy (or PETSc/SLEPc through the petsc storage). "
+                "dune.fem.assemble(form) is the supported entry point "
+                "and returns an object of type LinearOperator whose "
+                "only conversion attribute is .as_numpy. (Executed "
+                "2026-08-03 on dune-fem 2.12.0.2.)"
             ),
             (
-                "[Numerical] DEFLATION required to compute "
-                "multiple modes without contamination. "
-                "Signal: a sequence of inverse iterations "
-                "without deflation converges all to the "
-                "SAME first eigenvalue — modes 2, 3, ... "
-                "are missed. After computing the i-th "
-                "mode, orthogonalise the starting vector "
-                "against the previous modes (Gram-"
-                "Schmidt) before iterating. (Audit "
-                "2026-06-02.)"
+                "[Numerical] Leaving the Dirichlet rows in the matrix "
+                "poisons the spectrum. Signal: a galerkin scheme's "
+                "constrained rows are identity rows, so the "
+                "generalised problem A x = lambda M x acquires one "
+                "spurious eigenvalue per constrained dof at "
+                "1/M_ii — for a 24x24 P1 grid that is 96 extra "
+                "eigenvalues mixed in among the physical ones, and "
+                "eigsh with sigma=0 returns them first. Delete the "
+                "rows AND the columns instead. (Executed 2026-08-03: "
+                "625 dofs, 529 interior, and the interior submatrices "
+                "give the analytic pi^2(m^2+n^2) values to 1e-03.)"
             ),
             (
-                "[Performance] For PRODUCTION use: SLEPc "
-                "(PETSc eigenvalue solver) via the "
-                "as_petsc backend. Signal: hand-rolled "
-                "inverse iteration in pure Python is "
-                "10-100x slower than SLEPc's "
-                "Krylov-Schur for 100+ eigenpairs; SLEPc "
-                "handles deflation, restarts, and "
-                "preconditioning automatically. Use "
-                "the PETSc/SLEPc solver backend for "
-                "spectrum problems. (Audit 2026-06-02.)"
+                "[API] .as_numpy on an assembled operator is ALREADY a "
+                "scipy csr_matrix, so slice it directly. Signal: check "
+                "it rather than converting blindly — "
+                "A.as_numpy.format prints 'csr' and "
+                "A.as_numpy.tocsr() is A.as_numpy returns True, so a "
+                ".tocsr() in your code is a no-op and its presence is "
+                "not evidence that it was needed. RETRACTED "
+                "2026-08-03 by adversarial audit: an earlier revision "
+                "of this entry claimed it was COO and that "
+                "fancy-indexing 'raises or returns something unusable' "
+                "without a .tocsr() first. Measured on dune-fem "
+                "2.12.0.2 / scipy 1.18.0: A.as_numpy.format == 'csr', "
+                "type csr_matrix, A[mask][:, mask] returned a (49, 49) "
+                "csr_matrix with 285 nonzeros and raised nothing, "
+                "identical to A.tocsr()[mask][:, mask] with "
+                "max|difference| 0.0, and A.tocsr() is A is True — the "
+                "call is a no-op. The installed package confirms it: "
+                "dune/fem/operator/__init__.py imports only "
+                "scipy.sparse.csr_matrix for the as_numpy backend and "
+                "the string 'coo_matrix' occurs nowhere under "
+                "site-packages/dune. Keeping .tocsr() is harmless but "
+                "it is not required. (Executed 2026-08-03.)"
             ),
             (
-                "[API] Matrix must be ASSEMBLED — use "
-                "scheme.jacobian() or scipy sparse "
-                "matrices to extract the operator. "
-                "Signal: trying to pass the galerkin "
-                "scheme directly to scipy.sparse.linalg "
-                ".eigs raises 'not a sparse matrix'; "
-                "extract via "
-                "K = scheme.jacobian(uh).as_numpy or "
-                "use the dune-petsc backend for native "
-                "operator wrapping. (Audit 2026-06-02.)"
+                "[Numerical] eigsh without a shift returns the WRONG "
+                "END of the spectrum. Signal: which='SM' converges "
+                "extremely slowly or not at all, and the default "
+                "which='LM' without sigma returns the largest "
+                "eigenvalues, which for a FEM Laplacian are O(1/h^2) "
+                "mesh artefacts, not physics. Use sigma=0.0 with "
+                "which='LM' (shift-invert). (Audit 2026-06-02, "
+                "confirmed by the executed template 2026-08-03.)"
+            ),
+            (
+                "[Performance] For hundreds of eigenpairs, use SLEPc "
+                "through the petsc storage rather than scipy. Signal: "
+                "scipy's ARPACK path re-factorises the shifted matrix "
+                "and holds it dense-ish in memory; for 100+ pairs on a "
+                "3D mesh it is the dominant cost. (Audit 2026-06-02.)"
             ),
         ],
     },
@@ -862,85 +959,181 @@ KNOWLEDGE = {
     },
     "navier_stokes": {
         "description": (
-            "Incompressible Navier-Stokes via Picard (Oseen) iteration. "
-            "Lid-driven cavity benchmark. Grad-div stabilization for pressure coupling."
-        ),
-        "solver": "Picard iteration (fixed-point on convection velocity) with GMRES",
-        "spaces": "lagrange(dimRange=2, order=2) velocity + lagrange(order=1) pressure (Taylor-Hood)",
+            "Steady incompressible Navier-Stokes on one composite "
+            "Taylor-Hood space, solved by dune-fem's built-in Newton — "
+            "the residual is written in the TRIAL function and the "
+            "tangent is differentiated symbolically, so no Picard loop "
+            "is needed."),
+
+        "required_calls_in_order": [
+            "W = dune.fem.space.composite("
+            "lagrange(gridView, dimRange=2, order=2), "
+            "lagrange(gridView, order=1))",
+            "trial = ufl.TrialFunction(W); "
+            "u = ufl.as_vector([trial[0], trial[1]]); p = trial[2]",
+            "res = (inner(dot(grad(u), u), v) + nu*inner(grad(u),grad(v))"
+            " - p*div(v) - q*div(u))*dx"
+            "   <- dot(grad(u), u), NOT dot(u, grad(u))*v",
+            "scheme = galerkin([res == 0, bc], "
+            "solver=('suitesparse','umfpack'), "
+            "parameters={'nonlinear.tolerance': 1e-11})",
+            "wh = W.interpolate([0,0,0], name='solution'); "
+            "scheme.solve(target=wh)",
+        ],
+        "required_vs_optional": {
+            "REQUIRED": [
+                "the residual written in the TRIAL function u, not in "
+                "the current iterate — a residual holding only the "
+                "test function is rejected at scheme construction",
+                "an LBB-stable pair (velocity order = pressure order + 1)",
+                "a solver that tolerates an indefinite, "
+                "non-symmetric tangent — ('suitesparse','umfpack') "
+                "is the right default; the Krylov names converge too "
+                "but at 1e3-4e4 iterations",
+                "None for the pressure entry of the DirichletBC value "
+                "list",
+                "either a natural (traction) outflow or an explicit "
+                "pressure constraint, otherwise the pressure floats",
+            ],
+            "OPTIONAL": [
+                "nonlinear.maxiterations / nonlinear.tolerance — the "
+                "defaults converge for moderate Re",
+                "nonlinear.linesearch — needed only when the initial "
+                "guess is far away, e.g. high Re from a cold start",
+                "continuation in Re (solve at Re/4, use as the initial "
+                "guess) — only for high Re where Newton diverges from "
+                "zero",
+            ],
+        },
+        "verification_you_can_run": (
+            "Kovasznay flow (Kovasznay 1948) is a closed-form steady "
+            "Navier-Stokes solution whose convective term is NOT zero, "
+            "unlike every parallel-flow test: with "
+            "lam = Re/2 - sqrt(Re^2/4 + 4*pi^2), "
+            "u = (1 - exp(lam*x)*cos(2*pi*y), "
+            "lam/(2*pi)*exp(lam*x)*sin(2*pi*y)) and "
+            "p = (1 - exp(2*lam*x))/2. Impose it as Dirichlet data on "
+            "three sides and impose the MATCHING EXACT TRACTION "
+            "nu*grad(u).n - p*n on the outflow, which is the natural "
+            "boundary term of this form and is what pins the pressure "
+            "level. Executed 2026-08-03 at Re=40 on a 16x16 "
+            "structuredGrid with P2/P1: Newton converged in 4 "
+            "iterations to a relative velocity error of 1.5e-04 and a "
+            "relative pressure error of 4.5e-04. The error must FALL "
+            "when you refine; a value that stalls means a boundary "
+            "term or the convective term is wrong. A parallel-flow "
+            "test such as Poiseuille CANNOT detect a broken convective "
+            "term, because (u.grad)u vanishes identically on it."),
+
         "pitfalls": [
             (
-                "[Numerical] PICARD (Oseen) iteration "
-                "converges well for Re < 1000; Newton "
-                "converges faster NEAR the solution but "
-                "diverges far from it. Signal: at Re > "
-                "1000 the dune.fem galerkin scheme Picard "
-                "solve takes 50+ iters or stalls; switch "
-                "to Newton with the Picard lagrange-space "
-                "solution as initial guess. For Re > "
-                "5000, use continuation in Re. (Audit "
-                "2026-06-02.)"
+                "[Syntax] The convective term is dot(grad(u), u), not "
+                "dot(u, grad(u))*v. Signal: writing "
+                "dot(b, grad(u)) * v raises "
+                "\"ValueError: Invalid ranks 1 and 1 in product.\" "
+                "from ufl/exproperators.py::_mult — a vector times a "
+                "vector is not a legal product. In UFL grad(u)[i,j] is "
+                "du_i/dx_j, so (u.grad)u_i = u_j du_i/dx_j = "
+                "dot(grad(u), u), and it must be contracted against v "
+                "with inner(...). (Executed 2026-08-03 — this is the "
+                "error the previous version of this template died "
+                "with.)"
             ),
             (
-                "[Numerical] Grad-div stabilisation avoids "
-                "solving the FULL saddle-point separately. "
-                "Signal: a Taylor-Hood NS without "
-                "grad-div lets div(u) reach 1e-4 to 1e-3 "
-                "(not machine precision); adding "
-                "tau * (div(u), div(v)) * dx with "
-                "tau ~ nu makes div(u) ~ 1e-12. (Audit "
-                "2026-06-02.)"
+                "[API] A residual written in the CURRENT ITERATE is "
+                "rejected. Signal: building res from uh (a discrete "
+                "function) instead of TrialFunction(W) leaves the form "
+                "with only ONE argument, and galerkin([res == 0, bc]) "
+                "raises \"ValueError: Integrands model requires form "
+                "with at least two arguments.\" from "
+                "dune/models/integrands/load.py. dune-fem wants the "
+                "residual in the trial function and differentiates it "
+                "itself. (Executed 2026-08-03.)"
             ),
             (
-                "[Numerical] True inf-sup stable pair: "
-                "P2/P1 (Taylor-Hood) OR P1/P1 + "
-                "stabilisation. Signal: P1/P1 lagrange "
-                "spaces without PSPG stabilisation give "
-                "a CHECKERBOARD pressure mode "
-                "(alternating high/low across elements) — "
-                "visible in the gridView.writeVTK output "
-                "in ParaView. PSPG or grad-div added to "
-                "the galerkin scheme form removes the "
-                "mode. (Audit 2026-06-02.)"
+                "[Numerical] Newton from a zero initial guess diverges "
+                "as Re grows. Signal: info['converged'] comes back "
+                "False, or the iteration count hits "
+                "nonlinear.maxiterations, with the residual bouncing "
+                "rather than shrinking. Measured 2026-08-03: at Re=40 "
+                "on 8x8 and 16x16 grids Newton converged from a zero "
+                "start in 5 and 4 iterations. For higher Re, either "
+                "enable nonlinear.linesearch or use continuation — "
+                "solve at a lower Re and interpolate that solution "
+                "into the initial guess."
             ),
             (
-                "[Performance] BLOCK preconditioner (SIMPLE, "
-                "SIMPLEC, Schur complement) for efficiency. "
-                "Signal: direct LU on a 100k-DOF Stokes "
-                "system takes 30+ GB memory; SIMPLE with "
-                "two inner solves (mass + Laplace) scales "
-                "linearly in N at the cost of more outer "
-                "iterations. Configure via PETSc "
-                "fieldsplit. (Audit 2026-06-02.)"
+                "[Numerical] Taylor-Hood enforces incompressibility "
+                "only WEAKLY. Signal: ||div u||_L2 does not go to "
+                "machine zero the way the Stokes-Poiseuille test does "
+                "— measured 1.1e-02 at 8x8 and 2.6e-03 at 16x16 for "
+                "Kovasznay at Re=40. That is the discretisation, not a "
+                "bug; judge it by whether it FALLS under refinement. "
+                "(Executed 2026-08-03.)"
             ),
             (
-                "[Numerical] High Re: add SUPG / PSPG "
-                "stabilisation or use DG upwinding. "
-                "Signal: the dune.fem galerkin scheme with "
-                "standard Galerkin NS at Re > 500 shows "
-                "visible streamwise oscillations (wiggles) "
-                "downstream of obstacles in the "
-                "lagrange-space velocity output; SUPG "
-                "removes them. The stabilisation parameter "
-                "tau scales as h / (2*|u|) at high Pe. "
-                "(Audit 2026-06-02.)"
+                "[Numerical] Convection dominates as Re rises and the "
+                "Galerkin discretisation is not stabilised. Signal: at "
+                "high Re the velocity develops mesh-scale oscillations "
+                "upstream of boundary layers that do not shrink until "
+                "the layer is resolved; add SUPG/GLS stabilisation or "
+                "refine. (Audit 2026-06-02.)"
+            ),
+            (
+                "[Performance] The Newton tangent of Navier-Stokes "
+                "is neither symmetric nor definite, so judge the "
+                "solver by iteration count, not by whether it "
+                "finishes. Signal: read "
+                "linear_iterations out of the dict that "
+                "dune.fem.scheme.galerkin's solve returns. On the "
+                "12x12 composite Taylor-Hood Stokes matrix, measured "
+                "2026-08-03, it came back 1 for "
+                "solver=('suitesparse','umfpack') at 9.465e-16 "
+                "relative error, against 1343 for 'cg' at 3.837e-13, "
+                "94026 for 'gmres' and 43953 for 'bicgstab'. The "
+                "Krylov methods DO converge — the cost, three to five "
+                "orders of magnitude more iterations, is the signal, "
+                "not a failure. Use solver=('suitesparse','umfpack') "
+                "for 2D problems of this size. (RE-MEASURED by "
+                "adversarial audit 2026-08-03; an earlier revision "
+                "recorded 1150 / 2527 / 37167, which did not "
+                "reproduce.)"
             ),
         ],
     },
     "helmholtz": {
         "description": (
             "Helmholtz equation -Δu - k²u = f. "
-            "Manufactured solution (MMS) with u_exact = sin(pi*x)*sin(pi*y) for verification."
+            "Verify with a manufactured solution: pick a smooth u that satisfies "
+            "your boundary conditions, substitute it to obtain f, and check that "
+            "the L2 error falls at the element's theoretical order. Do not reuse "
+            "a solution written down here — the field must be yours, or the "
+            "convergence study measures nothing about your discretisation."
         ),
         "solver": "galerkin with GMRES (system is indefinite for k² > smallest eigenvalue)",
         "spaces": "lagrange(gridView, order=2) — higher order for better phase accuracy",
         "pitfalls": [
             (
                 "[Numerical] Helmholtz system is INDEFINITE "
-                "(not SPD): CG may diverge, use GMRES or "
-                "direct LU. Signal: CG returns 'matrix "
-                "not positive definite' or stalls; GMRES "
-                "converges in O(k) iterations for "
-                "moderate k. (Audit 2026-06-02.)"
+                "(not SPD), so prefer GMRES or a direct "
+                "solver — but do NOT expect to be told. "
+                "Signal: dune-fem gives you NO diagnostic. "
+                "Measured 2026-08-03 on -Laplace(u) - k^2 u "
+                "= f at k=10 on a 16x16 P1 grid, "
+                "solver='cg': no exception was raised and "
+                "info came back {'converged': True, "
+                "'iterations': 0, 'linear_iterations': 1}. "
+                "The only detector is the ANSWER — check it "
+                "against a manufactured solution, or "
+                "compare cg against a direct solve. "
+                "CORRECTED by adversarial audit 2026-08-03: "
+                "an earlier revision of this Signal claimed "
+                "CG returns 'matrix not positive definite', "
+                "a string that occurs NOWHERE under "
+                "site-packages/dune or include/dune and "
+                "that this install does not emit. "
+                "(Audit 2026-06-02; Signal re-measured "
+                "2026-08-03.)"
             ),
             (
                 "[Numerical] Pollution effect: higher order "
@@ -1002,6 +1195,46 @@ KNOWLEDGE = {
             "dirk23": "2nd/3rd order DIRK via dune-fem's Runge-Kutta steppers",
             "sdirk22": "2nd order singly-diagonal implicit RK",
         },
+        "required_vs_optional": {
+            "REQUIRED": [
+                "the mass term u*v/dt on the LEFT and u_n*v/dt on the "
+                "RIGHT — without it the 'transient' run just re-solves "
+                "the steady problem every step",
+                "ONE scheme built OUTSIDE the time loop",
+                "a stage/output function distinct from the one the "
+                "right-hand side reads",
+            ],
+            "OPTIONAL": [
+                "dune.ufl.Constant for dt and for time-dependent "
+                "coefficients — assigning .value avoids a JIT rebuild, "
+                "while changing a float literal inside the form forces "
+                "one",
+                "gridView.writeVTK(name, ..., number=step) for a time "
+                "series (the kwarg exists; a series was NOT exercised "
+                "here)",
+            ],
+            "NOT AVAILABLE": [
+                "DIRK23 / SDIRK22 / Heun / SSP-RK as ready-made "
+                "dune-fem objects. Older catalog text listed them; "
+                "they belong to dune-fem-dg, which is NOT importable "
+                "from a plain dune-fem install (executed 2026-08-03). "
+                "Implement the stepper yourself — SSP-RK2 is four "
+                "lines and there is a working one in the dg_advection "
+                "template.",
+            ],
+        },
+        "verification_you_can_run": (
+            "Without a source and with zero Dirichlet data the "
+            "solution must decay monotonically towards zero and never "
+            "change sign, for ANY dt, because implicit Euler is "
+            "unconditionally stable and the heat operator is "
+            "dissipative. If the answer does not change when you "
+            "change dt, the mass term is missing; if it oscillates in "
+            "sign, the time term has the wrong sign. For a "
+            "second-order check, halve dt and confirm the change "
+            "between successive dt levels shrinks; implicit Euler is "
+            "first order in time, so it shrinks by about half, while "
+            "correctly written Crank-Nicolson shrinks by about four."),
         "pitfalls": [
             (
                 "[API] Backward Euler: REASSEMBLE "
@@ -1061,84 +1294,155 @@ KNOWLEDGE = {
     },
     "mixed_methods": {
         "description": (
-            "Mixed Poisson with Raviart-Thomas RT0 flux and DG-P0 pressure. "
-            "Saddle-point system (sigma, u) in H(div) x L². "
-            "Exact conservation of flux; no locking; natural Neumann BCs."
-        ),
-        "solver": "galerkin with GMRES for indefinite saddle-point system",
-        "spaces": {
-            "flux": "raviartThomas(gridView, order=0) — H(div) conforming",
-            "pressure": "dglagrange(gridView, order=0) — piecewise constant L²",
-            "product": "product_space(Sigma, V) — composite space for (sigma, u)",
+            "Mixed (dual) Poisson / Darcy: solve for the FLUX and the "
+            "potential simultaneously on one composite space. "
+            "READ THE FIRST PITFALL BEFORE WRITING ANY CODE — the "
+            "textbook Raviart-Thomas pair cannot be assembled on "
+            "dune-fem 2.12.0.2."),
+
+        "required_calls_in_order": [
+            "S = dune.fem.space.lagrange(gridView, dimRange=2, order=2)"
+            "   # flux",
+            "V = dune.fem.space.lagrange(gridView, order=1)"
+            "   # potential",
+            "W = dune.fem.space.composite(S, V)",
+            "trial = ufl.TrialFunction(W); "
+            "sigma = ufl.as_vector([trial[0], trial[1]]); u = trial[2]",
+            "a = (inner(sigma,tau) - u*div(tau) + div(sigma)*v)*dx",
+            "L = -u_D*dot(tau, n)*ds"
+            "   # the POTENTIAL is the natural datum in the mixed form",
+            "bc = dune.ufl.DirichletBC(W, [None, 0, None], <indicator>)"
+            "   # the NORMAL FLUX is the essential datum",
+            "scheme = galerkin([a == L, bc], "
+            "solver=('suitesparse','umfpack'))",
+        ],
+        "required_vs_optional": {
+            "REQUIRED": [
+                "an inf-sup stable pair — flux space one order higher "
+                "than the potential space, exactly as for Stokes",
+                "a direct solver; the mixed system is indefinite",
+                "the boundary term -u_D*dot(tau, n)*ds — in the mixed "
+                "form the Dirichlet datum for u enters WEAKLY and "
+                "there is no DirichletBC for it",
+                "None entries in the DirichletBC value list for every "
+                "component you are not constraining",
+            ],
+            "OPTIONAL": [
+                "components=['flux','potential'] for VTK names",
+                "a permeability tensor K: replace inner(sigma,tau) by "
+                "inner(dot(inv(K), sigma), tau)",
+            ],
         },
+        "verification_you_can_run": (
+            "Take u = 1 - x, so sigma = -grad(u) = (1,0) and f = "
+            "div(sigma) = 0. Prescribe u_D = 1 - x weakly on the whole "
+            "boundary and sigma_y = 0 on y=0 and y=1. Both fields are "
+            "inside the discrete spaces, so a correct run reproduces "
+            "them to solver tolerance. Executed 2026-08-03, 8x8 "
+            "structuredGrid, [P2]^2 flux + P1 potential, "
+            "('suitesparse','umfpack'): relative potential error "
+            "2.5e-16, flux error 3.1e-15, ||div sigma_h|| 1.5e-13. The "
+            "same problem with solver='gmres' also converged but only "
+            "to 1.4e-12 / 6.8e-11 / 3.5e-09."),
+
+        "raviart_thomas_status_on_this_install": (
+            "raviartThomas WORKS ON ITS OWN and is genuinely H(div): "
+            "raviartThomas(gridView, order=0) on an 8x8 structuredGrid "
+            "built fine (size 144, localBlockSize 1), and interpolating "
+            "an analytically divergence-free field into it gave "
+            "||div sigma_h||_L2 = 4.4e-16 — machine zero, which is the "
+            "defining commuting-diagram property of the element. Its "
+            "L2 interpolation error on that field was 1.1e-01 at 8x8, "
+            "which is the expected first-order accuracy of RT0, not a "
+            "bug. What does NOT work is putting it inside a tuple "
+            "space; see the pitfall. Executed 2026-08-03."),
+
         "pitfalls": [
             (
-                "[Numerical] Inf-sup stability: RT_k + "
-                "DG-P_k pair is LBB-stable. Signal: in "
-                "the dune.fem galerkin scheme mixing non-"
-                "LBB-stable pairs (e.g. RT_1 + DG-P_1 "
-                "via raviartThomas(gridView, order=1) + "
-                "dglagrange(gridView, order=1)) makes "
-                "the discrete LBB constant collapse with "
-                "alugrid refinement — pressure norm "
-                "grows like O(h^-1). Stick to the "
-                "matched RT_k + DG-P_{k-1} convention. "
-                "(Audit 2026-06-02.)"
+                "[API] raviartThomas cannot be a leg of "
+                "product()/composite() on dune-fem 2.12.0.2 — the "
+                "space fails to BUILD, in C++, before any solve. "
+                "Signal: dune.generator.exceptions.CompileError while "
+                "compiling the generated femspace module, whose "
+                "decisive line is \"cannot convert 'localDofVector' "
+                "(type 'Dune::Fem::SubVector<Dune::Fem::"
+                "LocalContribution<Dune::Fem::TupleDiscreteFunction<"
+                "... RaviartThomasLocalFiniteElementMap ...>>>') to "
+                "type 'std::vector<double>&'\" at "
+                "dune/fem/space/localfiniteelement/interpolation.hh:"
+                "179. product() and composite() fail identically, and "
+                "the failure costs the full C++ build time first, so "
+                "it looks like a hang. The same RT space built ALONE "
+                "works. Use an inf-sup stable Lagrange pair for the "
+                "mixed system, or keep RT for interpolation/projection "
+                "only. (Executed 2026-08-03 on dune-fem 2.12.0.2, both "
+                "factories, and reproduced from the generator "
+                "template.)"
             ),
             (
-                "[API] product_space() from dune.fem."
-                "space wraps Sigma and V together. "
-                "Signal: trying to solve the mixed "
-                "system on separate Sigma and V spaces "
-                "produces decoupled solves — no "
-                "saddle-point coupling. Use "
-                "W = product_space(Sigma, V) and "
-                "construct the form on W. (Audit "
-                "2026-06-02.)"
+                "[API] The Python factory is raviartThomas (camelCase). "
+                "Signal: importing dune.fem.space.raviartthomas "
+                "raises ImportError and "
+                "hasattr(dune.fem.space,'raviartthomas') is False, "
+                "even though the C++ header really is called "
+                "raviartthomas.hh — which is where the confusion comes "
+                "from. Same for the sibling H(div) families bdm and "
+                "bdfm, which ARE lowercase. (Executed 2026-08-03.)"
             ),
             (
-                "[API] TrialFunctions(W) / TestFunctions"
-                "(W) UNPACK composite functions into "
-                "(sigma, u). Signal: writing "
-                "TrialFunction(W) returns a single "
-                "TestFunction representing the whole "
-                "vector; you need "
-                "(sigma, u) = TrialFunctions(W) to "
-                "access components individually for "
-                "the mixed form. (Audit 2026-06-02.)"
+                "[API] ufl.TrialFunctions(W) does NOT unpack a "
+                "dune-fem composite space. Signal: it returns a "
+                "1-TUPLE holding one argument of shape (dim_total,), "
+                "so the unpacking (sigma, u) = TrialFunctions(W) "
+                "binds sigma to "
+                "the whole vector. Use TrialFunction(W) and slice: "
+                "sigma = as_vector([t[0], t[1]]); u = t[2]. (Executed "
+                "2026-08-03 — this corrects an earlier catalog entry "
+                "that claimed the unpacking works.)"
             ),
             (
-                "[Input] Natural BC on sigma.n (flux) "
-                "imposed WEAKLY via a boundary term in "
-                "b. Signal: applying a Dirichlet BC on "
-                "sigma.n at an inflow surface raises "
-                "'wrong DOF space' — the flux DOF lives "
-                "in H(div) and has nodal values only "
-                "on faces; impose flux via boundary "
-                "integrals in the RHS. (Audit "
-                "2026-06-02.)"
+                "[Input] In the mixed form the boundary roles SWAP. "
+                "Signal: the potential u is the NATURAL datum and "
+                "enters through the boundary integral "
+                "-u_D*dot(tau,n)*ds; the normal flux sigma.n is the "
+                "ESSENTIAL datum and needs a DirichletBC. Writing a "
+                "DirichletBC on u instead constrains an L2-type field "
+                "and gives a solution that ignores your boundary data "
+                "while still converging. (Audit 2026-06-02; the "
+                "working sign convention is in the executed template.)"
             ),
             (
-                "[Numerical] For H1-conforming solution: "
-                "POST-PROCESS with local projection. "
-                "Signal: the mixed-Poisson 'pressure' "
-                "u in DG-P_{k-1} is piecewise-discontinuous "
-                "— direct ParaView visualisation shows "
-                "stepped values per cell. Project to "
-                "lagrange(order=k) for smooth output "
-                "via space.interpolate. (Audit "
-                "2026-06-02.)"
+                "[API] The multi-field factory is "
+                "dune.fem.space.product(S, V) or .composite(S, V) — "
+                "there is NO dune.fem.space.product_space, the name is "
+                "ABSENT / FALSIFIED. Signal: importing product_space "
+                "raises ImportError; the name only ever existed as a "
+                "local alias in this catalog's own template. product "
+                "and "
+                "composite were measured to produce the SAME object "
+                "for the same arguments (same dimRange, same size). "
+                "(Executed 2026-08-03: hasattr("
+                "dune.fem.space,'product_space') is False.)"
             ),
             (
-                "[Performance] Saddle-point: use BLOCK "
-                "preconditioner or direct solver for "
-                "small problems. Signal: GMRES on the "
-                "raw saddle-point converges in O(N) "
-                "iterations (slow); a block-diagonal "
-                "preconditioner with Sigma-Mass + "
-                "u-Laplace gives ~ O(sqrt(N)) "
-                "iterations. Direct UMFPACK works "
-                "for N < 100k. (Audit 2026-06-02.)"
+                "[Numerical] Equal-order flux and potential spaces "
+                "violate inf-sup exactly as in Stokes. Signal: "
+                "dune.fem.space.composite(lagrange(gridView, "
+                "dimRange=2, order=1), lagrange(gridView, order=1)) "
+                "assembles and solves, and the potential comes back "
+                "with a checkerboard mode whose amplitude does NOT "
+                "shrink under refinement while the flux still looks "
+                "fine. Give the lagrange flux space order = potential "
+                "order + 1. (Audit 2026-06-02.)"
+            ),
+            (
+                "[Performance] Saddle-point systems need a direct "
+                "solver or a block preconditioner. Signal: plain GMRES "
+                "on the raw indefinite matrix converges, slowly, and "
+                "to a much looser tolerance than the direct solver on "
+                "the same problem (measured 1.4e-12 vs 2.5e-16 on an "
+                "8x8 grid). Direct UMFPACK is the right default below "
+                "~1e5 dofs. (Executed 2026-08-03.)"
             ),
         ],
     },

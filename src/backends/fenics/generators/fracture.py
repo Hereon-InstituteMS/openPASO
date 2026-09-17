@@ -29,6 +29,17 @@ convergence or a fixed number of staggered iterations.
 
 
 KNOWLEDGE = {
+    # ─────────────────────────────────────────────────────────────────
+    # _SERVING_STATUS (added 2026-08-03)
+    # This dict is SHADOWED and is NOT what an agent receives.
+    # fenics/backend.py:get_knowledge() returns
+    # src/tools/deep_knowledge.py::_FENICS_KNOWLEDGE['fracture'] for this
+    # physics and never falls through to here. Editing the pitfalls
+    # below changes nothing an agent can see. The claims here were NOT
+    # re-verified in the 2026-08-03 execution pass for exactly that
+    # reason — treat them as unverified history, and make corrections
+    # in deep_knowledge.py instead.
+    # ─────────────────────────────────────────────────────────────────
     "description": (
         "Phase-field fracture (AT2) — diffuse crack via "
         "damage d in [0, 1]. No remeshing; crack path "
@@ -71,9 +82,15 @@ KNOWLEDGE = {
         "shape=(gdim,)) for u and basix.ufl.element("
         "'Lagrange', cell, 1) for d. dolfinx 0.10+ removed "
         "ufl.VectorElement / ufl.FiniteElement. "
-        "Signal: 'AttributeError: module ufl has no "
-        "attribute VectorElement' at fem.functionspace "
-        "construction time.",
+        "Signal: \"AttributeError: module 'ufl' has no attribute "
+        "'VectorElement'\" — the quotes around 'ufl' and "
+        "'VectorElement' are part of the message, and an earlier "
+        "wording here dropped them, so a guard matching the text "
+        "verbatim would have missed. ufl.FiniteElement gives the "
+        "same message with 'FiniteElement'. Raised at ATTRIBUTE "
+        "LOOKUP, i.e. as soon as the name is touched, not at "
+        "fem.functionspace construction. (Verified by execution "
+        "2026-08-07, dolfinx 0.10.0 / ufl 2025.2.1.)",
         "[Numerical] Length scale l0 ↔ mesh resolution: "
         "elements in the crack-band region need h ≤ l0/2 "
         "to resolve the diffuse damage profile. "

@@ -18,123 +18,364 @@ Source: upstream dolfinx
 
 VARIANTS = ["2d"]
 
-KNOWLEDGE = {
-    "description": (
-        "Matrix-free conjugate-gradient Poisson solver. Builds the "
-        "stiffness operator A as a callable `action_A(x, y)` that "
-        "re-assembles `M = ufl.action(a, ui)` on the fly, avoiding "
-        "explicit assembly of the global sparse matrix. Mirrors "
-        "dolfinx upstream demo_poisson_matrix_free.py — the "
-        "canonical matrix-free pattern in FEniCSx 0.10."
-    ),
-    "weak_form": (
-        "a(u, v) = (grad(u), grad(v))_dx;  "
-        "L(v) = (f, v)_dx;  "
-        "matrix-free: M(v) = a(ui, v) reassembled per CG iteration "
-        "with ui = current trial vector."
-    ),
-    "function_space": "Lagrange order 2 (degree-1 also works)",
-    "solver": {
-        "type": "custom matrix-free CG, no preconditioner",
-        "rtol": "1e-6 default",
-        "max_iter": "200 default",
-    },
-    "elements": ["Lagrange P1 / P2 / P3"],
-    "variants": ["2d"],
-    "materials": {},
-    "pitfalls": [
-        "[API] The matrix-free action is built with "
-        "`ufl.action(a, ui)` — NOT `a.action(ui)`. The latter is "
-        "not a UFL form attribute. After construction, compile via "
-        "`fem.form(M, dtype=dtype)` so `fem.assemble_vector` can "
-        "consume it. "
-        "Signal: AttributeError 'Form' object has no attribute "
-        "'action' at the line constructing M; or "
-        "RuntimeError 'cannot assemble: form has not been "
-        "compiled' from fem.assemble_vector if fem.form(M) is "
-        "skipped.",
-
-        "[API] In dolfinx 0.10 the assembly target is the "
-        "underlying numpy array, NOT the la.Vector itself: "
-        "`fem.assemble_vector(b.array, L_fem)` (note `b.array`, "
-        "not `b`). Old code shape `b = fem.assemble_vector(L_fem)` "
-        "returns a fresh la.Vector but the in-place form requires "
-        "passing the array. "
-        "Signal: TypeError 'assemble_vector() takes positional "
-        "argument' or 'expected ndarray, got Vector' from "
-        "dolfinx.fem.assemble_vector when the first arg is a "
-        "Vector instead of a Vector.array.",
-
-        "[Parallel] After in-place assembly into a distributed "
-        "array, you MUST call `b.scatter_reverse(la.InsertMode.add)` "
-        "to gather ghost contributions onto the owning rank. "
-        "Skipping this gives a vector that looks right on rank 0 "
-        "but is incomplete at interface DOFs across MPI ranks. "
-        "Signal: serial run (mpirun -n 1) converges to the "
-        "correct L2 error ~1e-6, but mpirun -n 2 converges to "
-        "a residual that plateaus several orders of magnitude "
-        "above the serial result. The discrepancy grows with the "
-        "number of ranks because `scatter_reverse` was omitted "
-        "and ghost-DOF contributions from `la.InsertMode.add` "
-        "are silently dropped.",
-
-        "[API] Dirichlet lifting in the matrix-free path needs "
-        "`bc.set(ui.x.array, alpha=-1.0)` to set ui to -1 * "
-        "Dirichlet value at constrained DOFs, then "
-        "`fem.assemble_vector(b.array, M_fem)` adds -A * x_bc to "
-        "b. After the action you must zero out BC DOFs in the "
-        "RHS via `bc.set(b.array, alpha=0.0)` so the iterative "
-        "solver doesn't try to update them. "
-        "Signal: the CG iteration count balloons (>200) without "
-        "convergence; the final L2 error against the exact "
-        "solution (1 + x^2 + 2*y^2 on the unit square with f=-6) "
-        "is ~1e-1 instead of ~1e-6. Or: the boundary values in "
-        "the result are not equal to uD after `bc.set(u.x.array, "
-        "alpha=1.0)`.",
-
-        "[Numerical] Custom CG without a preconditioner is the "
-        "demonstration baseline — for ill-conditioned problems "
-        "(large mesh, high polynomial degree, anisotropic "
-        "coefficients) iteration counts grow as O(h^-1) or worse. "
-        "Production matrix-free runs use a Jacobi or AMG "
-        "preconditioner via `petsc4py.PETSc.KSP` with "
-        "`pc_type='hypre'` or `pc_type='gamg'`. "
-        "Signal: CG reports 200 iterations without converging "
-        "(raises RuntimeError 'Solver exceeded max iterations'); "
-        "the rnorm/rnorm0 trace shows a slow logarithmic decay "
-        "rather than the geometric drop seen with a preconditioner.",
-
-        "[Parallel] The inner product in custom CG must use "
-        "ONLY owned DOFs, not the ghost-padded array. Use "
-        "`v0[:nr]` where `nr = b.index_map.size_local`, then "
-        "`comm.allreduce(np.vdot(v0[:nr], v1[:nr]), MPI.SUM)`. "
-        "Iterating over the whole array double-counts ghost "
-        "DOFs (each owned in one rank but also resident in "
-        "neighbours) so the dot product is too large. "
-        "Signal: CG diverges (rnorm grows) after the first few "
-        "iterations on multi-rank runs but converges in serial; "
-        "alpha and beta coefficients computed from the corrupted "
-        "dot products become wrong.",
-
-        "[Output] L2 error norm in parallel: "
-        "`comm.allreduce(fem.assemble_scalar(fem.form(...)), "
-        "op=MPI.SUM)` then sqrt. Each rank contributes its local "
-        "integral; the allreduce sums across ranks before the "
-        "sqrt. Forgetting the allreduce gives only the rank-0 "
-        "local L2 contribution. "
-        "Signal: serial L2 error ~1e-6, parallel L2 error "
-        "underestimated by a factor of sqrt(nranks). Caused by "
-        "summing only the local `fem.assemble_scalar` result "
-        "without `comm.allreduce(..., MPI.SUM)`; the bug is "
-        "silent because both values look 'small'.",
-    ],
-    "references": [
-        "dolfinx demo: demo_poisson_matrix_free.py (verified by "
-        "upstream-demo audit 2026-06-02)",
-        "Saad, Y. (2003) — 'Iterative Methods for Sparse Linear "
-        "Systems', Ch. 6: Krylov Subspace Methods (CG)",
-    ],
-}
+KNOWLEDGE = {'description': 'Poisson problem -div(grad(u)) = f solved WITHOUT ever assembling the '
+                'global stiffness matrix. The operator is supplied to a hand-written '
+                'conjugate-gradient loop as a callable that re-assembles the linear '
+                'form ufl.action(a, ui) with ui holding the current trial vector. '
+                'Memory stays O(n_dofs) per process instead of O(nnz), which is what '
+                'makes very large 3D or high-order runs feasible.',
+ 'minimal_working_example': '"""Matrix-free CG Poisson (dolfinx 0.10). Reference-free '
+                            'self-checks."""\n'
+                            'from mpi4py import MPI\n'
+                            'import numpy as np\n'
+                            'import dolfinx\n'
+                            'import ufl\n'
+                            'from dolfinx import fem, la, mesh\n'
+                            '\n'
+                            'dtype = dolfinx.default_scalar_type\n'
+                            'comm = MPI.COMM_WORLD\n'
+                            'msh = mesh.create_unit_square(comm, 24, 24)\n'
+                            'V = fem.functionspace(msh, ("Lagrange", 2))\n'
+                            '\n'
+                            'tdim = msh.topology.dim\n'
+                            'msh.topology.create_connectivity(tdim - 1, tdim)\n'
+                            'facets = mesh.exterior_facet_indices(msh.topology)\n'
+                            'bdofs = fem.locate_dofs_topological(V, tdim - 1, facets)\n'
+                            'uD = fem.Function(V, dtype=dtype)\n'
+                            'uD.interpolate(lambda x: 0.5 * x[0])            # '
+                            'inhomogeneous Dirichlet data\n'
+                            'bc = fem.dirichletbc(uD, bdofs)\n'
+                            '\n'
+                            'u, v = ufl.TrialFunction(V), ufl.TestFunction(V)\n'
+                            'x = ufl.SpatialCoordinate(msh)\n'
+                            'f = 10.0 * ufl.exp(-((x[0] - 0.5) ** 2 + (x[1] - 0.5) ** '
+                            '2) / 0.02)\n'
+                            'a = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx\n'
+                            'L_fem = fem.form(ufl.inner(f, v) * ufl.dx, dtype=dtype)\n'
+                            '\n'
+                            'ui = fem.Function(V, dtype=dtype)\n'
+                            'M_fem = fem.form(ufl.action(a, ui), dtype=dtype)\n'
+                            '\n'
+                            'def action_A(xv, yv):\n'
+                            '    ui.x.array[:] = xv.array\n'
+                            '    ui.x.scatter_forward()\n'
+                            '    yv.array[:] = 0.0\n'
+                            '    fem.assemble_vector(yv.array, M_fem)\n'
+                            '    yv.scatter_reverse(la.InsertMode.add)\n'
+                            '    bc.set(yv.array, alpha=0.0)\n'
+                            '\n'
+                            'b = fem.assemble_vector(L_fem)\n'
+                            'ui.x.array[:] = 0.0\n'
+                            'bc.set(ui.x.array, alpha=-1.0)\n'
+                            'fem.assemble_vector(b.array, M_fem)\n'
+                            'b.scatter_reverse(la.InsertMode.add)\n'
+                            'bc.set(b.array, alpha=0.0)\n'
+                            'b.scatter_forward()\n'
+                            'nr = b.index_map.size_local\n'
+                            '\n'
+                            'def gdot(v0, v1):\n'
+                            '    return comm.allreduce(np.vdot(v0[:nr], v1[:nr]), '
+                            'MPI.SUM)\n'
+                            '\n'
+                            'def cg(xv, bv, max_iter=1000, rtol=1e-10):\n'
+                            '    yv = la.vector(bv.index_map, 1, dtype)\n'
+                            '    action_A(xv, yv)\n'
+                            '    r = bv.array - yv.array\n'
+                            '    p = la.vector(bv.index_map, 1, dtype)\n'
+                            '    p.array[:] = r\n'
+                            '    rn0 = rn = gdot(r, r)\n'
+                            '    for k in range(max_iter):\n'
+                            '        action_A(p, yv)\n'
+                            '        alpha = rn / gdot(p.array, yv.array)\n'
+                            '        xv.array[:] += alpha * p.array\n'
+                            '        r -= alpha * yv.array\n'
+                            '        rn, rn_old = gdot(r, r), rn\n'
+                            '        if rn / rn0 < rtol ** 2:\n'
+                            '            xv.scatter_forward()\n'
+                            '            return k + 1, True\n'
+                            '        p.array[:] = (rn / rn_old) * p.array + r\n'
+                            '    xv.scatter_forward()\n'
+                            '    return max_iter, False\n'
+                            '\n'
+                            'uh = fem.Function(V, dtype=dtype)\n'
+                            'its, converged = cg(uh.x, b)\n'
+                            'assert converged, "matrix-free CG hit max_iter without '
+                            'reaching rtol"\n'
+                            'bc.set(uh.x.array, alpha=1.0)\n'
+                            'uh.x.scatter_forward()\n'
+                            '\n'
+                            'ui.x.array[:] = uh.x.array\n'
+                            'ui.x.scatter_forward()\n'
+                            'res = la.vector(b.index_map, 1, dtype)\n'
+                            'res.array[:] = 0.0\n'
+                            'fem.assemble_vector(res.array, M_fem)\n'
+                            'res.scatter_reverse(la.InsertMode.add)\n'
+                            'rhs = fem.assemble_vector(L_fem)\n'
+                            'rhs.scatter_reverse(la.InsertMode.add)\n'
+                            'res.array[:] -= rhs.array\n'
+                            'bc.set(res.array, alpha=0.0)\n'
+                            'rel_res = float(np.sqrt(gdot(res.array, res.array) / '
+                            'gdot(rhs.array, rhs.array)))\n'
+                            'bc_err = comm.allreduce(\n'
+                            '    float(np.abs(uh.x.array[bdofs] - '
+                            'uD.x.array[bdofs]).max(initial=0.0)), MPI.MAX)\n'
+                            'gmin = comm.allreduce(float(uh.x.array[:nr].min()), '
+                            'MPI.MIN)\n'
+                            'gmax = comm.allreduce(float(uh.x.array[:nr].max()), '
+                            'MPI.MAX)\n'
+                            'if comm.rank == 0:\n'
+                            '    print(f"matrix-free CG: converged={converged} '
+                            'iterations={its} "\n'
+                            '          f"dofs={V.dofmap.index_map.size_global}")\n'
+                            '    print(f"relative Galerkin residual over free DOFs = '
+                            '{rel_res:.3e}")\n'
+                            '    print(f"max |u - u_D| on Dirichlet DOFs = '
+                            '{bc_err:.3e}")\n'
+                            '    print(f"global u range = [{gmin:.6f}, {gmax:.6f}] '
+                            'finite={np.isfinite(gmax)}")\n'
+                            'assert rel_res < 1e-6 and bc_err < 1e-12 and '
+                            'np.isfinite(gmax)\n',
+ 'function_space': {'REQUIRED': 'V = fem.functionspace(msh, ("Lagrange", degree))\n'
+                                'ui = fem.Function(V, '
+                                'dtype=dolfinx.default_scalar_type)   # holds the '
+                                'trial vector inside the operator action',
+                    'OPTIONAL': 'degree: any integer >= 1. Cell type: triangle or '
+                                'quadrilateral (mesh.CellType.triangle / '
+                                '.quadrilateral); both work unchanged. dtype may be '
+                                'omitted (defaults to dolfinx.default_scalar_type).',
+                    'explanation': 'Matrix-free assembly puts no extra constraint on '
+                                   'the space; the only structural requirement is one '
+                                   'extra Function (ui) that the operator action '
+                                   'writes the input vector into before re-assembling.',
+                    'pitfalls': ['[API] Use fem.functionspace (lower-case s), not '
+                                 'fem.FunctionSpace. Signal: fem.FunctionSpace still '
+                                 'EXISTS in dolfinx 0.10 as a class, so the wrong '
+                                 'spelling does not give AttributeError; it gives '
+                                 'TypeError: FunctionSpace.__init__() missing 1 '
+                                 "required positional argument: 'cppV'."]},
+ 'weak_form': {'REQUIRED': 'a = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx\n'
+                           'L_fem = fem.form(ufl.inner(f, v) * ufl.dx, dtype=dtype)\n'
+                           'M_fem = fem.form(ufl.action(a, ui), dtype=dtype)   # '
+                           'operator action, compiled ONCE',
+               'OPTIONAL': 'Any coefficient may be added to a (e.g. '
+                           'kappa*grad(u).grad(v) + c*u*v); ufl.action works on any '
+                           'bilinear form. f may be a fem.Constant, a fem.Function, or '
+                           'a UFL expression of ufl.SpatialCoordinate.',
+               'explanation': 'ufl.action(a, ui) turns the bilinear form a(u,v) into '
+                              'the linear form v -> a(ui,v). Assembling that linear '
+                              'form is exactly the matrix-vector product A*ui, so no '
+                              'sparse matrix is ever built.',
+               'pitfalls': ['[API] Write ufl.action(a, ui), not a.action(ui). Signal: '
+                            "AttributeError: 'Form' object has no attribute 'action'.",
+                            '[API] Compile the action with fem.form(...) before assembling. '
+                            "Signal: AttributeError: 'Form' object has no attribute "
+                            "'_cpp_object'."]},
+ 'boundary_conditions': {'REQUIRED': 'msh.topology.create_connectivity(tdim - 1, '
+                                     'tdim)\n'
+                                     'facets = '
+                                     'mesh.exterior_facet_indices(msh.topology)\n'
+                                     'bdofs = fem.locate_dofs_topological(V, tdim - 1, '
+                                     'facets)\n'
+                                     'bc = fem.dirichletbc(uD, bdofs)\n'
+                                     '# lifting into the RHS, in this order:\n'
+                                     'ui.x.array[:] = 0.0\n'
+                                     'bc.set(ui.x.array, alpha=-1.0)          # ui = '
+                                     '-u_bc at constrained DOFs\n'
+                                     'fem.assemble_vector(b.array, M_fem)     # b <- b '
+                                     '- A*u_bc\n'
+                                     'b.scatter_reverse(la.InsertMode.add)\n'
+                                     'bc.set(b.array, alpha=0.0)              # zero '
+                                     'the constrained rows\n'
+                                     'b.scatter_forward()\n'
+                                     '# and inside the operator action, after the '
+                                     'reverse scatter:\n'
+                                     'bc.set(y.array, alpha=0.0)\n'
+                                     '# and once after the CG loop, to restore the '
+                                     'prescribed values:\n'
+                                     'bc.set(u.x.array, alpha=1.0)',
+                         'OPTIONAL': 'bc.set signature is set(x, x0=None, alpha=1). '
+                                     'alpha scales the value written: alpha=-1.0 for '
+                                     'lifting, 0.0 to zero constrained entries, 1.0 to '
+                                     'write the prescribed value.',
+                         'explanation': 'There is no assemble_matrix(..., bcs=...) to '
+                                        'apply the constraint for you, so Dirichlet '
+                                        'handling is entirely manual: lift the '
+                                        'prescribed values into the right-hand side, '
+                                        'zero the constrained entries of every '
+                                        'operator application so the Krylov method '
+                                        'never updates them, and write the prescribed '
+                                        'values back at the end.',
+                         'pitfalls': ['[BC] Never omit bc.set(y.array, alpha=0.0) inside '
+                                      'the operator action. Signal: rnorm/rnorm0 GROWS '
+                                      'past 1e30 and max(u) reaches ~1e31 within 200 '
+                                      'iterations, in serial.',
+                                      '[Validation] The residual b - A*u is only meaningful BEFORE '
+                                      'bc.set(u.x.array, alpha=1.0) writes the '
+                                      'Dirichlet values back. Signal: recomputing it '
+                                      'afterwards gives ||b-Au||/||b|| = 1.002 for a '
+                                      'solve that is in fact correct.']},
+ 'solver': {'REQUIRED': '# hand-written CG; there is NO dolfinx class for this.\n'
+                        'nr = b.index_map.size_local\n'
+                        'def gdot(v0, v1):\n'
+                        '    return comm.allreduce(np.vdot(v0[:nr], v1[:nr]), '
+                        'MPI.SUM)\n'
+                        'y = la.vector(b.index_map, 1, dtype)\n'
+                        '# ... standard CG recurrence, calling action_A(p, y) each '
+                        'iteration.\n'
+                        '# ALWAYS return/raise on the max_iter exit so a '
+                        'non-converged\n'
+                        '# solve cannot be mistaken for a converged one.',
+            'OPTIONAL': 'rtol (1e-6 .. 1e-12) and max_iter. To use PETSc instead of a '
+                        'hand-written loop, wrap action_A in a PETSc.Mat of type '
+                        'PETSc.Mat.Type.PYTHON and hand it to PETSc.KSP; then use '
+                        'ksp.getConvergedReason() instead of your own flag.',
+            'explanation': 'Unpreconditioned CG is the baseline: it needs only the '
+                           'operator action. Its iteration count grows like O(1/h), so '
+                           'for production runs a preconditioner (which needs at least '
+                           'a diagonal or a coarse operator) is what actually pays for '
+                           'itself.',
+            # The PETScKrylovSolver note that stood here was verbatim-identical to
+            # the one in fenics/advanced.py. This file already carries a fuller,
+            # version-qualified copy in its top-level pitfalls list (it also says
+            # what to use instead), so the short duplicate is dropped rather than
+            # maintained in two places where a fix could land on only one.
+            'pitfalls': ['[Integration] The CG inner product must use owned DOFs only: v[:nr] with '
+                         'nr = index_map.size_local. Signal: on 2 MPI ranks '
+                         'rnorm/rnorm0 grows to ~4e13 and max|u| reaches ~3e8, while '
+                         'the identical run in serial converges.']},
+ 'parallel': {'REQUIRED': 'y.scatter_reverse(la.InsertMode.add)   # after EVERY '
+                          'in-place assemble\n'
+                          'ui.x.scatter_forward()                 # before using ui in '
+                          'a form\n'
+                          'value = comm.allreduce(fem.assemble_scalar(form), '
+                          'op=MPI.SUM)\n'
+                          'gmax = comm.allreduce(float(u.x.array[:nr].max()), MPI.MAX)',
+              'OPTIONAL': 'Guard printing with `if comm.rank == 0:` so an MPI run does '
+                          'not emit one copy of every line per rank.',
+              'explanation': 'fem.assemble_vector(array, form) accumulates only the '
+                             'LOCAL cell contributions; ghost entries must be sent '
+                             'back to their owner with scatter_reverse(add), and any '
+                             'scalar or extremum must be reduced across ranks. All of '
+                             'this is invisible in a serial run.',
+              'pitfalls': ['[Integration] Omitting scatter_reverse after in-place assembly. Signal: '
+                           'identical in serial, but on 2 ranks CG fails to reach rtol '
+                           'in 200 iterations and u lands in [-2.8e+02, 1.1e+03] '
+                           'instead of the correct O(1) range.',
+                           '[Integration] Omitting comm.allreduce around fem.assemble_scalar. '
+                           'Signal: an integral that is silently too SMALL on multiple '
+                           'ranks (measured 7.10e-07 instead of 1.02e-06 on 2 ranks) - '
+                           "both values look 'small', so nothing draws attention to "
+                           'it.']},
+ 'references': ['dolfinx upstream demo: demo_poisson_matrix_free.py',
+                'Saad, Y. (2003), Iterative Methods for Sparse Linear Systems, Ch. 6 '
+                '(Krylov subspace methods).'],
+ 'pitfalls': ['[API] Build the operator action with `M = ufl.action(a, ui)`; '
+              '`a.action(ui)` is not a UFL Form method. Then compile it once with '
+              '`M_fem = fem.form(M, dtype=dtype)` and reuse the compiled form in every '
+              'CG iteration - recompiling inside the loop is the single biggest '
+              "avoidable cost. Signal: `AttributeError: 'Form' object has no attribute "
+              "'action'` raised at the line that builds M. If you skip fem.form and "
+              'hand the raw UFL form to fem.assemble_vector, the previously quoted '
+              'message "RuntimeError: cannot assemble: form has not been compiled" '
+              'does NOT appear, and WHICH AttributeError you get depends on the call '
+              "form: the two-argument in-place call fem.assemble_vector(y.array, M) "
+              "gives `AttributeError: 'Form' object has no attribute '_cpp_object'`, "
+              "while the one-argument fem.assemble_vector(M) gives `AttributeError: "
+              "'Form' object has no attribute 'function_spaces'` instead. Match on the "
+              "AttributeError, not on one of the two attribute names. (Verified by execution on dolfinx 0.10.0, 2026-08-06.)",
+              '[API] The in-place assembly entry point is '
+              '`fem.assemble_vector(b.array, M_fem)` - first argument is the numpy '
+              'ARRAY, not the la.Vector. The one-argument call `b = '
+              'fem.assemble_vector(L_fem)` is also valid and returns a fresh '
+              '`dolfinx.la.Vector`, which is how you create b in the first place. '
+              'Signal: passing the la.Vector as the first argument of the two-argument '
+              "form gives `AttributeError: 'Vector' object has no attribute "
+              '\'function_spaces\'`. The previously quoted messages "TypeError: '
+              'assemble_vector() takes positional argument" and "expected ndarray, got '
+              'Vector" do NOT reproduce on dolfinx 0.10.0.',
+              '[Numerical] Zero the Dirichlet entries of the output of EVERY operator '
+              'application (`bc.set(y.array, alpha=0.0)` at the end of action_A). '
+              'Without it the constrained rows feed the unconstrained ones and CG has '
+              'no fixed point. Signal: rnorm/rnorm0 grows monotonically - 1.4e+12 at '
+              'iteration 100, 3.4e+30 at iteration 160 - and the returned field '
+              'reaches max(u) = 1.7e+31 while min(u) still equals the boundary value, '
+              'so a min-only sanity print looks innocent. This is a SERIAL failure; it '
+              'does not need MPI to show up. The previously quoted signal ("CG '
+              'iteration count balloons (>200) ... final L2 error ~1e-1 instead of '
+              '~1e-6") understates it by thirty orders of magnitude.',
+              '[Integration] After the CG loop, `bc.set(u.x.array, alpha=1.0)` writes '
+              'the prescribed Dirichlet values into the solution. From that moment on, '
+              '`b - A*u` is NO LONGER the residual of the system that was solved, '
+              'because b already carries the lifting term -A*u_bc. Signal: recomputing '
+              '||b - A*u|| / ||b|| after the bc.set gives 1.002e+00 for a solve whose '
+              'true Galerkin residual is ~1e-8. To check a matrix-free solve, assemble '
+              'the Galerkin residual of the FULL solution instead - `action(a, u) - '
+              'L`, zeroed at constrained DOFs - which is the check the '
+              'minimal_working_example uses.',
+              '[API] `fem.assemble_vector(array, form)` only sums the cells owned by '
+              'the calling rank; ghost contributions must be returned to their owner '
+              'with `y.scatter_reverse(la.InsertMode.add)` after every in-place '
+              'assembly, including inside the operator action. Signal: the serial run '
+              'is unaffected; on 2 ranks the same script fails to reach rtol in 200 '
+              'iterations and the solution lands in [-2.84e+02, +1.13e+03] where the '
+              'correct range is O(1). Purely an MPI-only failure - a single-rank test '
+              'will never expose it.',
+              '[Integration] The CG inner products must run over OWNED DOFs only: `nr '
+              '= b.index_map.size_local` then `comm.allreduce(np.vdot(v0[:nr], '
+              'v1[:nr]), MPI.SUM)`. Using the full ghost-padded array double-counts '
+              'every shared DOF. Signal: on 2 ranks rnorm/rnorm0 climbs 1.2e+04 (it '
+              '100), 1.6e+06 (it 140), 4.0e+13 (it 180) and the field reaches 3.3e+08; '
+              'the identical script in serial converges in the normal number of '
+              'iterations, because with one rank there are no ghosts.',
+              '[API] Any scalar diagnostic must be reduced: '
+              '`comm.allreduce(fem.assemble_scalar(fem.form(...)), op=MPI.SUM)`, and '
+              '`u.x.array.min()/.max()` are RANK-LOCAL - reduce them with MPI.MIN / '
+              'MPI.MAX over `u.x.array[:nr]`. Signal: an integral norm that comes out '
+              'too SMALL on multiple ranks (measured 7.10e-07 on 2 ranks against the '
+              'correct 1.02e-06) - never an exception, never a NaN, just a quietly '
+              'optimistic number.',
+              '[Performance] Unpreconditioned CG iteration count scales like O(1/h): '
+              'measured on this install, halving the mesh size roughly DOUBLES the '
+              'iteration count at fixed polynomial degree, and raising the degree at '
+              'fixed mesh also multiplies it. Both hold for triangles and '
+              'quadrilaterals. Signal: the run does not fail - it just gets slow, and '
+              'a fixed max_iter that was comfortable on the coarse mesh starts '
+              'tripping the non-convergence exit on the fine one. Production '
+              'matrix-free codes wrap action_A in a `PETSc.Mat` of type '
+              '`PETSc.Mat.Type.PYTHON` and attach a Jacobi or matrix-free multigrid '
+              "preconditioner; note that 'gamg' and 'hypre' cannot be used here "
+              'because they need the assembled matrix entries that matrix-free '
+              'deliberately avoids.',
+              '[Integration] A CG loop that simply falls out of its `for` after '
+              'max_iter, without raising or returning a converged flag, is the classic '
+              'silent-failure shape: the caller gets a Function that looks like a '
+              'solution. Signal: the hand-rolled CG loop has no PETSc KSP behind it, '
+              'so there is no KSPConvergedReason to consult and nothing raises: in the '
+              'diverging variants above the loop exits normally and the script prints '
+              'a solution containing 1e+31 with return code 0. Always return the '
+              'convergence flag and assert on it, exactly as the '
+              'minimal_working_example does.',
+              '[API] `dolfinx.PETScKrylovSolver` does not exist in dolfinx 0.10.0. '
+              "Signal: `AttributeError: module 'dolfinx' has no attribute "
+              "'PETScKrylovSolver'`. If you want PETSc's CG instead of a hand-written "
+              'loop, create it directly through petsc4py (`PETSc.KSP().create(comm)`); '
+              "if you want dolfinx's high-level wrapper for the ASSEMBLED problem, "
+              'that is `dolfinx.fem.petsc.LinearProblem`, which requires the '
+              'keyword-only argument `petsc_options_prefix` (`TypeError: '
+              'LinearProblem.__init__() missing 1 required keyword-only argument: '
+              "'petsc_options_prefix'` if omitted).",
+              '[Numerical] Do not use the difference against an interpolated '
+              'manufactured field as a proxy for discretisation error in this '
+              'template. For a polynomial reference field of degree <= the element '
+              'degree, the Galerkin solution equals the interpolant to machine '
+              'precision, so what such a check actually measures is the CG stopping '
+              "tolerance. Signal: the reported 'error' STAYS at the Krylov tolerance "
+              'and even grows slightly as the mesh is refined (measured on this '
+              'install: the direct-LU solution differs from the interpolant by ~1e-15 '
+              'at both degree 1 and degree 2 on a structured unit-square mesh, while '
+              'the matrix-free run reports ~1e-6 and rising). Use a residual, a flux '
+              'balance or an energy identity instead - none of which needs a reference '
+              'solution.']}
 
 
 def generate(variant: str, params: dict) -> str:

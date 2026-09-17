@@ -34,9 +34,17 @@ class FBIGenerator(BaseGenerator):
                 "penalty or mortar methods that transfer fluid drag forces "
                 "to the beams and impose the beam velocity as a constraint "
                 "on the fluid.  The PROBLEM TYPE is "
-                "'Fluid_Beam_Interaction'.  Required dynamics sections "
-                "include STRUCTURAL DYNAMIC (for beams), FLUID DYNAMIC, "
-                "and FBI DYNAMIC for the coupling parameters.  The fluid "
+                "'Fluid_Beam_Interaction'.  There is no 'FBI DYNAMIC' "
+                "section: the partitioned time loop is driven by FSI "
+                "DYNAMIC (TIMESTEP, NUMSTEP, MAXTIME, RESULTSEVERY) with "
+                "FSI DYNAMIC/PARTITIONED SOLVER for the coupling "
+                "iteration, while the coupling itself is configured in "
+                "FLUID BEAM INTERACTION (COUPLING, PRESORT_STRATEGY, "
+                "STARTSTEP) and FLUID BEAM INTERACTION/BEAM TO FLUID "
+                "MESHTYING (MESHTYING_DISCRETIZATION, "
+                "CONSTRAINT_STRATEGY, PENALTY_PARAMETER, SEARCH_RADIUS, "
+                "...).  The remaining dynamics sections are STRUCTURAL "
+                "DYNAMIC (for the beams) and FLUID DYNAMIC.  The fluid "
                 "mesh uses standard FLUID elements while beams use BEAM3R "
                 "or BEAM3EB elements.  No ALE mesh motion is needed since "
                 "the coupling is immersed (non-body-fitted)."
@@ -44,9 +52,11 @@ class FBIGenerator(BaseGenerator):
             "required_sections": [
                 "PROBLEM TYPE",
                 "PROBLEM SIZE",
+                "FSI DYNAMIC",
+                "FLUID BEAM INTERACTION",
+                "FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING",
                 "STRUCTURAL DYNAMIC",
                 "FLUID DYNAMIC",
-                "FBI DYNAMIC",
                 "SOLVER 1",
                 "SOLVER 2",
                 "MATERIALS",
@@ -54,8 +64,11 @@ class FBIGenerator(BaseGenerator):
                 "FLUID GEOMETRY",
             ],
             "optional_sections": [
+                "FSI DYNAMIC/PARTITIONED SOLVER",
+                "FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING/RUNTIME VTK OUTPUT",
                 "FLUID DYNAMIC/RESIDUAL-BASED STABILIZATION",
                 "FLUID DYNAMIC/NONLINEAR SOLVER TOLERANCES",
+                "STRUCTURAL DYNAMIC/GENALPHA",
                 "IO/RUNTIME VTK OUTPUT",
                 "IO/RUNTIME VTK OUTPUT/BEAMS",
                 "IO/RUNTIME VTK OUTPUT/FLUID",
@@ -138,17 +151,52 @@ class FBIGenerator(BaseGenerator):
                 },
             },
             "coupling_parameters": {
-                "PENALTY_PARAMETER": (
+                "FLUID BEAM INTERACTION/COUPLING": (
+                    "Direction of the FBI coupling: 'fluid' (fluid is "
+                    "driven by the beam), 'solid' (beam is driven by the "
+                    "fluid) or 'two-way' (default, fully coupled)."
+                ),
+                "FLUID BEAM INTERACTION/PRESORT_STRATEGY": (
+                    "'bruteforce' (default) or 'binning'.  This is the "
+                    "switch that turns on binning for the beam-fluid "
+                    "pair search; a BINNING STRATEGY section alone is a "
+                    "silent no-op."
+                ),
+                "FLUID BEAM INTERACTION/STARTSTEP": (
+                    "Time step at which the fluid-beam coupling starts "
+                    "(default 0, i.e. from the first step)."
+                ),
+                "FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING/MESHTYING_DISCRETIZATION": (
+                    "'none' (default, i.e. inactive), "
+                    "'gauss_point_to_segment' or 'mortar'.  This is what "
+                    "used to be miscalled a COUPLING_TYPE -- there is no "
+                    "COUPLING_TYPE key anywhere in the FBI grammar."
+                ),
+                "FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING/CONSTRAINT_STRATEGY": (
+                    "'none' (default) or 'penalty'.  Penalty is the only "
+                    "enforcement implemented for beam-to-fluid meshtying."
+                ),
+                "FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING/PENALTY_PARAMETER": (
                     "Penalty stiffness for the immersed coupling.  "
                     "Controls how strongly the beam velocity constraint "
                     "is enforced on the fluid.  Too small leads to "
                     "fluid penetrating the beam; too large causes "
                     "ill-conditioning."
                 ),
-                "COUPLING_TYPE": (
-                    "Type of FBI coupling: 'penalty' (penalty method) "
-                    "or 'mortar' (mortar-based).  Penalty is simpler; "
-                    "mortar is more accurate but more expensive."
+                "FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING/SEARCH_RADIUS": (
+                    "Absolute search radius for beam-to-fluid pairs "
+                    "(default 1000).  This is the only SEARCH_RADIUS in "
+                    "4C's whole grammar."
+                ),
+                "FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING/MORTAR_SHAPE_FUNCTION": (
+                    "'none' (default), 'line2', 'line3' or 'line4'.  "
+                    "Required when MESHTYING_DISCRETIZATION: mortar."
+                ),
+                "FSI DYNAMIC": (
+                    "Drives the FBI time loop: TIMESTEP, NUMSTEP, "
+                    "MAXTIME, RESULTSEVERY, RESTARTEVERY.  FBI is a "
+                    "partitioned scheme, so FSI DYNAMIC/PARTITIONED "
+                    "SOLVER holds CONVTOL, COUPVARIABLE and ITEMAX."
                 ),
             },
             "pitfalls": [
@@ -156,67 +204,95 @@ class FBIGenerator(BaseGenerator):
                     "[Input] FBI does NOT use ALE mesh motion. "
                     "The fluid mesh is FIXED (Eulerian); the "
                     "beams move through the fluid via "
-                    "immersed coupling. Signal: including ALE "
-                    "DYNAMIC in an FBI input aborts with "
-                    "'FBI is incompatible with ALE' from "
-                    "4C_fbi_factory.cpp; the immersed-"
-                    "coupling assumption breaks if the fluid "
-                    "mesh also moves. (Audit 2026-06-02.)"
+                    "immersed coupling. Signal: none — and "
+                    "that is the hazard. Adding an ALE "
+                    "DYNAMIC section to an FBI input does not "
+                    "abort: 4C swallows it silently, builds "
+                    "no ALE discretisation, and returns "
+                    "exactly the same answer, so an author "
+                    "who added it believing it enables mesh "
+                    "motion gets a clean converged run in "
+                    "which the fluid mesh never moved. There "
+                    "is no 4C_fbi_factory.cpp and no 'FBI is "
+                    "incompatible with ALE' message. "
+                    "(Corrected by execution 2026-08-06.)"
                 ),
                 (
-                    "[Numerical] FBI penalty parameter must "
-                    "be carefully tuned. Signal: BEAM "
-                    "INTERACTION/BEAM TO FLUID MESHTYING "
-                    "PENALTY_PARAMETER too LARGE drives the "
-                    "Trilinos linear solver into cond(K) > "
-                    "1e15 / stagnation; too SMALL lets the "
-                    "FLUID3 mesh let the fluid 'slip "
-                    "through' the BEAM3R element — visible "
-                    "non-zero velocity inside the beam "
-                    "region in the .pvd output, decreasing "
-                    "rapidly as PENALTY_PARAMETER "
-                    "increases. Typical penalty range "
-                    "(beam-axial-stiffness equivalent): "
-                    "1e3 - 1e6 N/m. (Audit 2026-06-02.)"
+                    "[Numerical] The FBI penalty parameter "
+                    "must be tuned, and it lives in FLUID "
+                    "BEAM INTERACTION/BEAM TO FLUID "
+                    "MESHTYING/PENALTY_PARAMETER — NOT in a "
+                    "'BEAM INTERACTION/BEAM TO FLUID "
+                    "MESHTYING' section, which 4C rejects "
+                    "outright with \"Section '...' is not a "
+                    "valid section name.\" from "
+                    "core/io/src/4C_io_input_file.cpp. "
+                    "Signal: too LARGE aborts with 'The "
+                    "nonlinear solver did not converge!' from "
+                    "solver_nonlin_nox/"
+                    "4C_solver_nonlin_nox_problem.cpp — a NOX "
+                    "message, with nothing about cond(K). Too "
+                    "SMALL is the dangerous one: it converges "
+                    "silently and simply under-couples the "
+                    "beam, with no warning and no 'slip "
+                    "through' anywhere in the log. Compare "
+                    "against a tuned reference. (Corrected by "
+                    "execution 2026-08-06.)"
                 ),
                 (
                     "[Mesh] Beam elements (BEAM3R, BEAM3EB) "
                     "are 1D line elements. The fluid mesh "
-                    "must cover the ENTIRE domain including "
-                    "the region occupied by beams. Signal: "
-                    "an open fluid domain that ends at the "
-                    "beam region produces a 'beam outside "
-                    "fluid domain' error from "
-                    "4C_fbi_partitioner.cpp — the immersed "
-                    "search algorithm cannot find host "
-                    "fluid elements for beam Gauss points. "
-                    "(Audit 2026-06-02.)"
+                    "must cover the entire region occupied by "
+                    "beams. Signal: none — a beam lying "
+                    "outside the fluid mesh raises no error. "
+                    "Both fields are built, no search "
+                    "diagnostic is printed, NOX reports the "
+                    "solution 'is already converged' because "
+                    "the beam carries no fluid load, and the "
+                    "beam displacement comes back exactly "
+                    "zero. A partially overlapping beam is "
+                    "worse: it moves, wrongly, and still says "
+                    "nothing. The quoted 'beam "
+                    "outside fluid domain' does not exist in "
+                    "4C, and neither does the file it was "
+                    "attributed to, 4C_fbi_partitioner.cpp. "
+                    "(Corrected by execution 2026-08-06.)"
                 ),
                 (
-                    "[Numerical] BINNING STRATEGY may be "
-                    "needed to efficiently search for beam-"
-                    "fluid element pairs. Set "
-                    "BIN_SIZE_LOWER_BOUND appropriately for "
-                    "element sizes. Signal: without "
-                    "binning, the beam-fluid pair search "
-                    "is O(N_beams * N_fluid) — wall-clock "
-                    "explodes for large meshes. With "
-                    "BIN_SIZE_LOWER_BOUND ~ "
-                    "max(h_beam, h_fluid), search is O(N) "
-                    "amortised. (Audit 2026-06-02.)"
+                    "[Numerical] Binning for the beam-fluid "
+                    "pair search is switched on by FLUID BEAM "
+                    "INTERACTION/PRESORT_STRATEGY (choices "
+                    "bruteforce and binning; the DEFAULT is "
+                    "bruteforce). A BINNING STRATEGY section "
+                    "with BIN_SIZE_LOWER_BOUND only "
+                    "parameterises the binning coupler once "
+                    "that switch is thrown. Signal: none — "
+                    "adding BINNING STRATEGY on its own is a "
+                    "silent no-op, accepted without any "
+                    "'ignored' notice and giving an identical "
+                    "run. Confirm which coupler ran from 4C's "
+                    "TimeMonitor table at the end of the log: "
+                    "FBI::FBIBinningCoupler::Search appears "
+                    "only under PRESORT_STRATEGY: binning. "
+                    "(Corrected by execution 2026-08-06.)"
                 ),
                 (
                     "[Output] Structural output uses the "
                     "BEAM discretisation, NOT the standard "
                     "STRUCTURE output. Use IO/RUNTIME VTK "
                     "OUTPUT/BEAMS for beam visualisation. "
-                    "Signal: configuring IO/RUNTIME VTK "
-                    "OUTPUT/STRUCTURE for an FBI problem "
-                    "produces empty output (no beam DOFs "
-                    "in the structure section); the "
-                    "BEAMS subsection has BeamCenterline, "
-                    "BeamCrossSection, etc. (Audit "
-                    "2026-06-02.)"
+                    "Signal: none — configuring IO/RUNTIME "
+                    "VTK OUTPUT/STRUCTURE instead does not "
+                    "produce empty output, it produces NO "
+                    "structure output file at all: the "
+                    "structure-beams .vtu files and their "
+                    ".pvd collection simply never appear. The "
+                    "run still exits 0 and passes its result "
+                    "tests, and the beam-to-fluid coupling "
+                    ".vtu files are still written, which is "
+                    "what makes it look as though output "
+                    "worked. (Corrected by execution "
+                    "2026-08-06.)"
                 ),
                 (
                     "[Input] FBI beam material uses "
@@ -225,12 +301,21 @@ class FBIGenerator(BaseGenerator):
                     "standard solid materials. Cross-"
                     "sectional properties (CROSSAREA, "
                     "MOMINPOL, etc.) must be specified. "
-                    "Signal: using MAT_ElastHyper for "
-                    "beams raises 'beam element requires "
-                    "beam material' from "
-                    "4C_mat_beam_base.cpp at setup; the "
-                    "beam factory does not accept generic "
-                    "solid materials. (Audit 2026-06-02.)"
+                    "Signal: a solid material on a BEAM3R "
+                    "aborts at element-read time in "
+                    "beam3/src/4C_beam3_reissner_input.cpp "
+                    "with \"The material parameter definition "
+                    "'m_elasthyper' is not supported by "
+                    "Beam3r element! Choose "
+                    "MAT_BeamReissnerElastHyper, "
+                    "MAT_BeamReissnerElastHyper_ByModes or "
+                    "MAT_BeamReissnerElastPlastic!\" — it "
+                    "names the offending material and lists "
+                    "the legal ones. The quoted 'beam "
+                    "element requires beam material' does not "
+                    "exist in 4C, and neither does the file it "
+                    "was attributed to, 4C_mat_beam_base.cpp. "
+                    "(Corrected by execution 2026-08-06.)"
                 ),
             ],
             "typical_experiments": [
@@ -313,17 +398,36 @@ class FBIGenerator(BaseGenerator):
               OUTPUT_BEAMS: true
               DISPLACEMENT: true
               USE_ABSOLUTE_POSITIONS: true
-              TRIAD_VISUALISATION_POINT: true
+              TRIAD_VISUALIZATIONPOINT: true
             IO/RUNTIME VTK OUTPUT/FLUID:
               OUTPUT_FLUID: true
               VELOCITY: true
               PRESSURE: true
 
+            # == FBI time loop =================================================
+            # FBI is a partitioned scheme driven by FSI DYNAMIC.  There is no
+            # "FBI DYNAMIC" section -- 4C rejects it with
+            # "Section 'FBI DYNAMIC' is not a valid section name."
+            FSI DYNAMIC:
+              TIMESTEP: <timestep>
+              NUMSTEP: <number_of_steps>
+              MAXTIME: <end_time>
+              RESULTSEVERY: <results_output_interval>
+            FSI DYNAMIC/PARTITIONED SOLVER:
+              CONVTOL: <coupling_convergence_tolerance>
+              COUPVARIABLE: "Force"
+              ITEMAX: <max_coupling_iterations>
+
             # == Structure (beams) =============================================
+            # BEAM3R carries large rotations, so use GenAlphaLieGroup with
+            # MASSLIN: rotations.  Classical "GenAlpha" segfaults in
+            # Beam3r::calc_internal_and_inertia_forces_and_stiff, and
+            # GenAlpha + MASSLIN: rotations aborts with "MASSLIN=ml_rotations
+            # is not supported by classical GenAlpha!".
             STRUCTURAL DYNAMIC:
-              DYNAMICTYPE: "GenAlpha"
-              TIMESTEP: <structure_timestep>
-              NUMSTEP: <structure_num_steps>
+              DYNAMICTYPE: "GenAlphaLieGroup"
+              MASSLIN: "rotations"
+              LOADLIN: true
               LINEAR_SOLVER: 1
               PREDICT: "ConstDisVelAcc"
               TOLRES: <structure_residual_tolerance>
@@ -347,15 +451,20 @@ class FBIGenerator(BaseGenerator):
               CHARELELENGTH_PC: "root_of_volume"
 
             # == FBI coupling ==================================================
-            FBI DYNAMIC:
-              TIMESTEP: <timestep>
-              NUMSTEP: <number_of_steps>
-              MAXTIME: <end_time>
-              COUPLING_TYPE: "<coupling_type>"
+            FLUID BEAM INTERACTION:
+              COUPLING: "<coupling_direction>"          # fluid | solid | two-way
+              PRESORT_STRATEGY: "<presort_strategy>"    # bruteforce | binning
+            FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING:
+              MESHTYING_DISCRETIZATION: "<meshtying_discretization>"
+              CONSTRAINT_STRATEGY: "penalty"
               PENALTY_PARAMETER: <penalty_parameter>
-              RESULTSEVERY: <results_output_interval>
+              SEARCH_RADIUS: <search_radius>
+            FLUID BEAM INTERACTION/BEAM TO FLUID MESHTYING/RUNTIME VTK OUTPUT:
+              WRITE_OUTPUT: true
+              NODAL_FORCES: true
+              CONSTRAINT_VIOLATION: true
 
-            # == Binning (for beam-fluid search) ===============================
+            # == Binning (only used when PRESORT_STRATEGY: binning) ============
             BINNING STRATEGY:
               BIN_SIZE_LOWER_BOUND: <bin_size_lower_bound>
 
@@ -415,13 +524,21 @@ class FBIGenerator(BaseGenerator):
               - SYMBOLIC_FUNCTION_OF_SPACE_TIME: "<inlet_ramp_expression>"
 
             # == Geometry ======================================================
+            # Beam-to-fluid meshtying needs a Hermite-centerline beam:
+            # BEAM3R/LINE3 with HERMITE_CENTERLINE true, or BEAM3EB.  A plain
+            # BEAM3R/LINE2 aborts with "Beam3tosolidmeshtying: beam::n_val_=2
+            # detected for beam3r element w/o Hermite centerline".  BEAM3R
+            # also needs nodal triads: either TRIADS (9 doubles for LINE3) or
+            # NODAL_ROTATION_VECTORS naming a cell-data field in the mesh.
             STRUCTURE GEOMETRY:
               FILE: "<beam_mesh_file>"
               ELEMENT_BLOCKS:
                 - ID: 1
                   BEAM3R:
-                    LINE2:
+                    LINE3:
                       MAT: 1
+                      HERMITE_CENTERLINE: true
+                      NODAL_ROTATION_VECTORS: "<triad_cell_field_name>"
 
             FLUID GEOMETRY:
               FILE: "<fluid_mesh_file>"
@@ -523,14 +640,64 @@ class FBIGenerator(BaseGenerator):
                     f"got {crossarea!r}."
                 )
 
-        # Check coupling type
-        coupling_type = params.get("COUPLING_TYPE")
-        if coupling_type is not None and coupling_type not in (
-            "penalty", "mortar",
+        # COUPLING_TYPE does not exist in the FBI grammar
+        if "COUPLING_TYPE" in params:
+            issues.append(
+                "COUPLING_TYPE is not an FBI parameter.  Use FLUID BEAM "
+                "INTERACTION/COUPLING (fluid|solid|two-way) for the "
+                "coupling direction and FLUID BEAM INTERACTION/BEAM TO "
+                "FLUID MESHTYING/MESHTYING_DISCRETIZATION "
+                "(gauss_point_to_segment|mortar) for the discretisation."
+            )
+
+        # Check coupling direction
+        coupling = params.get("COUPLING")
+        if coupling is not None and coupling not in (
+            "fluid", "solid", "two-way",
         ):
             issues.append(
-                f"COUPLING_TYPE must be 'penalty' or 'mortar', "
-                f"got {coupling_type!r}."
+                f"COUPLING must be 'fluid', 'solid' or 'two-way', "
+                f"got {coupling!r}."
             )
+
+        # Check meshtying discretisation
+        discretization = params.get("MESHTYING_DISCRETIZATION")
+        if discretization is not None and discretization not in (
+            "none", "gauss_point_to_segment", "mortar",
+        ):
+            issues.append(
+                "MESHTYING_DISCRETIZATION must be 'none', "
+                "'gauss_point_to_segment' or 'mortar', "
+                f"got {discretization!r}."
+            )
+
+        # Check constraint enforcement
+        strategy = params.get("CONSTRAINT_STRATEGY")
+        if strategy is not None and strategy not in ("none", "penalty"):
+            issues.append(
+                "CONSTRAINT_STRATEGY must be 'none' or 'penalty' for "
+                f"beam-to-fluid meshtying, got {strategy!r}."
+            )
+
+        # Check presort strategy
+        presort = params.get("PRESORT_STRATEGY")
+        if presort is not None and presort not in ("bruteforce", "binning"):
+            issues.append(
+                f"PRESORT_STRATEGY must be 'bruteforce' or 'binning', "
+                f"got {presort!r}."
+            )
+
+        # Check search radius
+        search_r = params.get("SEARCH_RADIUS")
+        if search_r is not None:
+            try:
+                r = float(search_r)
+                if r <= 0:
+                    issues.append(f"SEARCH_RADIUS must be > 0, got {r}.")
+            except (TypeError, ValueError):
+                issues.append(
+                    f"SEARCH_RADIUS must be a positive number, "
+                    f"got {search_r!r}."
+                )
 
         return issues

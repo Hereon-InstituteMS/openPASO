@@ -75,7 +75,16 @@ gfu = ngs.GridFunction(V)
 gfu.vec.data = a.mat.Inverse(V.FreeDofs()) * f.vec
 print(f'{{"ok": true, "max": {max(gfu.vec):.6f}, "version": "{ngs.__version__}"}}')
 '''
-    ok, stdout, stderr = _run_script(sys.executable, script)
+    # NOT `sys.executable`. NGSolve usually lives in its own environment, and
+    # the backend already resolves which interpreter that is -- so running the
+    # smoke script in openPASO's own Python asks a question about the wrong
+    # machine. Measured the moment the backend learned to look outside its own
+    # venv: check_availability() reported NGSolve 6.2.2604 and this smoke test
+    # answered "No module named 'ngsolve'" in the same second. Same defect the
+    # DUNE smoke test carried below, one backend over.
+    from backends.ngsolve.backend import _find_ngsolve_python
+    interpreter = str(_find_ngsolve_python() or sys.executable)
+    ok, stdout, stderr = _run_script(interpreter, script)
     dt = (time.time() - t0) * 1000
     if ok:
         try:
@@ -131,7 +140,16 @@ mp.CreateNewNode(2, 1.0, 0.0, 0.0)
 ver = str(KM.Kernel.Version()).replace('"', '')
 print(json.dumps({"ok": True, "nodes": mp.NumberOfNodes(), "version": ver}))
 '''
-    ok, stdout, stderr = _run_script(sys.executable, script)
+    # NOT `sys.executable`. Kratos is a heavy compiled package normally
+    # installed in an environment of its own, and the backend now finds it
+    # there. Measured the moment it learned to: check_availability() said
+    # Kratos 10.3.0 and this smoke test said "No module named
+    # 'KratosMultiphysics'" in the same second. Third instance of this
+    # defect after DUNE and NGSolve -- the check and the work must ask the
+    # same question of the same interpreter.
+    from backends.kratos.backend import _find_kratos_python
+    interpreter = _find_kratos_python() or sys.executable
+    ok, stdout, stderr = _run_script(interpreter, script)
     dt = (time.time() - t0) * 1000
     if ok:
         try:
@@ -161,7 +179,18 @@ try:
 except ImportError as e:
     print(json.dumps({"ok": False, "error": str(e)}))
 '''
-    ok, stdout, stderr = _run_script(sys.executable, script, timeout=60)
+    # DUNE LIVES IN ITS OWN INTERPRETER, AND THIS RAN IN OURS.
+    #
+    # This was `sys.executable`, the Python running openPASO. DUNE-fem is
+    # installed in a separate environment by design -- that is what DUNE_PYTHON
+    # and the conda auto-detection are for -- so the script could only ever
+    # report "No module named 'dune'" unless openPASO itself happened to run
+    # inside the DUNE env. A correct install therefore failed its own smoke
+    # test, which is worse than having no smoke test: it says the solver is
+    # broken when the solver is fine. The backend already resolves this.
+    from backends.dune.backend import _find_dune_python
+    interpreter = _find_dune_python() or sys.executable
+    ok, stdout, stderr = _run_script(interpreter, script, timeout=60)
     dt = (time.time() - t0) * 1000
     if ok:
         try:

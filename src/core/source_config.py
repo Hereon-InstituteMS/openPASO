@@ -4,11 +4,11 @@ Python envs live.
 Three layers, last-wins:
 
   1. Built-in defaults (hardcoded scan roots)
-  2. Global config:       ~/.config/oasis/sources.json
-  3. Repo config:         <repo>/.oasis.json
-  4. Session config:      $OFA_SOURCE_CONFIG=/path/to/file.json  (env var)
-  5. Direct env-var pins: $OFA_<BACKEND>_SOURCE / _BUILD / _PYTHON_ENV
-                          $OFA_EXTRA_SOURCE_PATHS  (colon-separated)
+  2. Global config:       ~/.config/openpaso/sources.json
+  3. Repo config:         <repo>/.openpaso.json
+  4. Session config:      $OPENPASO_SOURCE_CONFIG=/path/to/file.json  (env var; the older OFA_ name still works)
+  5. Direct env-var pins: $OPENPASO_<BACKEND>_SOURCE / _BUILD / _PYTHON_ENV
+                          $OPENPASO_EXTRA_SOURCE_PATHS  (colon-separated)
 
 Config schema (JSON):
 {
@@ -17,14 +17,14 @@ Config schema (JSON):
     "kratos": {
       "source":     "/home/user/Kratos",
       "build":      "/home/user/Kratos/bin/Release",
-      "python_env": "/home/user/miniconda3/envs/ofa-kratos"
+      "python_env": "/home/user/miniconda3/envs/openpaso-kratos"
     },
     "fourc": {
       "source":     "/home/user/4C",
       "build":      "/home/user/4C/build"
     },
     "fenics": {
-      "python_env": "/home/user/miniconda3/envs/ofa-fenicsx"
+      "python_env": "/home/user/miniconda3/envs/openpaso-fenicsx"
     }
   }
 }
@@ -40,11 +40,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from core.user_dirs import desktop_dirs
+
 
 _REPO = Path(__file__).resolve().parent.parent.parent
-_GLOBAL_CONFIG_PATH = Path.home() / ".config" / "oasis" / "sources.json"
-# Pre-rebrand location (project renamed Open-FEM-agent -> OASiS
-# 2026-06-04). The rename sed moved this constant to ~/.config/oasis/
+_GLOBAL_CONFIG_PATH = Path.home() / ".config" / "openpaso" / "sources.json"
+# Pre-rebrand location (project renamed Open-FEM-agent -> openPASO
+# 2026-06-04). The rename sed moved this constant to ~/.config/openpaso/
 # but existing installs keep their config at the old path — without a
 # fallback the rename silently orphans a working setup (found
 # 2026-06-12: setup_status() showed every backend pathless although
@@ -52,7 +54,7 @@ _GLOBAL_CONFIG_PATH = Path.home() / ".config" / "oasis" / "sources.json"
 # fall back to the legacy path; writers always use the NEW path.
 _LEGACY_GLOBAL_CONFIG_PATH = (Path.home() / ".config" / "open-fem-agent"
                               / "sources.json")
-_REPO_CONFIG_PATH = _REPO / ".oasis.json"
+_REPO_CONFIG_PATH = _REPO / ".openpaso.json"
 _ENV_CONFIG_VAR = "OFA_SOURCE_CONFIG"
 _EXTRA_PATHS_VAR = "OFA_EXTRA_SOURCE_PATHS"
 
@@ -154,10 +156,10 @@ def load() -> SourceConfig:
 def example_config() -> str:
     """Return an example config JSON the user can copy and edit."""
     example = {
-        "_comment": "Open-FEM-agent source config — edit paths to match "
+        "_comment": "openPASO source config — edit paths to match "
                     "your machine. All entries are optional.",
         "scan_paths": [
-            "~/Schreibtisch",
+            "~/Desktop",
             "~/projects",
             "/opt/fem"
         ],
@@ -165,18 +167,18 @@ def example_config() -> str:
             "kratos": {
                 "source":     "~/Kratos",
                 "build":      "~/Kratos/bin/Release",
-                "python_env": "~/miniconda3/envs/ofa-kratos"
+                "python_env": "~/miniconda3/envs/openpaso-kratos"
             },
             "fourc": {
-                "source": "~/Schreibtisch/4C-src/4C",
-                "build":  "~/Schreibtisch/4C-src/4C/build"
+                "source": "~/4C",
+                "build":  "~/4C/build"
             },
             "dealii": {
-                "source": "~/Schreibtisch/dealii-src",
-                "build":  "~/Schreibtisch/dealii-src/build"
+                "source": "~/dealii-src",
+                "build":  "~/dealii-src/build"
             },
             "fenics": {
-                "python_env": "~/miniconda3/envs/ofa-fenicsx"
+                "python_env": "~/miniconda3/envs/openpaso-fenicsx"
             }
         }
     }
@@ -210,10 +212,10 @@ def init_from_discovery(path: Optional[Path] = None,
     result = _sd.discover(use_cache=False, scan_time_budget_s=90.0)
 
     cfg: dict = {
-        "_comment": "Open-FEM-agent source config — generated from "
+        "_comment": "openPASO source config — generated from "
                     "live discovery. Edit freely. Per-backend keys "
                     "{source, build, python_env} are all optional.",
-        "scan_paths": ["~/Schreibtisch", "~/projects"],
+        "scan_paths": [*(str(d) for d in desktop_dirs()), "~/projects"],
         "backends": {},
     }
     for backend, info in result.items():
@@ -268,8 +270,8 @@ if __name__ == "__main__":
         sess = os.environ.get(_ENV_CONFIG_VAR)
         print(f"  3. session: ${_ENV_CONFIG_VAR}"
               f" {'= ' + sess if sess else '(unset)'}")
-        print(f"  4. env vars: OFA_<BACKEND>_<SOURCE|BUILD|PYTHON_ENV>, "
-              f"OFA_EXTRA_SOURCE_PATHS")
+        print(f"  4. env vars: OPENPASO_<BACKEND>_<SOURCE|BUILD|PYTHON_ENV>, "
+              f"OPENPASO_EXTRA_SOURCE_PATHS")
 
     if args.example:
         print(example_config())

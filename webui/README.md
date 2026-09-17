@@ -1,6 +1,6 @@
-# OASiS WebUI
+# openPASO WebUI
 
-Browser-based front-end for the LangGraph + OASiS-MCP driver in
+Browser-based front-end for the LangGraph + openPASO-MCP driver in
 `langgraph_eval/`. Single-page app, no build step.
 
 ## What it has
@@ -9,7 +9,7 @@ Browser-based front-end for the LangGraph + OASiS-MCP driver in
 - **Model selector**: `qwen2.5-7b` / `14b` / `32b` (talks to vLLM
   servers on ports 8000-8002) or `mock` (no GPU; uses the same fake
   OpenAI server the smoke tests use).
-- **MCP servers**: checkbox list (currently OASiS; designed to take
+- **MCP servers**: checkbox list (currently openPASO; designed to take
   more servers without code changes — add an entry to
   `webui/config.MCP_SERVERS`).
 - **Mode buttons**: `plan` (every tool call needs Approve/Reject in the

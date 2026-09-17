@@ -72,7 +72,8 @@ KNOWLEDGE["_general"] = {
     },
     "application_loader_pattern": {
         "description": (
-            "Every Kratos application X ships a Python loader stub at "
+            "[Integration] Every Kratos application X ships a Python loader "
+            "stub at "
             "applications/X/X.py that follows a 5-line uniform pattern: "
             "(1) from KratosMultiphysics import _ImportApplication, "
             "(2) imports its dependency applications (e.g. CableNet imports "

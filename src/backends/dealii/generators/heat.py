@@ -11,6 +11,10 @@ def _heat_2d_transient(params: dict) -> str:
     appropriate to the specific problem being solved.
     Based on deal.II step-26 pattern (simplified).
     """
+    degree = int(params.get("degree", params.get("order", 1)))
+    if degree < 1:
+        raise ValueError(
+            f"_heat_2d_transient: degree must be >= 1, got {degree!r}")
     refinements = params.get("refinements", 4)
     n_steps = params.get("n_steps", 20)
     dt = params.get("dt", 0.05)
@@ -58,7 +62,7 @@ int main()
   GridGenerator::hyper_rectangle(triangulation, Point<2>(0,0), Point<2>(1,1), true);
   triangulation.refine_global({refinements});
 
-  FE_Q<2> fe(1);
+  FE_Q<2> fe({degree});
   DoFHandler<2> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
   std::cout << "Heat DOFs: " << dof_handler.n_dofs() << std::endl;
@@ -131,6 +135,10 @@ def _heat_2d_steady(params: dict) -> str:
     All parameter defaults are placeholders. The user/agent must set values
     appropriate to the specific problem being solved.
     """
+    degree = int(params.get("degree", params.get("order", 1)))
+    if degree < 1:
+        raise ValueError(
+            f"_heat_2d_steady: degree must be >= 1, got {degree!r}")
     refinements = params.get("refinements", 5)
     T_left = params.get("T_left", 100.0)
     T_right = params.get("T_right", 0.0)
@@ -167,7 +175,7 @@ int main()
   GridGenerator::hyper_rectangle(triangulation, Point<2>(0,0), Point<2>(1,1), true);
   triangulation.refine_global({refinements});
 
-  FE_Q<2> fe(1);
+  FE_Q<2> fe({degree});
   DoFHandler<2> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
   std::cout << "Heat DOFs: " << dof_handler.n_dofs() << std::endl;
@@ -247,6 +255,10 @@ def _heat_rectangle(params: dict) -> str:
     All parameter defaults are placeholders. The user/agent must set values
     appropriate to the specific problem being solved.
     """
+    degree = int(params.get("degree", params.get("order", 1)))
+    if degree < 1:
+        raise ValueError(
+            f"_heat_rectangle: degree must be >= 1, got {degree!r}")
     refinements = params.get("refinements", 3)
     lx = params.get("lx", 2.0)
     ly = params.get("ly", 1.0)
@@ -287,7 +299,7 @@ int main()
     {{{nx}u, {ny}u}}, Point<2>(0, 0), Point<2>({lx}, {ly}), true /*colorize*/);
   triangulation.refine_global({refinements});
 
-  FE_Q<2> fe(1);
+  FE_Q<2> fe({degree});
   DoFHandler<2> dof_handler(triangulation);
   dof_handler.distribute_dofs(fe);
   std::cout << "Heat DOFs: " << dof_handler.n_dofs() << std::endl;
@@ -408,14 +420,37 @@ KNOWLEDGE = {
         "count is normal.",
         "[Physics] RHS at each step is "
         "M*u_old - dt*(1-theta)*K*u_old + dt*theta*f_new + "
-        "dt*(1-theta)*f_old. Forgetting the (1-theta) terms gives a "
-        "fully-implicit scheme regardless of the theta value; "
-        "Crank-Nicolson (theta=0.5) then degrades to backward Euler "
-        "and the time-discretisation error scales O(dt) not O(dt^2). "
-        "Signal: VectorTools::integrate_difference vs a "
-        "manufactured solution shows L2-error scaling as O(dt^1) "
-        "instead of O(dt^2) even though theta=0.5 was set; "
-        "log-log error-vs-dt slope is ~1.0, not ~2.0.",
+        "dt*(1-theta)*f_old. Dropping the (1-theta)*K*u_old term does "
+        "NOT give you backward Euler, which is what this entry used to "
+        "claim — it gives an INCONSISTENT scheme that converges to the "
+        "WRONG ANSWER as dt is refined. Verified on u_t = Lap(u) on "
+        "the unit square with u=0 on the boundary and "
+        "u0 = sin(pi x) sin(pi y), whose exact amplitude decays as "
+        "exp(-2 pi^2 t), running three variants that differ ONLY in "
+        "this term over three successively halved time steps: correct "
+        "Crank-Nicolson settled on the exact amplitude; backward Euler "
+        "(theta=1) approached the same value from above as dt shrank; "
+        "the theta=0.5 run with the term dropped settled on a value too "
+        "LARGE and stayed there — its distance from the backward-Euler "
+        "answer did not shrink with dt at all (measured 1.40e-01, "
+        "1.44e-01, 1.46e-01 in the infinity norm as dt was halved: it "
+        "GREW). HOW MUCH too large is not a fixed figure and must not "
+        "be quoted as one: dropping the term advances the diffusion by "
+        "only dt/2 per step of dt, so the scheme converges to "
+        "exp(-pi^2*T) instead of exp(-2*pi^2*T) and the relative excess "
+        "is exp(pi^2*T) - 1 — it depends entirely on the END TIME. "
+        "Measured 22 per cent at T = 0.02; the same formula gives 64 "
+        "per cent at T = 0.05 and 168 per cent at T = 0.1, and it grows "
+        "without bound. Quote the end time or quote nothing. "
+        "A scheme whose answer stops depending on dt but is wrong is "
+        "inconsistent, not merely low-order. "
+        "Signal: run the SAME problem at dt and dt/2 and compare the "
+        "two answers to each other AND to a reference. A consistent "
+        "scheme's answers converge toward one another and toward the "
+        "reference; this bug's converge toward each other but NOT "
+        "toward the reference. Do not try to read a slope off a "
+        "log-log error plot — the error does not decrease, so there is "
+        "no slope.",
         "[API] For AMR in time: interpolate the solution to the new "
         "mesh via SolutionTransfer between refine_grid() and "
         "distribute_dofs(). Skipping SolutionTransfer gives a "
@@ -435,16 +470,27 @@ KNOWLEDGE = {
         "boundary nodes between the t=0 output frame and the first "
         "time-step frame; the discontinuity disappears on the "
         "second step as the implicit solver smooths it out.",
-        "[Numerical] theta=0 (forward Euler) requires "
-        "dt < ~h^2 / (2*alpha) where alpha is the thermal "
-        "diffusivity — fine mesh + small alpha makes this dt tiny. "
-        "Use theta=0.5 (Crank-Nicolson, 2nd-order, unconditionally "
-        "stable) or theta=1 (backward Euler, 1st-order, "
-        "unconditionally stable) for any production run. "
-        "Signal: forward Euler with too-large dt — `solution."
-        "linfty_norm()` grows exponentially (doubles every 2-3 "
-        "steps) and overflows to NaN within ~20 steps; "
-        "VectorTools::integrate_difference vs analytic reference "
-        "exceeds 1e6 within the first few steps.",
+        "[Numerical] theta=0 (forward Euler) is only CONDITIONALLY "
+        "stable: the step size is bounded by roughly h^2 over the "
+        "diffusivity, so a fine mesh or a small diffusivity makes it "
+        "unusable. theta=0.5 (Crank-Nicolson, second order) and "
+        "theta=1 (backward Euler, first order) are unconditionally "
+        "stable and are what a production run should use. "
+        "TREAT THE CONSTANT AS UNKNOWN. The textbook dt < h^2/(2*alpha) "
+        "is derived for a FINITE-DIFFERENCE Laplacian; the "
+        "finite-element bound is dt < 2 / lambda_max(M^{-1} K), which "
+        "depends on the element, the quadrature rule and on whether "
+        "the mass matrix is lumped, and can differ from the "
+        "finite-difference value substantially. This catalog does NOT "
+        "claim to have measured the constant — an attempt to do so "
+        "produced an unsound probe and the result was discarded rather "
+        "than reported. "
+        "Signal: measure it for YOUR discretisation. Integrate a fixed "
+        "NUMBER OF STEPS — not a fixed end time, otherwise a larger dt "
+        "silently takes fewer steps and hides the instability — and "
+        "bisect on dt: solution.linfty_norm() grows without bound "
+        "above the limit and stays bounded below it. Nothing is "
+        "announced; the only diagnostic is the norm you print "
+        "yourself.",
     ],
 }

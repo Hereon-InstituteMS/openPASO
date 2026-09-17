@@ -3,7 +3,7 @@
   "date": "2026-05-31",
   "backend": "dealii",
   "physics": "poisson, heat, helmholtz, eigenvalue (batch)",
-  "surface_symptom": "Four core deal.II physics — Poisson (the canonical first PDE), the transient heat equation, Helmholtz (acoustic / time-harmonic), and SLEPc eigenproblems — each had a KNOWLEDGE entry with a single function_space string and a handful of prose pitfalls, but no structured elements / mesh_generators / solvers / preconditioners menus. The agent calling prepare_simulation for any of these got back a one-liner FE recommendation (FE_Q(1)) and no awareness of higher-order p, hp-adaptive choices, DG variants, FE_Nedelec for vector Helmholtz, or shift-and-invert for interior eigenvalues. The Helmholtz pollution-effect rule, the AMR-in-time SolutionTransfer requirement, the SLEPc MPI-init requirement, and the dual-matrix Dirichlet-constraint requirement for generalised eigenproblems were either implicit or absent — these are precisely the silent-failure modes the Open-FEM-Agent paper (§3.2) describes.",
+  "surface_symptom": "Four core deal.II physics — Poisson (the canonical first PDE), the transient heat equation, Helmholtz (acoustic / time-harmonic), and SLEPc eigenproblems — each had a KNOWLEDGE entry with a single function_space string and a handful of prose pitfalls, but no structured elements / mesh_generators / solvers / preconditioners menus. The agent calling prepare_simulation for any of these got back a one-liner FE recommendation (FE_Q(1)) and no awareness of higher-order p, hp-adaptive choices, DG variants, FE_Nedelec for vector Helmholtz, or shift-and-invert for interior eigenvalues. The Helmholtz pollution-effect rule, the AMR-in-time SolutionTransfer requirement, the SLEPc MPI-init requirement, and the dual-matrix Dirichlet-constraint requirement for generalised eigenproblems were either implicit or absent — these are precisely the silent-failure modes the openPASO design paper (§3.2) describes.",
   "root_cause": "Same pattern as the elasticity/stokes encoding: each physics entry was written from the corresponding step-* tutorial's narrative, so it captured only that tutorial's specific element + solver choice. The cross-physics catalog structure (elements menu, mesh_generators menu, solvers menu) was never applied uniformly. The Layer A→B diff is the first audit that surfaces this systematically.",
   "categories": ["Numerical", "Physics", "Syntax", "API", "Integration"],
   "pitfall_db_entries": [
@@ -29,7 +29,7 @@
     "branch layer-a/kratos-source-scanner — commit adding deal.II poisson+heat+helmholtz+eigenvalue catalog structure",
     "deal.II tutorials: step-3/4/5/6/7 (poisson), step-26/86 (heat), step-29 (helmholtz), step-36 (eigenvalue)",
     "scripts/scan_results/diffs/dealii.json (gap progression: 58 → 42 → 34 truly_missing across the elasticity+stokes+this batch)",
-    "Open-FEM-Agent §3.2 / Table 1",
+    "the openPASO design paper §3.2 / Table 1",
     "task #33 — Encode discovered upstream capabilities into MCP catalog",
     "task #46 — Pitfall-DB-first merge discipline"
   ]
