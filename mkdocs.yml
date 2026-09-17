@@ -64,7 +64,6 @@ nav:
       - "Option A: an AI app": use/ai-app.md
       - "Option B: an API key": use/api-key.md
       - What a run looks like: use/first-run.md
-      - Web interface: use/web-interface.md
   - Solvers:
       - solvers/index.md
       - scikit-fem: solvers/skfem.md
