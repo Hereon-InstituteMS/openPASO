@@ -1,8 +1,8 @@
 cff-version: 1.2.0
 title: "openPASO: open Platform for Agentic Simulation and Optimization"
 message: >-
-  openPASO is the experimental fork. The citable, archived release is the
-  upstream OASiS project, and the DOIs below point at it. Please cite that.
+  openPASO was first published as OASiS; the DOIs below archive it under that
+  name. Please cite the archived release.
 type: software
 authors:
   - family-names: Hermann
@@ -25,7 +25,7 @@ identifiers:
     value: 10.5281/zenodo.20543501
     description: "Zenodo archive of v1.1.0"
 repository-code: "https://github.com/Hereon-InstituteMS/openPASO"
-url: "https://github.com/Hereon-InstituteMS/OASiS"
+url: "https://github.com/Hereon-InstituteMS/openPASO"
 doi: 10.5281/zenodo.20543501
 abstract: >-
   openPASO is an open-source Model Context Protocol (MCP) server
