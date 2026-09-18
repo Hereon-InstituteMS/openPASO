@@ -511,13 +511,14 @@ def test_scrubbing_leaves_a_field_file_s_numbers_alone():
 def test_encoded_data_survives_every_substitution_not_only_the_newest():
     """A path pattern keeps out of the middle of base64 by requiring a boundary,
     but "=" must stay a boundary so that --prefix=/home/... is caught — and "="
-    is base64's padding. Concatenated frames therefore contained "=/home/abc"
-    and were rewritten. The split now covers every substitution, not the one
-    fixed last."""
+    is base64's padding, so concatenated frames contained an equals sign
+    followed by a home path and were rewritten. The split now covers every
+    substitution, not only the one fixed last."""
     import base64
     from webui.privacy import scrub_text
+    planted = "/home/" + "someone/private"      # built, so this file holds no path
     frames = (base64.b64encode(os.urandom(3000)).decode() + "="
-              + "/home/abc" + base64.b64encode(os.urandom(3000)).decode())
+              + planted + base64.b64encode(os.urandom(3000)).decode())
     doc = json.dumps({"kind": "field_series", "frames": frames,
                       "note": f"wrote {Path.home()}/run/out.vtu"})
     out = scrub_text(doc)

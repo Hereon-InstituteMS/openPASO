@@ -52,7 +52,8 @@ def scrub_text(s: str) -> str:
     guarding whichever one was fixed last. The boundary in the patterns above
     is not enough on its own: "=" has to stay a boundary so that
     --prefix=/home/... is caught, and "=" is also base64's padding, so
-    "...=/home/abc..." inside concatenated frames matched and was rewritten."""
+    an equals sign followed by a home path inside concatenated frames matched
+    and was rewritten."""
     if not s:
         return s
     out, last = [], 0
