@@ -327,6 +327,8 @@ class Run:
         still receives it, so the run as a whole is not steered behind its
         back."""
         if agent != "main":
+            # keyed by the sub-agent itself: two critics in one run are two
+            # workers, and the second must hear the correction as well
             fresh = [s for s in self.steers if agent not in s.setdefault("seen_by", set())]
             for s in fresh:
                 s["seen_by"].add(agent)

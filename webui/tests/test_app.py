@@ -531,9 +531,11 @@ def test_a_correction_reaches_a_critic_while_it_works_and_the_main_agent_after()
     run.steers = [{"id": "st_1", "text": "Stop running MPI tests."}]
     run.emit = lambda e: asyncio.sleep(0)
     run.push_snapshot = lambda: asyncio.sleep(0)
-    first = run._take_steers("critic")
+    first = run._take_steers("sa_1111")
     assert [s["text"] for s in first] == ["Stop running MPI tests."]
-    assert run._take_steers("critic") == [], "the critic is not told twice"
+    assert run._take_steers("sa_1111") == [], "the same sub-agent is not told twice"
+    # a second critic in the same run is a second worker and hears it too
+    assert [s["text"] for s in run._take_steers("sa_2222")] == ["Stop running MPI tests."]
     assert [s["text"] for s in run._take_steers("main")] == ["Stop running MPI tests."]
     assert run.steers == []
 

@@ -81,12 +81,13 @@ def server_python() -> str:
     environment. Hard-coding the second one here meant an install that sets the
     override reported no solvers and could not start a Claude Code run, while
     the other path worked."""
-    for candidate in (os.environ.get("OPENPASO_PYTHON"),
-                      str(REPO / ".venv/bin/python"),
-                      str(Path.home() / "Schreibtisch/open-fem-agent/.venv/bin/python")):
+    for candidate in (os.environ.get("OPENPASO_PYTHON"), str(REPO / ".venv/bin/python")):
         if candidate and Path(candidate).is_file():
             return candidate
-    return str(REPO / ".venv/bin/python")      # reported honestly when it fails
+    # Only this install's own environment, or the one named in OPENPASO_PYTHON.
+    # A third candidate pointing at another checkout would silently run someone
+    # else's openPASO, with whatever solvers that one has.
+    return str(REPO / ".venv/bin/python")      # so the failure names this path
 
 
 MCP_SERVERS = {

@@ -1,5 +1,6 @@
 import { rmSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwind from '@tailwindcss/vite'
@@ -13,7 +14,11 @@ import tailwind from '@tailwindcss/vite'
 const cleanAssets = (): Plugin => ({
   name: 'openpaso-clean-assets',
   apply: 'build',
-  buildStart() { rmSync(resolve(__dirname, '../webui/static/assets'), { recursive: true, force: true }) },
+  buildStart() {
+    // this package is ESM: __dirname does not exist here
+    const here = dirname(fileURLToPath(import.meta.url))
+    rmSync(resolve(here, '../webui/static/assets'), { recursive: true, force: true })
+  },
 })
 
 export default defineConfig({

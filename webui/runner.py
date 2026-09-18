@@ -389,7 +389,7 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
         # step, including the ones a critic takes (it ran a solver unasked).
         sub_tools = [_wrap_tool(t, emitter=emitter, get_mode=get_mode,
                                 gate=gate, agent_label=role, steps=steps,
-                                take_steers=(lambda: take_steers(role)) if take_steers else None)
+                                take_steers=(lambda: take_steers(sa_id)) if take_steers else None)
                      for t in (mcp_tools + host) if t.name != "spawn_subagent"]
         sys = _SUB_PROMPTS.get(role, _SUB_PROMPTS["researcher"])
         sub_agent = create_react_agent(_sub_llm(), tools=sub_tools,

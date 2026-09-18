@@ -29,12 +29,17 @@ export default function FilesDrawer({ runId, open, onClose, refreshKey }: {
     setRows(null); setError(null)
     api.files(runId, sub).then((d) => setRows(d.entries)).catch((e) => setError(String(e.message || e)))
   }, [runId, sub, open, refreshKey])
+  // RunView passes a new onClose on every render, and it re-renders once a
+  // second while a run works: depending on it here tore the trap down and set
+  // it up again each time, taking focus out of whatever was being used
+  const close = useRef(onClose)
+  close.current = onClose
   useEffect(() => {
     if (!open) return
     const returnTo = document.activeElement as HTMLElement | null
     panel.current?.focus()
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { if (viewing) setViewing(null); else onClose(); return }
+      if (e.key === 'Escape') { if (viewing) setViewing(null); else close.current(); return }
       if (e.key !== 'Tab' || viewing) return
       // a drawer you can tab out of leaves the keyboard on the page behind it
       const inside = panel.current?.querySelectorAll<HTMLElement>(
@@ -50,7 +55,7 @@ export default function FilesDrawer({ runId, open, onClose, refreshKey }: {
       document.removeEventListener('keydown', key)
       returnTo?.focus?.()                 // back to the button that opened it
     }
-  }, [open, onClose, viewing])
+  }, [open, viewing])
 
   async function upload(files: File[]) {
     if (!files.length) return
