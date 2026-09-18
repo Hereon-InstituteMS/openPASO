@@ -30,6 +30,23 @@ FAILED = "failed"
 INTERRUPTED = "interrupted"
 
 
+RESULT_LIMIT = 8000
+
+
+def shorten(text: str, limit: int = RESULT_LIMIT) -> str:
+    """A tool result, short enough to carry around but never cut where it
+    matters. openPASO stamps its verification verdict at the END of a report,
+    so taking the first 8000 characters of a long verified run threw away the
+    one field that says the result can be trusted, and the run then showed as
+    unverified. Keep both ends."""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    head, tail = int(limit * 0.7), limit - int(limit * 0.7)
+    return (text[:head] + f"\n\n[… {len(text) - limit} characters left out of the middle …]\n\n"
+            + text[-tail:])
+
+
 def _payload(raw: str) -> dict | None:
     """The JSON object inside a tool result, which MCP wraps as a repr of text
     blocks. None when the result is not a JSON report (e.g. an error string)."""

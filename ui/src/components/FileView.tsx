@@ -65,15 +65,21 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
   const [viz, setViz] = useState<Viz | null>(null)
 
   useEffect(() => {
+    // opening files quickly could show the first file's contents under the
+    // second file's name, whichever answer happened to arrive last
     setViz(null)
-    fetch(`/api/viz?rel=${encodeURIComponent(rel)}`).then((r) => r.json())
-      .then(setViz).catch((e) => setViz({ kind: 'error', error: String(e) }))
+    const stop = new AbortController()
+    fetch(`/api/viz?rel=${encodeURIComponent(rel)}`, { signal: stop.signal })
+      .then((r) => r.json())
+      .then(setViz)
+      .catch((e) => { if (!stop.signal.aborted) setViz({ kind: 'error', error: String(e) }) })
+    return () => stop.abort()
   }, [rel])
 
   const name = rel.split('/').pop() || rel
 
   return (
-    <div className="fixed inset-0 z-30 flex" role="dialog" aria-label={name}>
+    <div className="fixed inset-0 z-30 flex" role="dialog" aria-modal="true" aria-label={name}>
       <div className="flex-1 bg-black/55" onClick={onClose} />
       <aside className="w-[760px] h-full bg-card border-l line overflow-y-auto scroll p-8
                         overscroll-contain">

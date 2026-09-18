@@ -111,6 +111,10 @@ async def models() -> dict:
     from . import claude_code
     if claude_code.available():
         setting = _claude_model_setting()
+        login = claude_code.signed_in()
+        where = ("model from your Claude settings: " + setting) if setting else "model from your Claude settings"
+        status = where if login else (where + " — no sign-in found on this machine; "
+                                      "if the first step fails, run claude once in a terminal")
         groups.append({
             "kind": "claude-code", "title": "Claude Code",
             "note": ("Runs the claude command on this machine with your own Claude login. "
@@ -119,8 +123,7 @@ async def models() -> dict:
             "models": [{
                 "id": config.CLAUDE_CODE_ID, "label": "Claude Code",
                 "kind": "claude-code", "available": True,
-                "status": ("model from your Claude settings: " + setting) if setting
-                          else "model from your Claude settings",
+                "status": status,
                 "plan_mode": False,
             }],
         })

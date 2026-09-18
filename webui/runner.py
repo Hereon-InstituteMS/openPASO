@@ -191,9 +191,10 @@ def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent", take_steer
                 result = (f"[The user ended this step after {secs:.0f} s. The processes it had "
                           f"started were ended, so it has no usable result.]"
                           + (f"\n\nOutput before it was ended:\n{str(result)[:4000]}" if str(result).strip() else ""))
+            from .outcome import shorten
             await emitter({"type": "tool_result",
                            "call_id": call_id, "tool": tool.name,
-                           "result": str(result)[:8000]})
+                           "result": shorten(result)})
             # A correction the user sent while this step ran. A ReAct agent reads
             # the tool result next, so that is where it is handed over: at most
             # one step late, and never by interrupting a solver mid-calculation.

@@ -31,7 +31,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import catalog, config, files, runs, sessions, viz
@@ -92,6 +92,34 @@ async def get_config():
             "max_running": config.MAX_RUNNING}
 
 
+def _artefacts(work: Path) -> list[dict]:
+    """Every file a run wrote, with its size and checksum."""
+    import hashlib
+    out: list[dict] = []
+    if not work.is_dir():
+        return out
+    root = work.resolve()
+    for f in sorted(work.rglob("*")):
+        # a link the run made can point anywhere; hashing what it points at
+        # would put a file from outside the run into its record
+        if f.is_symlink() or not f.is_file():
+            continue
+        if not f.resolve().is_relative_to(root):
+            continue
+        digest, size = hashlib.sha256(), 0
+        with f.open("rb") as fh:                 # a run may write gigabytes
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(block)
+                size += len(block)
+        out.append({
+            "path": str(f.relative_to(work)),
+            "bytes": size,
+            "sha256": digest.hexdigest(),
+            "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(f.stat().st_mtime)),
+        })
+    return out
+
+
 @app.get("/api/sessions/{sid}/manifest")
 async def get_manifest(sid: str):
     """Everything needed to check or reproduce one run, in one file.
@@ -99,7 +127,6 @@ async def get_manifest(sid: str):
     A result that cannot be traced back to what produced it is not a result. The
     interface shows a summary; this is the record behind it, with the full
     untruncated event log and a hash for every artefact the run wrote."""
-    import hashlib
     try:
         state = sessions.load(sid)
     except Exception:
@@ -109,28 +136,9 @@ async def get_manifest(sid: str):
     outcome = outcome_fold(events)
 
     work = config.SANDBOX_ROOT / f"webui_{sid}"
-    artefacts = []
-    if work.is_dir():
-        root = work.resolve()
-        for f in sorted(work.rglob("*")):
-            # a link the run made can point anywhere; hashing what it points at
-            # would put a file from outside the run into its record
-            if f.is_symlink() or not f.is_file():
-                continue
-            if not f.resolve().is_relative_to(root):
-                continue
-            digest, size = hashlib.sha256(), 0
-            with f.open("rb") as fh:                 # a run may write gigabytes
-                for block in iter(lambda: fh.read(1024 * 1024), b""):
-                    digest.update(block)
-                    size += len(block)
-            artefacts.append({
-                "path": str(f.relative_to(work)),
-                "bytes": size,
-                "sha256": digest.hexdigest(),
-                "modified": time.strftime("%Y-%m-%dT%H:%M:%S",
-                                          time.localtime(f.stat().st_mtime)),
-            })
+    # off the event loop: a run's files can be gigabytes, and hashing them here
+    # held up every other run's events, and Stop with them
+    artefacts = await asyncio.to_thread(_artefacts, work)
 
     check = await catalog.solvers()
     solvers = {r["name"]: r["version"] for r in check.get("solvers", [])
@@ -220,10 +228,50 @@ async def api_viz(rel: str):
 # Text a run wrote can hold the home directory it worked in, and this is the
 # path a Download link uses. Everything else the browser is shown is scrubbed;
 # without this the one route that hands over whole files was the exception.
-_SCRUB_SUFFIXES = {".txt", ".log", ".out", ".err", ".md", ".json", ".yaml", ".yml",
-                   ".xml", ".csv", ".tsv", ".py", ".sh", ".dat", ".inp", ".i",
-                   ".feb", ".xdmf", ".pvd", ".geo", ".cfg", ".ini", ".toml"}
-_SCRUB_MAX = 32 * 1024 * 1024
+# What counts as text is decided by looking, not by a list of suffixes: a
+# solver writes .4c, .i, .msh and .vtk files that are plain text, and an
+# allowlist quietly let those through unscrubbed.
+_SNIFF_BYTES = 8192
+_SCRUB_WHOLE = 8 * 1024 * 1024        # bigger than this is streamed in pieces
+_CARRY = 4096                          # so a path split across two pieces still matches
+
+
+def _is_text(p: Path) -> bool:
+    try:
+        head = p.open("rb").read(_SNIFF_BYTES)
+    except OSError:
+        return False
+    if b"\0" in head:
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError:
+        # a multi-byte character may straddle the end of the sample
+        try:
+            head[:-4].decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+    return True
+
+
+def _scrubbed_stream(p: Path):
+    """The file, scrubbed, in pieces, so a huge log does not have to be held in
+    memory at once. Each piece keeps the tail of the one before it in view, so a
+    path that straddles the boundary is still found."""
+    carry = ""
+    with p.open("r", encoding="utf-8", errors="replace") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            text = carry + chunk
+            keep = text[-_CARRY:] if len(text) > _CARRY else text
+            out = scrub_text(text[:-len(keep)] if len(text) > _CARRY else "")
+            carry = keep
+            if out:
+                yield out.encode("utf-8")
+    if carry:
+        yield scrub_text(carry).encode("utf-8")
 
 
 @app.get("/sandbox-file/{rel:path}")
@@ -234,14 +282,18 @@ async def sandbox_file(rel: str):
         raise HTTPException(403, "That path is outside the run folders.")
     if not p.is_file():
         raise HTTPException(404, "not a file")
-    if p.suffix.lower() in _SCRUB_SUFFIXES and p.stat().st_size <= _SCRUB_MAX:
-        try:
-            text = p.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            return FileResponse(p)
-        return Response(scrub_text(text), media_type="text/plain; charset=utf-8",
-                        headers={"Content-Disposition": f'inline; filename="{p.name}"'})
-    return FileResponse(p)
+    if not _is_text(p):
+        return FileResponse(p)
+    disposition = {"Content-Disposition": f'inline; filename="{p.name}"'}
+    if p.stat().st_size > _SCRUB_WHOLE:
+        return StreamingResponse(_scrubbed_stream(p), media_type="text/plain; charset=utf-8",
+                                 headers=disposition)
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        raise HTTPException(404, "could not read that file")
+    return Response(scrub_text(text), media_type="text/plain; charset=utf-8",
+                    headers=disposition)
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -348,6 +400,16 @@ async def delete_session(sid: str):
         runs.RUNS.pop(sid, None)
     import shutil
     folder = config.SANDBOX_ROOT / f"webui_{sid}"
+    # A run the server no longer holds (it was restarted under it) can still
+    # have a solver of its own running. Deleting the folder under it left it
+    # computing against files that were gone, with nothing on screen to say so.
+    if folder.is_dir():
+        from . import proctree
+        try:
+            since = sessions.load(sid).get("created_at")
+        except Exception:
+            since = None
+        await asyncio.to_thread(proctree.end_run_processes, folder / "work", 3.0, since)
     try:
         deleted = sessions.delete(sid)
     except ValueError:
@@ -501,7 +563,22 @@ async def _handle_inbound(run: "runs.Run", msg: dict, ws: WebSocket):
             # what produced a result must stay what the record says produced it
             await _tell(ws, "The model of a run cannot change after it has started. Start a new run.")
             return
-        run.state["model"] = msg.get("model")
+        wanted = msg.get("model")
+        groups = await catalog.models()
+        offered = {m["id"]: m for g in groups["groups"] for m in g["models"]}
+        if wanted not in offered:
+            # the same rule as POST /api/sessions: the test model and anything
+            # unknown are not choices a person can make
+            await _tell(ws, f"{wanted} is not a model you can choose here.")
+            return
+        if not offered[wanted]["available"]:
+            await _tell(ws, f"{offered[wanted]['label']} cannot run right now: {offered[wanted]['status']}.")
+            return
+        if wanted == config.CLAUDE_CODE_ID and run.mode() == "plan":
+            await _tell(ws, "Claude Code cannot stop to ask before each step. "
+                            "Switch steps to \"Run without asking\" first.")
+            return
+        run.state["model"] = wanted
         await run.close_agent()
         run.save()
         await run.push_snapshot()

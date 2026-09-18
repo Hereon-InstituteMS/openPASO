@@ -31,10 +31,25 @@ export default function FilesDrawer({ runId, open, onClose, refreshKey }: {
   }, [runId, sub, open, refreshKey])
   useEffect(() => {
     if (!open) return
+    const returnTo = document.activeElement as HTMLElement | null
     panel.current?.focus()
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !viewing) onClose() }
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { if (viewing) setViewing(null); else onClose(); return }
+      if (e.key !== 'Tab' || viewing) return
+      // a drawer you can tab out of leaves the keyboard on the page behind it
+      const inside = panel.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')
+      if (!inside?.length) return
+      const first = inside[0], last = inside[inside.length - 1]
+      const here = document.activeElement
+      if (!e.shiftKey && (here === last || here === panel.current)) { e.preventDefault(); first.focus() }
+      else if (e.shiftKey && (here === first || here === panel.current)) { e.preventDefault(); last.focus() }
+    }
     document.addEventListener('keydown', key)
-    return () => document.removeEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('keydown', key)
+      returnTo?.focus?.()                 // back to the button that opened it
+    }
   }, [open, onClose, viewing])
 
   async function upload(files: File[]) {
@@ -53,7 +68,7 @@ export default function FilesDrawer({ runId, open, onClose, refreshKey }: {
   return (
     <>
       <div className="absolute inset-0 z-20 bg-black/40" onClick={onClose} aria-hidden />
-      <aside ref={panel} tabIndex={-1} aria-label="Files of this run"
+      <aside ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Files of this run"
              className="absolute top-0 right-0 bottom-0 z-30 w-[480px] max-w-full bg-elevated border-l border-strong flex flex-col outline-none">
         <div className="h-16 px-5 flex items-center gap-3 border-b line">
           <h2 className="text-[17px] font-semibold text-ink">Files</h2>

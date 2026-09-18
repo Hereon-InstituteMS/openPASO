@@ -27,14 +27,44 @@ def available() -> bool:
     return shutil.which(BINARY) is not None
 
 
-def _mcp_config(servers: list[str]) -> dict:
-    """The --mcp-config payload, built from the same entries the WebUI shows."""
+def signed_in() -> bool | None:
+    """Whether a Claude login is on this machine. None when it cannot be told.
+
+    Being on PATH is not being signed in: an installed but unauthenticated CLI
+    was offered as a ready model and failed on the first step. A login may also
+    live in the system keyring, which cannot be read from here, so this says
+    "unknown" rather than claiming the model is unusable."""
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return True
+    if (Path.home() / ".claude" / ".credentials.json").is_file():
+        return True
+    return None
+
+
+def _mcp_config(servers: list[str], workdir: Path | None = None) -> dict:
+    """The --mcp-config payload, built from the same entries the WebUI shows.
+
+    The openPASO server writes simulation output, coupling files and meshes to
+    directories it takes from the environment, defaulting to shared ones next to
+    the install. The LangGraph path points them at the run's own folder; this
+    one did not, so a Claude Code run's results landed outside the run, missing
+    from its Files view and its record, and two runs at once could overwrite
+    each other."""
     out: dict[str, dict] = {}
     for sid in servers:
         spec = config.MCP_SERVERS.get(sid)
         if not spec:
             continue
         env = dict(spec.get("env_extra") or {})
+        if workdir is not None:
+            work = Path(workdir).resolve()
+            env.update({
+                "OPENPASO_CELL_WORKDIR": str(work),
+                "OPENPASO_OUTPUT_DIR": str(work / "simulation_outputs"),
+                "OPENPASO_COUPLING_DIR": str(work / "coupling"),
+                "OPENPASO_MESH_DIR": str(work / "meshes"),
+                "OPENPASO_BENCHMARK_DIR": str(work / "benchmark_results"),
+            })
         out[sid] = {
             "command": spec["command"],
             "args": list(spec.get("args") or []),
@@ -70,7 +100,7 @@ async def stream_turn(
             "approve each step. Choose \"Run without asking\" for it, or pick "
             "another model to keep \"Ask before each step\".")
 
-    cfg = _mcp_config(servers)
+    cfg = _mcp_config(servers, workdir)
     tmp = Path(tempfile.mkdtemp(prefix="openpaso-cc-"))
     cfg_path = tmp / "mcp.json"
     cfg_path.write_text(json.dumps(cfg))
@@ -165,9 +195,10 @@ async def _consume(proc, emit, state) -> str:
                 if isinstance(body, list):
                     body = " ".join(b.get("text", "") for b in body
                                     if isinstance(b, dict))
+                from .outcome import shorten
                 await _send(emit, {"type": "tool_result", "call_id": cid,
                                    "tool": calls.get(cid, ""),
-                                   "result": str(body)[:8000]})
+                                   "result": shorten(body)})
         elif kind == "result":
             final = msg.get("result") or final
             if state is not None and msg.get("session_id"):

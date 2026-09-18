@@ -102,6 +102,46 @@ def test_files_are_served_from_run_folders_only(client):
     assert client.post("/api/extract_params", json={"source": "N = 3"}).status_code in (404, 405)
 
 
+def test_a_long_result_keeps_the_verdict_at_its_end():
+    """openPASO stamps its verification verdict at the END of a report. Cutting
+    a long result to its first 8000 characters threw that away, and a verified
+    run then showed as unverified."""
+    from webui.outcome import RESULT_LIMIT, classify_solver_result, shorten
+    body = json.dumps({"status": "completed", "log": "x" * 40000, "trustworthy_result": True})
+    raw = "[{'type': 'text', 'text': '" + body + "'}]"
+    assert len(raw) > RESULT_LIMIT
+    assert classify_solver_result(shorten(raw)) == "verified"
+    assert len(shorten(raw)) <= RESULT_LIMIT + 200
+
+
+def test_claude_code_writes_its_results_into_the_run(tmp_path):
+    """Its openPASO server took the shared install directories, so a Claude Code
+    run's output landed outside the run and two runs could collide."""
+    from webui import claude_code
+    cfg = claude_code._mcp_config(["openpaso"], tmp_path)
+    env = cfg["mcpServers"]["openpaso"]["env"]
+    for key in ("OPENPASO_CELL_WORKDIR", "OPENPASO_OUTPUT_DIR", "OPENPASO_COUPLING_DIR",
+                "OPENPASO_MESH_DIR", "OPENPASO_BENCHMARK_DIR"):
+        assert env[key].startswith(str(tmp_path.resolve())), (key, env[key])
+
+
+def test_every_text_file_is_scrubbed_however_it_is_named(client):
+    """Deciding by suffix let a solver's own formats through unscrubbed."""
+    work = config.SANDBOX_ROOT / "webui_abc123def" / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    deck = work / "case.4c"
+    deck.write_text(f"MESHFILE: {Path.home()}/meshes/part.msh\n")
+    binary = work / "field.bin"
+    binary.write_bytes(b"\x00\x01\x02" + str(Path.home()).encode())
+    try:
+        text = client.get("/sandbox-file/webui_abc123def/work/case.4c")
+        assert str(Path.home()) not in text.text and "~/meshes/part.msh" in text.text
+        # a binary file is served as it is; scrubbing it would corrupt it
+        assert client.get("/sandbox-file/webui_abc123def/work/field.bin").status_code == 200
+    finally:
+        deck.unlink(); binary.unlink()
+
+
 def test_a_download_is_scrubbed_like_everything_else(client, tmp_path, monkeypatch):
     """The download route hands over whole files; it used to be the one way a
     home path could reach the browser."""
