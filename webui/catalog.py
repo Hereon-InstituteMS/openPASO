@@ -119,7 +119,8 @@ async def models() -> dict:
             "kind": "claude-code", "title": "Claude Code",
             "note": ("Runs the claude command on this machine with your own Claude login. "
                      "Prompts and the files it reads go to Anthropic. It cannot stop to ask "
-                     "for approval, so it only runs without asking."),
+                     "for approval, so it only runs without asking, and its file and shell "
+                     "tools can reach anything this account can, not only the run's folder."),
             "models": [{
                 "id": config.CLAUDE_CODE_ID, "label": "Claude Code",
                 "kind": "claude-code", "available": True,

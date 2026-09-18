@@ -160,10 +160,28 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
             </div>
           )}
 
-          {viz && !['text', 'json', 'table', 'image', 'error', 'vtk', 'hdf'].includes(viz.kind) && (
+          {viz?.kind === 'xdmf' && (
+            <div className="text-[15px] leading-[1.55] text-body">
+              <p>An XDMF file: it describes a mesh and fields, and the numbers live in the data files beside it.</p>
+              {Array.isArray(viz.data_files) && viz.data_files.length > 0 && (
+                <p className="num mt-2 text-[14px] text-muted break-all">It points at: {(viz.data_files as string[]).join(', ')}</p>
+              )}
+              <pre className="num text-[13px] leading-[1.6] text-body mt-3 p-4 bg-soft border line rounded-[8px]
+                              max-h-[420px] overflow-auto scroll whitespace-pre-wrap break-words">{String(viz.text || '')}</pre>
+            </div>
+          )}
+
+          {viz && !['text', 'json', 'table', 'image', 'error', 'vtk', 'hdf', 'xdmf'].includes(viz.kind) && (
             <div className="text-[15px] text-body">
               openPASO cannot show a {viz.kind} file here. Download it and open it in a program that reads it.
             </div>
+          )}
+
+          {viz && !['text', 'json', 'table', 'error', 'xdmf'].includes(viz.kind) && (
+            <p className="mt-6 pt-4 border-t line text-[14px] text-muted">
+              Text files are stripped of home directories on their way to you. This one is sent exactly as the
+              run wrote it, so a path can still be inside it.
+            </p>
           )}
         </div>
       </aside>

@@ -74,9 +74,12 @@ def _mcp_config(servers: list[str], workdir: Path | None = None) -> dict:
 
 
 # The work an agent has to do here is write an input deck and run a solver, so
-# it needs the file and shell tools as well as openPASO's own. Naming them
-# explicitly is the point: the run is allowed to do these things and nothing
-# else, rather than being handed a blanket bypass.
+# it needs the file and shell tools as well as openPASO's own. This list says
+# WHICH KINDS of thing a run may do; it is not a boundary on WHERE. These are
+# Claude Code's own tools, and they take absolute paths: the run starts in its
+# own folder but can read and write anywhere this account can, exactly as
+# run_bash can on the other path. The interface says so where the mode is
+# chosen, and a run's own Files view still shows only the run's folder.
 WORK_TOOLS = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebSearch"]
 
 

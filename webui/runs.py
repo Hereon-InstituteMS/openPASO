@@ -212,6 +212,9 @@ class Run:
         if attachments:
             agent_text += ("\n\n(The user uploaded these files into your working "
                            "directory: " + ", ".join(f"uploads/{a}" for a in attachments) + ")")
+        # before the task exists: Stop pressed in the same breath as Send used to
+        # read the previous turn's flag and answer "Nothing is running in this run"
+        self._turn_ended = False
         self.turn_task = asyncio.create_task(
             self._turn(agent_text, shown={"text": text, "attachments": attachments}))
         await self.push_snapshot()
@@ -314,11 +317,19 @@ class Run:
                 s["seen_by"].add(agent)
             return [{"id": s["id"], "text": s["text"]} for s in fresh]
         taken, self.steers = self.steers, []
-        for s in taken:
-            asyncio.ensure_future(self.emit(
-                {"type": "steer_state", "id": s["id"], "state": "delivered"}))
-        if taken:
-            asyncio.ensure_future(self.push_snapshot())
+        # this is called from a tool's thread of work, so the events go out as
+        # tasks on the loop that is running it; asyncio.ensure_future needs one
+        # and raises where there is none
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            for s in taken:
+                loop.create_task(self.emit(
+                    {"type": "steer_state", "id": s["id"], "state": "delivered"}))
+            if taken:
+                loop.create_task(self.push_snapshot())
         return taken
 
     # ── end one step ────────────────────────────────────────────────────

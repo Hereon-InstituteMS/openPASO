@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from webui import app as webui_app
-from webui import config, files, runs, sessions
+from webui import catalog, config, files, runs, sessions
 
 
 @pytest.fixture
@@ -100,6 +100,64 @@ def test_files_are_served_from_run_folders_only(client):
     # the old sandbox-wide listing and the parameter extractor are gone
     assert client.get("/api/files").status_code in (404, 405)
     assert client.post("/api/extract_params", json={"source": "N = 3"}).status_code in (404, 405)
+
+
+def test_stop_pressed_straight_after_send_still_stops_the_run():
+    """The flag that says a turn is over was cleared inside the turn's own task,
+    so a Stop in the same breath as Send was told nothing was running."""
+    import asyncio as aio
+    from webui import runs as runs_mod
+    run = runs_mod.Run.__new__(runs_mod.Run)
+    run.state = {"events": [], "mode": "accept"}
+    run._turn_ended = True
+    run.turn_task = None            # `running` is read from this
+    run.steers = []
+    run.push_snapshot = lambda: aio.sleep(0)
+    run.emit = lambda e: aio.sleep(0)
+
+    async def never_ending(*a, **k):
+        await aio.sleep(30)
+
+    run._turn = never_ending
+
+    async def main():
+        await runs_mod.Run.prompt(run, "do something")
+        # what stop() looks at, before the turn task has had any time to run
+        assert run._turn_ended is False
+        assert run.turn_task is not None and not run.turn_task.done()
+        run.turn_task.cancel()
+
+    aio.run(main())
+
+
+def test_an_xdmf_file_is_not_read_as_hdf5(tmp_path):
+    """h5py cannot read XDMF, and the failure was swallowed: the file was
+    labelled HDF5 with no contents, and the .h5 holding the numbers never shown."""
+    from webui import viz
+    p = config.SANDBOX_ROOT / "webui_abc123def" / "out.xdmf"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text('<Xdmf><Domain><Grid><Geometry><DataItem Format="HDF">mesh.h5:/points'
+                 '</DataItem></Geometry><Attribute><DataItem Format="HDF">field.h5:/u'
+                 '</DataItem></Attribute></Grid></Domain></Xdmf>')
+    try:
+        out = viz._hdf(p)
+        assert out["kind"] == "xdmf"
+        assert out["data_files"] == ["mesh.h5", "field.h5"]
+        assert "<Xdmf>" in out["text"]
+    finally:
+        p.unlink()
+
+
+def test_a_run_cannot_be_started_on_a_model_that_cannot_run(client, monkeypatch):
+    async def nothing_available():
+        return {"groups": [{"kind": "openrouter", "title": "t", "note": "", "models": [
+            {"id": "deepseek/deepseek-v4.1-flash", "label": "DeepSeek v4.1 Flash",
+             "kind": "openrouter", "available": False, "status": "no OpenRouter key"}]}],
+            "default": None}
+    monkeypatch.setattr(catalog, "models", nothing_available)
+    r = client.post("/api/sessions", json={"model": "deepseek/deepseek-v4.1-flash", "mode": "accept"})
+    assert r.status_code == 409 and "no OpenRouter key" in r.json()["detail"]
+    assert "not sent" in r.json()["detail"]
 
 
 def test_a_long_result_keeps_the_verdict_at_its_end():

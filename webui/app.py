@@ -179,7 +179,8 @@ async def get_solvers(refresh: bool = False):
     It used to run in the web server's Python, which is not the one openPASO
     uses (it lacked scikit-fem, so the page said 8 of 9 while runs had all nine),
     and inside the event loop, freezing every other request while it ran."""
-    return await catalog.solvers(refresh=refresh)
+    # the error of a failed check quotes the command, which names machine paths
+    return scrub(await catalog.solvers(refresh=refresh))
 
 
 @app.get("/api/mcp_servers")
@@ -348,7 +349,11 @@ async def list_sessions(all: bool = False):
     paths = sorted(config.SESSION_DIR.glob("*.json"),
                    key=lambda x: x.stat().st_mtime, reverse=True)
     for path in paths:
-        row = await asyncio.to_thread(_summary, path)
+        # a live run is read on the event loop: its events and its pending
+        # approvals change there, and reading them from a worker thread could
+        # catch a half-written list. Only records on disk are worth offloading.
+        row = (_summary(path) if runs.live(path.stem)
+               else await asyncio.to_thread(_summary, path))
         if not row:
             continue
         if not all and (not row["prompt"] or row["model_kind"] == "test"):
@@ -369,6 +374,14 @@ async def new_session(body: dict | None = None):
         raise HTTPException(400, f"unknown model: {model}")
     if mode not in config.MODES:
         raise HTTPException(400, f"unknown mode: {mode}")
+    if not body.get("test"):
+        # the same answer the picker gives, so a run cannot be started against a
+        # model server that is not running or a key that is not there
+        offered = {m["id"]: m for g in (await catalog.models())["groups"] for m in g["models"]}
+        info = offered.get(model)
+        if info and not info["available"]:
+            raise HTTPException(409, f"{info['label']} cannot run right now: {info['status']}. "
+                                     "Your prompt was not sent.")
     if runs.running_count() >= config.MAX_RUNNING:
         raise HTTPException(409, f"{config.MAX_RUNNING} runs are already working on this machine. "
                                  "Your prompt was not sent. Wait for one to finish or stop one, then press Run again.")

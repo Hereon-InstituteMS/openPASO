@@ -56,6 +56,13 @@ A model that cannot work is shown with the reason and cannot be picked.
   `uploads/` folder and tells the model where they are.
 * **Files** shows the run's own folder; **Download the run record** gives the
   prompt, model, every event and a checksum for every file.
+* Home directories are removed from everything the browser is shown, and from
+  text files it downloads. A binary file (mesh, HDF5, image, PDF) is handed over
+  exactly as the run wrote it, so a path can still be inside one.
+* A run starts in its own folder, but its shell and file tools can reach
+  anything your account can. Deleting a run removes its folder, not files it
+  wrote elsewhere. Run openPASO as a separate user or in a container if that
+  matters to you.
 * A turn ends as *Finished* only when an openPASO solver ran and openPASO
   verified its result. A solver result openPASO did not verify ends as *Ran,
   not verified*; a turn without a solver result says what happened instead

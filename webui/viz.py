@@ -183,8 +183,22 @@ def _vtk(p: Path) -> dict:
 
 
 def _hdf(p: Path) -> dict:
-    """Light h5/xdmf descriptor. Pair-detection: if a .xdmf exists next
-    to a .h5 we show the .xdmf and link to the .h5."""
+    """An HDF5 file's top-level contents, or — for the XDMF file that describes
+    one — the XML itself and the data files it points at. h5py cannot read XDMF,
+    so routing both here labelled an XDMF file as HDF5 with no contents and
+    never showed the .h5 beside it that holds the numbers."""
+    if p.suffix.lower() == ".xdmf":
+        import re
+        text = _read_text(p)
+        seen, refs = set(), []
+        for hit in re.findall(r"<DataItem[^>]*>\s*([^<\s]+)", text):
+            name = hit.split(":")[0].strip()
+            if name and name not in seen:
+                seen.add(name)
+                refs.append(name)
+        return {"kind": "xdmf", "name": p.name, "text": text, "syntax": "xml",
+                "data_files": refs,
+                "rel": str(p.relative_to(config.SANDBOX_ROOT))}
     try:
         import h5py  # optional
         with h5py.File(p, "r") as h:
