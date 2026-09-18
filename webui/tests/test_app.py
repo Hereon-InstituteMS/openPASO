@@ -579,6 +579,27 @@ def test_the_run_list_is_scrubbed_like_every_other_answer(client):
         client.delete(f"/api/sessions/{sid}")
 
 
+def test_the_log_holds_the_result_the_model_was_given():
+    """The correction was added to what the model read after the event had been
+    recorded, so rebuilding the conversation from the log dropped a message the
+    model had already acted on."""
+    import asyncio as aio
+    from langchain_core.tools import StructuredTool
+    from webui.runner import ApprovalGate, _wrap_tool
+    events = []
+
+    async def emitter(e):
+        events.append(e)
+
+    tool = StructuredTool.from_function(func=lambda x: f"ran {x}", name="t", description="d")
+    wrapped = _wrap_tool(tool, emitter=emitter, get_mode=lambda: "accept", gate=ApprovalGate(),
+                         take_steers=lambda: [{"id": "st_1", "text": "Use a finer mesh."}])
+    given = aio.run(wrapped.ainvoke({"x": "1"}))
+    recorded = next(e for e in events if e["type"] == "tool_result")["result"]
+    assert "Use a finer mesh." in given
+    assert "Use a finer mesh." in recorded, "the log must match what the model read"
+
+
 def test_a_correction_reaches_a_critic_while_it_works_and_the_main_agent_after():
     """A critic can run for many minutes. A correction queued until it finished
     arrived after the thing it was meant to prevent."""

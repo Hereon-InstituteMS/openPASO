@@ -254,7 +254,7 @@ class Run:
         except asyncio.CancelledError:
             outcome = "interrupted"
             raise
-        except Exception as exc:
+        except Exception as exc:   # noqa: BLE001 - reported to the person
             outcome = "failed"
             log.exception("turn failed for run %s", self.sid)
             leaf = _leaf(exc)
@@ -268,9 +268,18 @@ class Run:
             elif type(leaf).__name__ == "GraphRecursionError":
                 message = ("The run used all the steps it is allowed in one turn without finishing. "
                            "Send a follow-up asking for a smaller piece of the problem.")
-            await self.emit({"type": "error", "outcome": "failed", "message": message,
-                             "traceback": "".join(traceback.format_exception(exc))[-4000:]})
             await self.close_agent()
+            # closing the connection does not end a solver the run had started:
+            # it would have kept every core it was given while the page said the
+            # run had failed
+            ended = await asyncio.to_thread(proctree.end_run_processes, self.workdir, 3.0,
+                                            self.state.get("created_at"))
+            if ended:
+                message += (f" {ended} process{'es' if ended != 1 else ''} it had started "
+                            f"{'were' if ended != 1 else 'was'} ended.")
+            await self.emit({"type": "error", "outcome": "failed", "message": message,
+                             "traceback": "".join(traceback.format_exception(exc))[-4000:],
+                             "processes_ended": ended})
         finally:
             if outcome == "completed":
                 outcome = clean_outcome(self.state["events"][start:])

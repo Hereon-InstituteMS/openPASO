@@ -122,9 +122,11 @@ def _url_for(p: Path) -> str:
 # What a field picture is worth knowing about: the range behind it, how much is
 # saturated, which solver wrote it and when. The writer also records the machine
 # it ran on, which is not shown anywhere and has no business leaving it.
-_PROVENANCE_SHOWN = ("field", "unit", "true_min", "true_max", "clip_low", "clip_high",
-                     "saturated_fraction", "quantisation_step", "levels", "interpolation",
-                     "solver", "source", "notes", "written_at", "commit")
+# exactly what core/field_series.py writes, minus `host`: the machine's name is
+# shown nowhere and has no business leaving it
+_PROVENANCE_SHOWN = ("true_min", "true_max", "clip_percentile", "saturated_fraction",
+                     "quantisation_step", "levels", "interpolation", "solver", "source",
+                     "notes", "written_at", "commit", "sha256")
 
 
 def _field_series(p: Path, meta: dict) -> dict:

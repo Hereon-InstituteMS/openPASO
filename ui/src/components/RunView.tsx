@@ -23,6 +23,11 @@ function useField(runId: string, settle: number) {
   useEffect(() => { setField(null); setPictures([]) }, [runId])
   useEffect(() => {
     let dead = false
+    // One scan, a little after the steps stop arriving. It used to start a
+    // whole recursive walk of the run's folder on every tool result, so a long
+    // run spent more requests looking for a picture than doing the work, and
+    // several walks overlapped.
+    let timer = 0
     // each scan keeps its own record of what it has looked at. A shared one let
     // a scan that was replaced mark a file as seen, so the scan that followed
     // skipped it and a field the run really wrote vanished from the page.
@@ -49,12 +54,14 @@ function useField(runId: string, settle: number) {
         if (v?.kind === 'field_series') found = v as unknown as FieldSeries
       }
     }
-    walk('', 0).then(() => {
-      if (dead) return
-      if (found) setField(found)
-      setPictures(pics.sort((a, b) => b.mtime - a.mtime).slice(0, 6))
-    })
-    return () => { dead = true }
+    timer = window.setTimeout(() => {
+      walk('', 0).then(() => {
+        if (dead) return
+        if (found) setField(found)
+        setPictures(pics.sort((a, b) => b.mtime - a.mtime).slice(0, 6))
+      })
+    }, settle ? 2500 : 0)
+    return () => { dead = true; clearTimeout(timer) }
   }, [runId, settle])
   return { field, pictures }
 }

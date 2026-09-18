@@ -212,18 +212,21 @@ def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent", take_steer
                 result = (f"[The user ended this step after {secs:.0f} s. The processes it had "
                           f"started were ended, so it has no usable result.]"
                           + (f"\n\nOutput before it was ended:\n{str(result)[:4000]}" if str(result).strip() else ""))
-            from .outcome import shorten
-            await emitter({"type": "tool_result",
-                           "call_id": call_id, "tool": tool.name,
-                           "result": shorten(result)})
             # A correction the user sent while this step ran. A ReAct agent reads
             # the tool result next, so that is where it is handed over: at most
             # one step late, and never by interrupting a solver mid-calculation.
+            # It is added BEFORE the event is recorded, so the log holds what the
+            # model was actually given: rebuilding the conversation from the log
+            # after a stop used to drop a correction the model had already read.
             steers = take_steers() if take_steers else []   # main agent: takes them
             if steers:
                 note = "\n\n".join(x["text"] for x in steers)
                 result = (f"{result}\n\n[MESSAGE FROM THE USER, sent while this step was "
                           f"running. Read it and adjust what you do next:]\n{note}")
+            from .outcome import shorten
+            await emitter({"type": "tool_result",
+                           "call_id": call_id, "tool": tool.name,
+                           "result": shorten(result)})
             return result
 
         def _run(self, *args, **kwargs):
