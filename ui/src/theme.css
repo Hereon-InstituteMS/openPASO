@@ -1,0 +1,143 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/* openPASO design tokens.
+
+   Adopted wholesale from the ClickHouse system in VoltAgent/awesome-design-md,
+   by its numbers rather than by eye. openPASO's coral takes the exact role that
+   system gives its electric yellow: primary CTA, and the large stat numbers
+   that carry the credibility moment. taste-skill 11.C: a brand that already has
+   an accent keeps it.
+
+   Depth comes from the contrast between a near-black canvas and a barely
+   lighter card. There are no drop shadows anywhere in this system. */
+
+@theme {
+  /* Surfaces */
+  --color-canvas:   #0A0A0A;   /* near-pure black page floor */
+  --color-soft:     #121212;   /* section dividers, soft band tints */
+  --color-card:     #1A1A1A;   /* cards, code windows, product mockups */
+  --color-elevated: #242424;   /* nested cards inside cards */
+  --color-hairline: #2A2A2A;
+  --color-hairline-strong: #3A3A3A;
+
+  /* Accent. Coral does what the yellow does, and black rides on it. */
+  --color-coral:    #FF6B4A;
+  --color-coral-h:  #FF8A6E;
+  --color-coral-p:  #E85530;
+  --color-on-coral: #0A0A0A;
+
+  /* Text */
+  --color-ink:    #FFFFFF;
+  --color-ink2:   #E6E6E6;
+  --color-body:   #CCCCCC;
+  --color-muted:  #888888;
+  --color-faint:  #5A5A5A;
+
+  /* Semantic */
+  --color-ok:    #22C55E;
+  --color-bad:   #EF4444;
+  --color-info:  #3B82F6;
+
+  --font-sans: "Inter Variable", Inter, -apple-system, BlinkMacSystemFont,
+               "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  /* Radii: 8 buttons and inputs, 12 cards and code windows */
+  --radius-ctl:   8px;
+  --radius-panel: 12px;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@layer base {
+  :root { color-scheme: dark; }
+  html, body, #root { background: var(--color-canvas); min-height: 100dvh; }
+  body {
+    font-family: var(--font-sans);
+    font-optical-sizing: auto;
+    font-size: 16px;
+    line-height: 1.55;
+    color: var(--color-body);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3 { text-wrap: balance; }
+
+  /* Every number a solver produced is monospaced and tabular. */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums slashed-zero;
+  }
+
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-coral);
+    outline-offset: 2px;
+    border-radius: var(--radius-ctl);
+  }
+
+  ::selection { background: rgb(255 107 74 / 0.32); }
+
+  .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+  .scroll::-webkit-scrollbar-thumb {
+    background: var(--color-hairline-strong); border-radius: 999px;
+  }
+}
+
+@utility line      { border-color: var(--color-hairline); }
+@utility line-soft { border-color: var(--color-hairline); }
+@utility border-strong { border-color: var(--color-hairline-strong); }
+
+/* The display, measured off the live reference at 1920x1080: 96px, weight 600,
+   line-height 1.0. The rejected version ran 52px at weight 500, which is less
+   than half, and is what "the fonts are too small" meant. */
+@utility display {
+  font-size: 96px;
+  font-weight: 600;
+  line-height: 1.0;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+}
+
+/* The credibility moment. Always coral, always mono, always tabular. */
+@utility stat {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-size: 56px;
+  font-weight: 700;
+  line-height: 1.0;
+  letter-spacing: -1.5px;
+  color: var(--color-coral);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* A running state turns, slowly; under reduced motion the block above stops it. */
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+.spin-slow { animation: spin-slow 1.6s linear infinite; }
+@keyframes shake { 0%,100% { transform: translateX(0) } 25% { transform: translateX(-5px) } 75% { transform: translateX(5px) } }
+
+/* Markdown written by a model. Readable, never decorative. */
+.md > * + * { margin-top: 0.65em; }
+.md h1, .md h2, .md h3, .md h4 { color: var(--color-ink); font-weight: 600; line-height: 1.3; margin-top: 1em; }
+.md h1 { font-size: 1.25em; } .md h2 { font-size: 1.15em; } .md h3, .md h4 { font-size: 1.05em; }
+.md strong { color: var(--color-ink); font-weight: 600; }
+.md ul { list-style: disc; padding-left: 1.3em; } .md ol { list-style: decimal; padding-left: 1.4em; }
+.md li + li { margin-top: 0.25em; }
+.md a { color: var(--color-ink); text-decoration: underline; text-underline-offset: 3px; }
+.md code { font-family: var(--font-mono); font-size: 0.9em; background: var(--color-soft); padding: 0.1em 0.35em; border-radius: 4px; }
+.md pre { background: var(--color-soft); border: 1px solid var(--color-hairline); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; }
+.md table { border-collapse: collapse; font-size: 0.95em; }
+.md th, .md td { border: 1px solid var(--color-hairline); padding: 6px 10px; text-align: left; }
+.md th { color: var(--color-ink); font-weight: 600; background: var(--color-soft); }
+.md td { font-variant-numeric: tabular-nums; }
+.md blockquote { border-left: 2px solid var(--color-hairline-strong); padding-left: 12px; color: var(--color-muted); }

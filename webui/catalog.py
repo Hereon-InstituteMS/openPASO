@@ -1,0 +1,214 @@
+"""What can be selected, and whether it works: models and solvers.
+
+Both lists used to say less than the truth. The model picker mixed local models
+with no server running, Claude Code on the person's own login, and pay-per-token
+OpenRouter models in one flat list with no way to tell them apart or to see
+which would fail. The solver count came from the web server's own Python, which
+is not the Python openPASO runs in (it lacked scikit-fem, so the page said 8 of
+9 while the agent could use all nine), and the check ran inside the server's
+event loop, freezing every other request for six seconds.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+from . import config
+
+# ── models ───────────────────────────────────────────────────────────────
+_PRICES: dict[str, tuple[float, float]] = {}
+_PRICES_AT = 0.0
+
+
+async def openrouter_prices() -> dict[str, tuple[float, float]]:
+    """USD per million tokens (input, output), read from OpenRouter itself and
+    cached for an hour. Never invented: if the list cannot be fetched, no price
+    is shown."""
+    global _PRICES, _PRICES_AT
+    if _PRICES and time.time() - _PRICES_AT < 3600:
+        return _PRICES
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=6) as c:
+            r = await c.get(f"{config.OPENROUTER_URL}/models")
+            r.raise_for_status()
+            out = {}
+            for m in r.json().get("data", []):
+                pr = m.get("pricing") or {}
+                try:
+                    out[m["id"]] = (float(pr.get("prompt", 0)) * 1e6,
+                                    float(pr.get("completion", 0)) * 1e6)
+                except (TypeError, ValueError):
+                    continue
+            _PRICES, _PRICES_AT = out, time.time()
+    except Exception:
+        pass
+    return _PRICES
+
+
+def cost_of(model: str, tokens_in: int, tokens_out: int) -> float | None:
+    p = _PRICES.get(model)
+    if not p:
+        return None
+    return (tokens_in * p[0] + tokens_out * p[1]) / 1e6
+
+
+async def _local_up(port: int) -> bool:
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=1.5) as c:
+            r = await c.get(f"http://127.0.0.1:{port}/v1/models")
+            return r.status_code < 500
+    except Exception:
+        return False
+
+
+def _claude_model_setting() -> str | None:
+    try:
+        return json.loads((Path.home() / ".claude" / "settings.json").read_text()).get("model")
+    except Exception:
+        return None
+
+
+async def models() -> dict:
+    groups = []
+    prices = await openrouter_prices()
+
+    key, key_source = config.openrouter_key_source()
+    hosted = []
+    for mid, label in config.OPENROUTER_MODELS.items():
+        pr = prices.get(mid)
+        hosted.append({
+            "id": mid, "label": label, "kind": "openrouter",
+            "available": bool(key),
+            "status": ("ready" if key else "no OpenRouter key"),
+            "price_in": pr[0] if pr else None, "price_out": pr[1] if pr else None,
+        })
+    groups.append({
+        "kind": "openrouter", "title": "Hosted on OpenRouter",
+        "note": ("Billed per token to your OpenRouter key. Prompts and tool output go to "
+                 "OpenRouter and to the model's provider."
+                 + ("" if key else " No key found: set OPENROUTER_API_KEY, or put the line "
+                    "OPENROUTER_API_KEY=... in a .env file in the openPASO folder, then reload.")),
+        "key_source": key_source,
+        "models": hosted,
+    })
+
+    from . import claude_code
+    if claude_code.available():
+        setting = _claude_model_setting()
+        groups.append({
+            "kind": "claude-code", "title": "Claude Code",
+            "note": ("Runs the claude command on this machine with your own Claude login. "
+                     "Prompts and the files it reads go to Anthropic. It cannot stop to ask "
+                     "for approval, so it only runs without asking."),
+            "models": [{
+                "id": config.CLAUDE_CODE_ID, "label": "Claude Code",
+                "kind": "claude-code", "available": True,
+                "status": ("model from your Claude settings: " + setting) if setting
+                          else "model from your Claude settings",
+                "plan_mode": False,
+            }],
+        })
+
+    local = []
+    ups = await asyncio.gather(*[_local_up(m["port"]) for k, m in config.MODELS.items()
+                                 if k != "mock"])
+    for (mid, m), up in zip([(k, m) for k, m in config.MODELS.items() if k != "mock"], ups):
+        local.append({
+            "id": mid, "label": m["label"], "kind": "local", "available": up,
+            "status": (f"running on port {m['port']}" if up
+                       else f"not running: start its model server on port {m['port']}"),
+        })
+    groups.append({
+        "kind": "local", "title": "On this machine",
+        "note": "Served by a local model server. Prompts stay on this machine; web search still goes out.",
+        "models": local,
+    })
+
+    return {"groups": groups, "default": _default(groups)}
+
+
+def _default(groups) -> str | None:
+    for g in groups:
+        for m in g["models"]:
+            if m["available"]:
+                return m["id"]
+    return None
+
+
+def model_label(mid: str) -> tuple[str, str]:
+    """(label, kind) for a model id, without network access."""
+    if mid in config.OPENROUTER_MODELS:
+        return config.OPENROUTER_MODELS[mid], "openrouter"
+    if mid == config.CLAUDE_CODE_ID:
+        return "Claude Code", "claude-code"
+    if mid in config.MODELS:
+        if mid == "mock":
+            return "Test model (fake, runs no solver)", "test"
+        return config.MODELS[mid]["label"], "local"
+    return mid, "unknown"
+
+
+# ── solvers ──────────────────────────────────────────────────────────────
+_SOLVERS: dict | None = None
+_SOLVERS_AT = 0.0
+_SOLVER_LOCK = asyncio.Lock()
+
+_PROBE = r"""
+import json, sys
+from core import registry
+registry.load_all_backends()
+print("@@JSON@@" + json.dumps(registry.list_backends(), default=str))
+"""
+
+
+def _clean_version(v) -> str | None:
+    if not v:
+        return None
+    v = str(v).strip()
+    low = v.lower()
+    # FEBio reported "FATAL ERROR: Invalid command line option '--version'." as
+    # its version; a failed probe is not a version
+    if any(w in low for w in ("error", "failed", "invalid", "not found", "commands distilled")):
+        return None
+    return v[:60]
+
+
+def _version_in(message) -> str | None:
+    """The availability check often names the version it found ("scikit-fem
+    12.0.1 at ...") even when the separate version probe fails."""
+    m = re.search(r"(?<![\w.])v?(\d+\.\d+(?:\.\d+)?(?:[-.][A-Za-z0-9]+)?)(?![\w.])", str(message or ""))
+    return m.group(1) if m else None
+
+
+async def solvers(refresh: bool = False) -> dict:
+    global _SOLVERS, _SOLVERS_AT
+    async with _SOLVER_LOCK:
+        if _SOLVERS is not None and not refresh and time.time() - _SOLVERS_AT < 600:
+            return _SOLVERS
+        spec = config.MCP_SERVERS["openpaso"]
+        env = {**os.environ, **spec.get("env_extra", {})}
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                spec["command"], "-c", _PROBE, cwd=spec["cwd"], env=env,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+            text = out.decode("utf-8", "replace")
+            if "@@JSON@@" not in text:
+                raise RuntimeError((err.decode("utf-8", "replace").strip().splitlines() or ["no output"])[-1])
+            rows = json.loads(text.split("@@JSON@@", 1)[1].strip().splitlines()[0])
+            result = {"ok": True, "checked_at": time.time(), "solvers": [{
+                "name": r.get("display_name"), "status": r.get("status"),
+                "version": _clean_version(r.get("version")) or _version_in(r.get("message")),
+                "physics": r.get("physics_count"),
+            } for r in rows]}
+        except Exception as exc:
+            result = {"ok": False, "checked_at": time.time(),
+                      "error": f"{type(exc).__name__}: {exc}", "solvers": []}
+        _SOLVERS, _SOLVERS_AT = result, time.time()
+        return result
