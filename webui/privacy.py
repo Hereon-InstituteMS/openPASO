@@ -28,13 +28,27 @@ _ANY_HOME_RE = re.compile(_BOUNDARY + r"/(?:home|Users|media)/[A-Za-z0-9._-]+")
 _USER_RE = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(_USER) + r"(?![A-Za-z0-9_-])") if len(_USER) >= 3 else None
 
 
+# A long unbroken run of base64 is a field file's frames, not prose. The paths
+# above are guarded by their boundary, but a bare name needs the same care: in
+# "...+alexander/..." the characters around it are exactly the boundary this
+# pattern wants, so encoded data was being rewritten and decoded to a different
+# field than the solver produced.
+_ENCODED = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+
+
 def scrub_text(s: str) -> str:
     if not s:
         return s
     s = _HOME_RE.sub("~", s)
     s = _ANY_HOME_RE.sub(lambda m: "~" if m.group(0).startswith(("/home/", "/Users/")) else "/media/…", s)
     if _USER_RE is not None:
-        s = _USER_RE.sub("user", s)
+        out, last = [], 0
+        for m in _ENCODED.finditer(s):
+            out.append(_USER_RE.sub("user", s[last:m.start()]))
+            out.append(m.group(0))          # left exactly as the run wrote it
+            last = m.end()
+        out.append(_USER_RE.sub("user", s[last:]))
+        s = "".join(out)
     return s
 
 

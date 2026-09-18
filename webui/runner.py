@@ -379,6 +379,15 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
         "researcher": ("You are a research assistant. Look up "
                        "authoritative sources for the requested "
                        "information and summarise."),
+        # openPASO's own instructions require a coupled problem's participant
+        # scripts to be written by a sub-agent with this role, one ladder step
+        # each. Without it the brief arrived at a research assistant, which
+        # answered with a summary instead of writing the participant.
+        "worker": ("You do the work you are given, in full, in this run's own "
+                   "directory. Write the files the brief asks for, run what it "
+                   "says to run, and report what you actually did and what the "
+                   "output was. Do not summarise instead of doing it, and do "
+                   "not hand the work back unfinished without saying so."),
     }
 
     async def spawn_subagent_emitting(role: str, task: str,
@@ -430,7 +439,7 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
     spawn_wrapped = StructuredTool.from_function(
         coroutine=spawn_subagent_emitting,
         name="spawn_subagent",
-        description=("Spawn a sub-agent. role∈{critic, verifier, "
+        description=("Spawn a sub-agent. role∈{worker, critic, verifier, "
                      "researcher}. task = what it should do. context = "
                      "facts to pass in. Returns its final message."),
     )

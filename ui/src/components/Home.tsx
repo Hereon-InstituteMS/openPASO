@@ -23,7 +23,12 @@ function setPref(key: string, v: string) {
 
 export default function Home({ config, groups }: { config: AppConfig | null; groups: ModelGroup[] | null }) {
   const [model, setModel] = useState<string | null>(null)
-  const [mode, setMode] = useState<string>(pref('openpaso.mode') || 'accept')
+  // an older version stored "autonomous", which no longer exists: read back
+  // verbatim it would be shown as the choice and refused when the run starts
+  const [mode, setMode] = useState<string>(() => {
+    const kept = pref('openpaso.mode')
+    return kept === 'plan' || kept === 'accept' ? kept : 'accept'
+  })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')

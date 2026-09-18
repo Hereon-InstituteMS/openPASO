@@ -485,6 +485,27 @@ def test_scrubbing_leaves_a_field_file_s_numbers_alone():
     assert "~" in scrub_text(f"--prefix={Path.home()}/opt")
 
 
+def test_a_name_inside_encoded_data_is_left_alone():
+    """The frames of a field file are base64, and a user name occurs in one by
+    chance: "...+alexander/..." has exactly the characters the name pattern
+    treats as a boundary. Rewriting it decodes to a field nobody computed."""
+    import base64
+    import getpass
+    from webui.privacy import scrub_text
+    user = getpass.getuser()
+    if len(user) < 3:
+        return
+    frames = base64.b64encode(os.urandom(4000)).decode()
+    planted = frames[:200] + "+" + user + "/" + frames[200:]
+    doc = json.dumps({"kind": "field_series", "frames": planted,
+                      "provenance": {"source": f"/home/{user}/run/out.vtu"}})
+    out = scrub_text(doc)
+    assert json.loads(out)["frames"] == planted, "encoded data must come back unchanged"
+    assert f"/home/{user}" not in out and "~/run/out.vtu" in out
+    # and in prose the name is still removed
+    assert user not in scrub_text(f"the run was started by {user} at noon")
+
+
 def test_the_machine_name_is_not_handed_to_the_browser(tmp_path):
     from webui import viz
     p = config.SANDBOX_ROOT / "webui_abc123def" / "f.json"

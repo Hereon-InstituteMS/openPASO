@@ -1,11 +1,14 @@
-"""File → visualization payload.
+"""What a file a run wrote is, in a form the interface can show.
 
-Given a path inside the sandbox, return a JSON-friendly payload the
-frontend can render directly: Plotly figure JSON for tabular/CSV data,
-parsed mesh metadata for VTK files, raw text for input files, etc.
+One payload per kind, and each says only what this module actually read:
+a table of the first rows for CSV and TSV, the parsed object for small
+JSON, the description at the head of a field series with the URL of the
+file itself, the XML and the data files it names for XDMF, the top-level
+contents for HDF5, text for anything textual, and for a mesh or result
+file (VTK and friends) a descriptor with its format and URL — the
+interface says plainly that it cannot draw those and offers the download.
 
-Heavyweight VTK rendering happens in the browser via vtk.js; this
-module only inspects the file and tells the frontend how to wire it up.
+Nothing here parses a mesh, and nothing here builds a figure.
 """
 from __future__ import annotations
 

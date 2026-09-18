@@ -375,11 +375,17 @@ def _summary(path: Path) -> dict | None:
     if not path.exists():
         return None
     live = runs.live(sid)
+    mtime = None
     if live is not None:
         st, running, outcome = live.state, live.running, live.outcome()
         waiting = live.waiting
+        with contextlib.suppress(OSError):
+            mtime = path.stat().st_mtime
     else:
-        mtime = path.stat().st_mtime
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:      # another tab deleted the run while this was reading
+            return None
         hit = _SUMMARY_CACHE.get(sid)
         if hit and hit[0] == mtime:
             return hit[1]
@@ -395,7 +401,7 @@ def _summary(path: Path) -> dict | None:
     label, kind = catalog.model_label(st.get("model", ""))
     out = {
         "id": st.get("id"), "created_at": st.get("created_at"),
-        "updated_at": path.stat().st_mtime if path.exists() else st.get("created_at"),
+        "updated_at": mtime if mtime is not None else st.get("created_at"),
         "model": st.get("model"), "model_label": label, "model_kind": kind,
         "model_detail": st.get("model_detail") or st.get("claude_model"),
         "mode": st.get("mode"), "prompt": prompt, "outcome": outcome,
@@ -404,8 +410,8 @@ def _summary(path: Path) -> dict | None:
         "steps": sum(1 for e in events if e.get("type") == "tool_call_pending"),
         "cost_usd": st.get("cost_usd"),
     }
-    if live is None:
-        _SUMMARY_CACHE[sid] = (path.stat().st_mtime, out)
+    if live is None and mtime is not None:
+        _SUMMARY_CACHE[sid] = (mtime, out)
     return out
 
 
