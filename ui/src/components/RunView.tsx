@@ -100,7 +100,11 @@ export default function RunView({ id, config, groups }: {
     return undefined
   }, [events])
   const lastDone = useMemo(() => [...events].reverse().find((e) => e.type === 'done')?.t, [events])
-  const seconds = turnStart ? ((running ? now : (lastDone ?? now)) - turnStart) / 1000 : 0
+  // a run that is not working stops its clock at its last sign of life, not at
+  // the present moment: a run cut short two hours ago did not take two hours
+  const lastSign = useMemo(() => [...events].reverse().find((e) => e.t)?.t, [events])
+  const ended = lastDone ?? lastSign ?? now
+  const seconds = turnStart ? ((running ? now : ended) - turnStart) / 1000 : 0
   const turnsSoFar = events.filter((e) => e.type === 'turn_start').length
   const steps = events.filter((e) => e.type === 'tool_call_pending').length
   const prompt = events.find((e) => e.type === 'user_msg')?.text
@@ -120,7 +124,7 @@ export default function RunView({ id, config, groups }: {
   const liveCost = useMemo(() => { for (let i = events.length - 1; i >= 0; i--) if (events[i].cost_usd_total != null) return events[i].cost_usd_total; return null }, [events])
   const cost = money(liveCost ?? session?.cost_usd)
   const firstStart = events.find((e) => e.type === 'turn_start' || e.type === 'user_msg')?.t
-  const allSeconds = firstStart ? ((running ? now : (lastDone ?? now)) - firstStart) / 1000 : 0
+  const allSeconds = firstStart ? ((running ? now : ended) - firstStart) / 1000 : 0
   const kindWords = model?.kind === 'openrouter' ? 'hosted on OpenRouter' : model?.kind === 'claude-code' ? 'your Claude login'
     : model?.kind === 'local' ? 'on this machine' : ''
 
@@ -215,10 +219,19 @@ export default function RunView({ id, config, groups }: {
             <p className="mt-3 text-[14px] text-bad">Connection to the server lost. Reconnecting… The run keeps working on the server.</p>
           )}
           {outcome === 'unfinished' && (
-            <p className="mt-3 text-[14px] text-body">
-              This run stopped without recording an end, usually because the server was restarted while it worked.
-              Nothing is running for it now. You can send a follow-up to continue.
-            </p>
+            <div className="mt-3 flex items-center gap-3 flex-wrap">
+              <p className="text-[15px] text-body">
+                {events.some((e) => e.type === 'error' && e.outcome === 'unfinished')
+                  ? 'The server this run was working in was stopped, so the run stopped with it. Everything it had done is below.'
+                  : 'This run has no recorded end and nothing is running for it now, so the server it was working in was stopped at some point.'}
+              </p>
+              <button onClick={() => void followUp(
+                'Carry on from where you stopped. First say in one or two sentences what you had already done and what was left, then continue.', [])}
+                      disabled={busy}
+                      className="h-9 px-4 rounded-[8px] bg-coral text-on-coral text-[14px] font-semibold hover:bg-coral-h disabled:opacity-60">
+                Carry on
+              </button>
+            </div>
           )}
           {notice && (
             <p className="mt-3 text-[14px] text-ink2 flex gap-3" role="alert">
@@ -255,8 +268,11 @@ export default function RunView({ id, config, groups }: {
 
           <div className="flex items-center gap-3 mb-3">
             <span className="text-[13px] font-medium text-muted">What happened</span>
-            <span className="ml-auto text-[13px] text-muted">Reasoning</span>
-            <div role="radiogroup" aria-label="Reasoning" className="flex rounded-[8px] border line p-0.5">
+            <span className="ml-auto text-[13px] text-muted"
+                  title="Hidden keeps the steps, their output and the final reply, and puts away the model's own notes and the critic's long verdicts.">
+              The model's thinking
+            </span>
+            <div role="radiogroup" aria-label="The model's thinking" className="flex rounded-[8px] border line p-0.5">
               {(['shown', 'hidden'] as const).map((v) => (
                 <button key={v} role="radio" aria-checked={(v === 'shown') === reasoning}
                         onClick={() => { setReasoning(v === 'shown'); try { localStorage.setItem('openpaso.reasoning', v) } catch { /* */ } }}

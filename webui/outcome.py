@@ -23,6 +23,7 @@ SOLVER_TOOLS = frozenset({
 })
 
 RUNNING = "running"
+UNFINISHED = "unfinished"     # stopped without an end of its own (the server went down)
 COMPLETED = "completed"        # a solver ran and openPASO verified its result
 UNVERIFIED = "unverified"      # a solver ran, openPASO did not verify the result
 NO_RESULT = "no_result"        # ended cleanly, no solver result
@@ -121,13 +122,23 @@ _BROKEN = re.compile(r"^(?:Backend not found|Unknown problem|Unknown solver|Erro
 
 
 def classify_solver_result(raw: str) -> str:
-    """'verified', 'unverified' or 'failed' for one solver tool result."""
+    """'verified', 'unverified' or 'failed' for one solver tool result.
+
+    A report's own verdict decides it. Only when the top of the report says
+    nothing about verification is the inside consulted: a ladder of couplings
+    answers for the ladder, and "levels 1 and 2 verified, level 3 a null
+    exchange" is a ladder that is NOT verified, however good its first levels
+    were. Taking the best evidence anywhere in the tree would report exactly
+    that ladder as finished."""
     p = _payload(raw)
     if not p:
         text = raw or ""
         if _NOTE.search(text) and not _BROKEN.search(text):
             return "unverified"
         return "failed"
+    top = _verdict_of(p)
+    if top:
+        return top
     found: list[str] = []
     _walk(p, found)
     if "verified" in found:
@@ -189,16 +200,16 @@ def fold(events, *, live_default: str = RUNNING) -> str:
         return live_default
     turn = turns[-1]
     outcome = live_default
+    decided = None                      # an error says how the turn ended
     for e in turn:
         t = e.get("type")
         if t == "error":
-            outcome = e.get("outcome") or FAILED
+            decided = e.get("outcome") or FAILED
+            outcome = decided
         elif t == "done":
-            if outcome in (FAILED, INTERRUPTED):
+            if decided:
+                outcome = decided
                 continue
             stated = e.get("outcome")
-            if stated in (FAILED, INTERRUPTED):
-                outcome = stated
-            else:
-                outcome = clean_outcome(turn)
+            outcome = stated if stated in (FAILED, INTERRUPTED, UNFINISHED) else clean_outcome(turn)
     return outcome

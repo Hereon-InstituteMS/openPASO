@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import type { Solver } from '../types'
+import type { Solver, SolverCheck } from '../types'
 
 // From the descriptions openPASO's own server publishes for each backend.
 const WHAT: Record<string, string> = {
@@ -17,7 +17,7 @@ const WHAT: Record<string, string> = {
 
 /* What openPASO can use on this machine, checked by the same Python it runs in. */
 export default function SolversView() {
-  const [data, setData] = useState<{ ok: boolean; error?: string; checked_at: number; solvers: Solver[] } | null>(null)
+  const [data, setData] = useState<SolverCheck | null>(null)
   const [busy, setBusy] = useState(false)
   const load = (refresh = false) => {
     setBusy(true)
@@ -45,6 +45,17 @@ export default function SolversView() {
           </button>
         </div>
         {data && !data.ok && <p className="mt-4 text-[15px] text-bad">{data.error}</p>}
+        {data?.ok && data.mesher === false && (
+          <p className="mt-4 rounded-[8px] border border-coral/40 bg-coral/[0.05] px-5 py-3.5 text-[15px] leading-[1.55] text-ink2">
+            <span className="text-ink font-medium">No mesh generator in the environment openPASO runs in.</span>{' '}
+            Gmsh cannot be imported by <span className="num break-all">{data.python || "openPASO's interpreter"}</span>,
+            which is where <span className="num">generate_mesh</span> runs, so a run that needs a mesh built for it
+            will not get one — even though the solvers below are found, which they are through their own environments.
+            Either install it there (<span className="num">pip install gmsh</span>), point{' '}
+            <span className="num">OPENPASO_PYTHON</span> at an interpreter that has it, or attach a mesh file of your own
+            to the run.
+          </p>
+        )}
         {data?.ok && (
           <table className="mt-6 w-full text-left">
             <thead>

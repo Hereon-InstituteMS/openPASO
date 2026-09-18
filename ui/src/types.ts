@@ -100,6 +100,15 @@ export type AppConfig = {
   max_running: number
 }
 
+export type SolverCheck = {
+  ok: boolean
+  error?: string
+  checked_at: number
+  mesher?: boolean | null
+  python?: string
+  solvers: Solver[]
+}
+
 export type Solver = {
   name: string
   status: string

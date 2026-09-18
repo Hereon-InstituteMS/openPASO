@@ -1,4 +1,4 @@
-import type { AppConfig, FileRow, ModelGroup, RunRow, Session, Solver } from './types'
+import type { AppConfig, FileRow, ModelGroup, RunRow, Session, SolverCheck } from './types'
 
 async function j<T>(r: Response): Promise<T> {
   const body = await r.json().catch(() => ({}))
@@ -11,7 +11,7 @@ export const api = {
   models: () => fetch('/api/models').then((r) => j<{ groups: ModelGroup[]; default: string | null }>(r)),
   solvers: (refresh = false) =>
     fetch(`/api/solvers${refresh ? '?refresh=true' : ''}`)
-      .then((r) => j<{ ok: boolean; error?: string; checked_at: number; solvers: Solver[] }>(r)),
+      .then((r) => j<SolverCheck>(r)),
   runs: () => fetch('/api/sessions').then((r) => j<{ sessions: RunRow[]; running: number }>(r)),
   createRun: (model: string, mode: string) =>
     fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' },

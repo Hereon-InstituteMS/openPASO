@@ -44,6 +44,28 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("openpaso.webui")
 
 app = FastAPI(title="openPASO WebUI", version="0.1.0")
+
+
+@app.on_event("shutdown")
+async def _say_what_happened_to_live_runs():
+    """Write the truth into every run that was working when the server went down.
+
+    A run lives in this process. Stopping the server — a restart, a crash, a
+    machine going to sleep — ends it wherever it was, and the run's record used
+    to simply stop mid-sentence. The page then had to guess: "usually because
+    the server was restarted". It is not a guess from in here."""
+    for run in list(runs.RUNS.values()):
+        if not run.running:
+            continue
+        with contextlib.suppress(Exception):
+            run.state["events"].append({
+                "type": "error", "outcome": runs.UNFINISHED, "t": int(time.time() * 1000),
+                "message": ("The server this run was working in was stopped, so the run stopped "
+                            "with it. What it had already done is in the record below; send a "
+                            "follow-up to carry on.")})
+            run.state["events"].append({"type": "done", "outcome": runs.UNFINISHED,
+                                        "t": int(time.time() * 1000)})
+            run.save()
 # The interface is served by this app, so cross-origin access is only ever
 # wanted from the Vite dev server. A wildcard let any page a researcher had
 # open read this sandbox and, while POST /api/file existed, write to it.

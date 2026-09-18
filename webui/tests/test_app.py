@@ -509,6 +509,29 @@ def _coupling_result(**fields):
     return "[{'type': 'text', 'text': '" + json.dumps(fields) + "'}]"
 
 
+def test_a_ladder_answers_for_the_ladder_not_for_its_best_level():
+    """couple_levels will carry a verdict for the whole ladder. Levels 1 and 2
+    verified with level 3 a null exchange is the normal shape of a failed
+    ladder, and taking the best evidence in the payload would call it
+    finished — the claim this interface exists to refuse."""
+    from webui.outcome import classify_solver_result as c
+    bad = _coupling_result(all_levels_converged=False, trustworthy_result=False,
+                           verification="level 3 is not a coupled result: residual 0.0 at the first step",
+                           levels=[{"level": 1, "converged": True, "trustworthy_result": True},
+                                   {"level": 2, "converged": True, "trustworthy_result": True},
+                                   {"level": 3, "converged": True, "trustworthy_result": False,
+                                    "coupled_evidence": "null exchange"}])
+    good = _coupling_result(all_levels_converged=True, trustworthy_result=True,
+                            verification="verified",
+                            levels=[{"level": 1, "trustworthy_result": True},
+                                    {"level": 2, "trustworthy_result": True}])
+    assert c(bad) == "unverified"
+    assert c(good) == "verified"
+    # until the tool carries a verdict at all, a ladder stays "ran, not verified"
+    assert c(_coupling_result(all_levels_converged=True,
+                              levels=[{"level": 1, "converged": True}])) == "unverified"
+
+
 def test_the_legacy_coupled_solve_report_is_read_as_a_run_that_happened():
     """coupled_solve answers in prose, not JSON: a convergence report and
     openPASO's verification note. Read as JSON it became "failed", and a
@@ -557,11 +580,12 @@ def test_a_coupling_reports_its_verdict_in_its_own_shape():
     assert c(_coupling_result(converged=True, iterations=7, trustworthy_result=True)) == "verified"
     assert c(_coupling_result(converged=True, trustworthy_result=False)) == "unverified"
     assert c(_coupling_result(converged=False, error="coupling driver failed")) == "failed"
-    # couple_levels answers one level at a time
+    # a ladder answers for the ladder: one verified level inside it is not a
+    # verdict about the whole, and the top of that reply carries none today
     nested = _coupling_result(all_levels_converged=True, levels_run=2,
                               levels=[{"converged": True, "trustworthy_result": False},
                                       {"converged": True, "trustworthy_result": True}])
-    assert c(nested) == "verified"
+    assert c(nested) == "unverified"
     assert {"couple", "couple_levels", "couple_precice", "verify_mesh_independence"} <= SOLVER_TOOLS
 
 
@@ -648,6 +672,20 @@ def test_a_file_name_with_a_question_mark_still_downloads(client):
         assert r.status_code == 200 and "value 3" in r.text
     finally:
         odd.unlink()
+
+
+def test_a_run_cut_off_by_a_restart_says_so_rather_than_guessing():
+    """A run lives in the server process: stopping the server ends it wherever
+    it was. The record used to stop mid-sentence and the page had to guess."""
+    from webui.outcome import UNFINISHED, fold
+    ev = [{"type": "turn_start"}, {"type": "user_msg", "text": "flow past a cylinder"},
+          {"type": "tool_result", "tool": "run_bash", "result": "ok"},
+          {"type": "error", "outcome": UNFINISHED,
+           "message": "The server this run was working in was stopped..."},
+          {"type": "done", "outcome": UNFINISHED}]
+    assert fold(ev) == UNFINISHED
+    # and without that record, a log that simply stops is still not a result
+    assert fold(ev[:3]) == "running"
 
 
 def test_outcome_is_judged_per_turn_and_needs_a_verified_solver_result():

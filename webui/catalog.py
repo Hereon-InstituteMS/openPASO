@@ -177,11 +177,17 @@ _SOLVERS: dict | None = None
 _SOLVERS_AT = 0.0
 _SOLVER_LOCK = asyncio.Lock()
 
+# Also asked: whether the mesh generator is importable in the environment the
+# openPASO server itself runs in. A solver can be installed and reachable while
+# generate_mesh cannot work, and a person only found out after paying for a run.
 _PROBE = r"""
-import json, sys
+import json, importlib.util
 from core import registry
 registry.load_all_backends()
-print("@@JSON@@" + json.dumps(registry.list_backends(), default=str))
+print("@@JSON@@" + json.dumps({
+    "backends": registry.list_backends(),
+    "mesher": importlib.util.find_spec("gmsh") is not None,
+}, default=str))
 """
 
 
@@ -224,8 +230,14 @@ async def solvers(refresh: bool = False) -> dict:
             text = out.decode("utf-8", "replace")
             if "@@JSON@@" not in text:
                 raise RuntimeError((err.decode("utf-8", "replace").strip().splitlines() or ["no output"])[-1])
-            rows = json.loads(text.split("@@JSON@@", 1)[1].strip().splitlines()[0])
-            result = {"ok": True, "checked_at": time.time(), "solvers": [{
+            probe = json.loads(text.split("@@JSON@@", 1)[1].strip().splitlines()[0])
+            rows = probe["backends"] if isinstance(probe, dict) else probe
+            result = {"ok": True, "checked_at": time.time(),
+                      "mesher": bool(probe.get("mesher")) if isinstance(probe, dict) else None,
+                      # which interpreter answered: whether a mesh generator is
+                      # importable is a fact about this one, not about the machine
+                      "python": spec["command"],
+                      "solvers": [{
                 "name": r.get("display_name"), "status": r.get("status"),
                 "version": _clean_version(r.get("version")) or _version_in(r.get("message")),
                 "physics": r.get("physics_count"),

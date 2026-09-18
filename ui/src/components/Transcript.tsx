@@ -27,8 +27,40 @@ function readable(raw: string): string {
 
 /** 'verified', 'unverified' or 'failed' for one solver tool result, with the
     reason in plain words. Mirrors classify_solver_result in webui/outcome.py. */
+/** The verdict a report states about itself, if it states one. */
+function verdictOf(node: Record<string, unknown>): 'verified' | 'unverified' | 'failed' | null {
+  const status = String(node.status ?? '').toLowerCase()
+  const trusted = node.trustworthy_result
+  if (status) {
+    if (!status.startsWith('completed')) return 'failed'
+    return status === 'completed' && trusted === true ? 'verified' : 'unverified'
+  }
+  if (trusted === true) return 'verified'
+  if (trusted === false || 'converged' in node || 'all_levels_converged' in node) {
+    return node.error ? 'failed' : 'unverified'
+  }
+  return node.error ? 'failed' : null
+}
+
 function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'failed'; reason: string } {
   const t = readable(raw)
+  // The report's own top-level verdict decides, the same rule the server
+  // applies: a ladder of couplings answers for the ladder, and one verified
+  // level inside a ladder that failed does not make the ladder verified.
+  const start = t.indexOf('{')
+  if (start >= 0) {
+    try {
+      const doc = JSON.parse(t.slice(start, t.lastIndexOf('}') + 1)) as Record<string, unknown>
+      const top = verdictOf(doc)
+      if (top === 'verified') return { verdict: 'verified', reason: '' }
+      if (top) {
+        const why = typeof doc.verification === 'string' ? doc.verification
+          : typeof doc.error === 'string' ? doc.error : ''
+        return { verdict: top, reason: (why || (top === 'failed' ? 'the solver reported a failure'
+                 : 'ran, but openPASO did not verify the result')).slice(0, 160) }
+      }
+    } catch { /* not a whole JSON document; read it as text below */ }
+  }
   // Two shapes, the same two the server reads (webui/outcome.py): a run reports
   // "status" plus the verification gate's "trustworthy_result"; a coupling
   // reports no status at all, only the gate's verdict beside "converged".
@@ -61,7 +93,9 @@ function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'fai
 
 /** The failure an ordinary tool result reports, if it reports one. */
 export function troubleOf(raw: string): string | null {
-  const t = raw.replace(/\\n/g, '\n')
+  // read it as a person would first: the failure line was being shown as the
+  // Python repr the tool layer wraps it in
+  const t = readable(raw)
   const timeout = t.match(/\[timeout after [^\]]+\]/)
   if (timeout) return timeout[0].replace(/^\[|\]$/g, '')
   if (/Error executing tool|validation error for/i.test(t)) {
@@ -297,6 +331,15 @@ function build(events: Ev[], live: boolean): Entry[] {
     }
   }
   if (live && stream.trim()) out.push({ kind: 'thought', text: stream.trim(), final: false })
+  if (!live) {
+    // the run is not working, so nothing in it is. A run cut off by the server
+    // going down has no closing event, and its steps used to keep a running
+    // clock for ever, which said work was happening when none was.
+    for (const c of calls.values()) {
+      if (c.state === 'running') { c.state = 'abandoned'; c.detail = c.detail || 'the run stopped here; no result from this step' }
+      if (c.state === 'waiting') { c.state = 'abandoned'; c.detail = 'never ran' }
+    }
+  }
   return out
 }
 
@@ -539,7 +582,7 @@ export default function Transcript({ events, live, showReasoning, onDecide, onEn
                 <div className="text-[13px] font-semibold text-ink2">
                   {roleName(e.role)} <span className="font-normal text-muted">· the same model, {ROLE[e.role] || 'given a separate task'}; not an independent check</span>
                 </div>
-                <Fold text={e.task} lines={3} className="mt-1 text-[15px] leading-[1.55] text-body" />
+                {showReasoning && <Fold text={e.task} lines={3} className="mt-1 text-[15px] leading-[1.55] text-body" />}
               </li>
             )
           case 'verdict':
@@ -548,7 +591,10 @@ export default function Transcript({ events, live, showReasoning, onDecide, onEn
                 <div className={`text-[13px] font-semibold ${e.reached ? 'text-ink2' : 'text-bad'}`}>
                   {e.reached ? `What the ${e.role} concluded` : `The ${e.role} stopped without a conclusion`}
                 </div>
-                {e.text && <Fold text={e.text} lines={e.reached ? 8 : 2} className="mt-1 text-[15px] leading-[1.55] text-ink2" />}
+                {e.text && (
+                  <Fold text={e.text} lines={showReasoning ? (e.reached ? 8 : 2) : 1}
+                        className="mt-1 text-[15px] leading-[1.55] text-ink2" />
+                )}
               </li>
             )
           case 'steer':
