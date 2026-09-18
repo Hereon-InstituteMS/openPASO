@@ -58,11 +58,21 @@ function Chart({ header, rows }: { header: string[]; rows: string[][] }) {
          aria-label={`${drawn.map((d) => d.name).join(', ')} against ${header[0]}`}>
       <line x1={P} y1={H - P} x2={W - P} y2={H - P} stroke="rgb(100 116 139 / .28)" />
       <line x1={P} y1={P} x2={P} y2={H - P} stroke="rgb(100 116 139 / .28)" />
-      {drawn.map(({ col }, i) => (
-        <polyline key={i} fill="none" strokeWidth="1.5" stroke={stroke[i % stroke.length]}
-          points={col.map((v, j) => (Number.isFinite(v) ? `${sx(series.xs[j])},${sy(v)}` : ''))
-                     .filter(Boolean).join(' ')} />
-      ))}
+      {drawn.map(({ col }, i) => {
+        // one line per run of real values: dropping the gaps and joining what
+        // is left draws a straight line across missing data, which reads as a
+        // measurement between two points that the solver never wrote
+        const runs: string[][] = []
+        col.forEach((v, j) => {
+          if (!Number.isFinite(v)) { runs.push([]); return }
+          if (!runs.length) runs.push([])
+          runs[runs.length - 1].push(`${sx(series.xs[j])},${sy(v)}`)
+        })
+        return runs.filter((r) => r.length > 1).map((points, k) => (
+          <polyline key={`${i}-${k}`} fill="none" strokeWidth="1.5"
+                    stroke={stroke[i % stroke.length]} points={points.join(' ')} />
+        ))
+      })}
       <text x={P} y={H - 10} fill="#94A3B8" fontSize="11" fontFamily="monospace">
         {header[0]}
       </text>

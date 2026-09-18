@@ -431,8 +431,12 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
                        "openPASO's verification gate holds no review for this setup.]")
         except Exception as e:
             res = f"[sub-agent error: {type(e).__name__}: {e}]"
+        from .outcome import shorten
+        # shorten, not slice: a verdict cut without a mark reads as a verdict
+        # that ended there, and someone concludes the critic never raised what
+        # it raised in the part that was dropped
         await emitter({"type": "subagent_returned",
-                       "sa_id": sa_id, "result": str(res)[:6000]})
+                       "sa_id": sa_id, "result": shorten(str(res), 6000)})
         return res
 
     from langchain_core.tools import StructuredTool

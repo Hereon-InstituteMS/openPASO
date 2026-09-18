@@ -192,6 +192,29 @@ def test_an_xdmf_file_is_not_read_as_hdf5(tmp_path):
         p.unlink()
 
 
+def test_a_guess_at_a_path_is_not_exported_as_a_setting(monkeypatch, tmp_path):
+    """An exported FOURC_BINARY is read by the backend as an explicit override
+    and stops its own search, so guessing a path that does not exist told a
+    person with 4C installed elsewhere that they do not have 4C."""
+    monkeypatch.delenv("FOURC_BINARY", raising=False)
+    monkeypatch.delenv("FOURC_ROOT", raising=False)
+    monkeypatch.setattr(config.Path, "home", staticmethod(lambda: tmp_path))
+    assert config._fourc_env() == {}, "nothing is claimed about a 4C that is not there"
+    (tmp_path / "4C" / "build").mkdir(parents=True)
+    (tmp_path / "4C" / "build" / "4C").write_text("#!/bin/sh\n")
+    found = config._fourc_env()
+    assert found["FOURC_BINARY"].endswith("4C/build/4C")
+    monkeypatch.setenv("FOURC_BINARY", "/opt/4C/bin/4C")
+    assert config._fourc_env()["FOURC_BINARY"] == "/opt/4C/bin/4C", "what is set by hand is kept"
+
+
+def test_a_path_in_a_key_is_scrubbed_like_one_in_a_value():
+    from webui.privacy import scrub
+    out = scrub({f"{Path.home()}/private/run.json": {"note": f"{Path.home()}/x"}})
+    text = json.dumps(out)
+    assert str(Path.home()) not in text and "~/private/run.json" in text
+
+
 def test_a_run_cannot_be_started_on_a_model_that_cannot_run(client, monkeypatch):
     async def nothing_available():
         return {"groups": [{"kind": "openrouter", "title": "t", "note": "", "models": [
@@ -483,6 +506,23 @@ def test_scrubbing_leaves_a_field_file_s_numbers_alone():
     assert str(Path.home()) not in out and "~/run/out.vtu" in out
     # and a path written where a path really occurs is still found
     assert "~" in scrub_text(f"--prefix={Path.home()}/opt")
+
+
+def test_encoded_data_survives_every_substitution_not_only_the_newest():
+    """A path pattern keeps out of the middle of base64 by requiring a boundary,
+    but "=" must stay a boundary so that --prefix=/home/... is caught — and "="
+    is base64's padding. Concatenated frames therefore contained "=/home/abc"
+    and were rewritten. The split now covers every substitution, not the one
+    fixed last."""
+    import base64
+    from webui.privacy import scrub_text
+    frames = (base64.b64encode(os.urandom(3000)).decode() + "="
+              + "/home/abc" + base64.b64encode(os.urandom(3000)).decode())
+    doc = json.dumps({"kind": "field_series", "frames": frames,
+                      "note": f"wrote {Path.home()}/run/out.vtu"})
+    out = scrub_text(doc)
+    assert json.loads(out)["frames"] == frames, "the frames must come back byte for byte"
+    assert str(Path.home()) not in out and "~/run/out.vtu" in out
 
 
 def test_a_name_inside_encoded_data_is_left_alone():

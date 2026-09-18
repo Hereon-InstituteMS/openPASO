@@ -239,6 +239,13 @@ async def _consume(proc, emit, state, errors: list[str] | None = None) -> str:
         # recorded as a turn that merely produced no result.
         said = "\n".join(errors[-20:]).strip() if errors else (str(final)[-400:] if final else "")
         raise RuntimeError(f"Claude Code exited {proc.returncode}: {said[:400]}")
+    if not str(final).strip():
+        # exit 0 and nothing said is not a turn that produced no result: it is a
+        # turn that produced nothing at all, and reporting it as the former
+        # would put "the reply above" under an empty space
+        said = "\n".join(errors[-5:]).strip() if errors else ""
+        raise RuntimeError("Claude Code finished without saying anything"
+                           + (f". It printed: {said[:300]}" if said else "."))
     return final
 
 

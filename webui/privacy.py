@@ -36,20 +36,32 @@ _USER_RE = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(_USER) + r"(?![A-Za-z0-
 _ENCODED = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
 
 
+def _scrub_prose(t: str) -> str:
+    """Every substitution, on a span that is not encoded data."""
+    t = _HOME_RE.sub("~", t)
+    t = _ANY_HOME_RE.sub(lambda m: "~" if m.group(0).startswith(("/home/", "/Users/")) else "/media/…", t)
+    if _USER_RE is not None:
+        t = _USER_RE.sub("user", t)
+    return t
+
+
 def scrub_text(s: str) -> str:
+    """Scrub the prose and leave encoded data exactly as the run wrote it.
+
+    The split comes first and covers all three substitutions, rather than
+    guarding whichever one was fixed last. The boundary in the patterns above
+    is not enough on its own: "=" has to stay a boundary so that
+    --prefix=/home/... is caught, and "=" is also base64's padding, so
+    "...=/home/abc..." inside concatenated frames matched and was rewritten."""
     if not s:
         return s
-    s = _HOME_RE.sub("~", s)
-    s = _ANY_HOME_RE.sub(lambda m: "~" if m.group(0).startswith(("/home/", "/Users/")) else "/media/…", s)
-    if _USER_RE is not None:
-        out, last = [], 0
-        for m in _ENCODED.finditer(s):
-            out.append(_USER_RE.sub("user", s[last:m.start()]))
-            out.append(m.group(0))          # left exactly as the run wrote it
-            last = m.end()
-        out.append(_USER_RE.sub("user", s[last:]))
-        s = "".join(out)
-    return s
+    out, last = [], 0
+    for m in _ENCODED.finditer(s):
+        out.append(_scrub_prose(s[last:m.start()]))
+        out.append(m.group(0))              # untouched
+        last = m.end()
+    out.append(_scrub_prose(s[last:]))
+    return "".join(out)
 
 
 def scrub(obj):
@@ -58,5 +70,7 @@ def scrub(obj):
     if isinstance(obj, list):
         return [scrub(x) for x in obj]
     if isinstance(obj, dict):
-        return {k: scrub(v) for k, v in obj.items()}
+        # keys as well: a run's own JSON can be keyed by a path it wrote
+        return {(scrub_text(k) if isinstance(k, str) else k): scrub(v)
+                for k, v in obj.items()}
     return obj

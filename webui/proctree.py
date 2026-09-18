@@ -104,9 +104,12 @@ def run_processes(workdir: Path, since: float | None = None,
     def after(p: int, slack: float) -> bool:
         return since is None or (_started_at(p) or 0) >= since - slack
 
+    # ending ONE step takes no slack on either seed: a second of grace reaches
+    # back into the step that ran before it, which is not the one being ended
+    slack = 0.0 if since_covers_marker else 1.0
     seeds = {p for p in pids
-             if (_environ_has(p, marker) and (after(p, 0.0) if since_covers_marker else True))
-             or (_cwd_under(p, root) and after(p, 1.0))}
+             if (_environ_has(p, marker) and (after(p, slack) if since_covers_marker else True))
+             or (_cwd_under(p, root) and after(p, slack))}
     # the web server itself may have been started from inside a run folder;
     # never include it or its ancestors
     seeds.discard(me)

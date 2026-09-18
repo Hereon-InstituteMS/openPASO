@@ -173,8 +173,11 @@ async def get_manifest(sid: str):
     """Everything needed to check or reproduce one run, in one file.
 
     A result that cannot be traced back to what produced it is not a result. The
-    interface shows a summary; this is the record behind it, with the full
-    untruncated event log and a hash for every artefact the run wrote."""
+    interface shows a summary; this is the record behind it: every event of the
+    run in order, and a hash for every artefact it wrote. A tool result longer
+    than 8000 characters was shortened when it was recorded, keeping both ends
+    and saying in the middle how much was left out — so what is here is what the
+    model was given, and where something is missing it says so."""
     # a live run's record on disk is a checkpoint, not the present: turn
     # boundaries and endings are written at once and the rest every tenth event,
     # so a download during a run would miss the newest steps it promises
@@ -303,7 +306,8 @@ _CARRY = 4096                          # so a path split across two pieces still
 
 def _is_text(p: Path) -> bool:
     try:
-        head = p.open("rb").read(_SNIFF_BYTES)
+        with p.open("rb") as fh:
+            head = fh.read(_SNIFF_BYTES)
     except OSError:
         return False
     if b"\0" in head:
@@ -458,6 +462,11 @@ async def new_session(body: dict | None = None):
         # model server that is not running or a key that is not there
         offered = {m["id"]: m for g in (await catalog.models())["groups"] for m in g["models"]}
         info = offered.get(model)
+        if info is None and model == config.CLAUDE_CODE_ID:
+            # not in the catalogue at all: Claude Code is not installed here, so
+            # the run would be created and fail at its first step instead
+            raise HTTPException(409, "Claude Code is not installed on this machine. "
+                                     "Your prompt was not sent.")
         if info and not info["available"]:
             raise HTTPException(409, f"{info['label']} cannot run right now: {info['status']}. "
                                      "Your prompt was not sent.")

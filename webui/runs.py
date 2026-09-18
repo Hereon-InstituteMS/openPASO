@@ -25,7 +25,8 @@ from pathlib import Path
 from fastapi import WebSocket
 
 from . import config, proctree, sessions
-from .outcome import RUNNING, clean_outcome, fold
+from .outcome import (RUNNING, SOLVER_TOOLS, classify_solver_result,
+                      clean_outcome, fold)
 
 log = logging.getLogger("openpaso.webui.runs")
 
@@ -104,6 +105,16 @@ class Run:
     async def emit(self, event: dict):
         event = dict(event)
         event.setdefault("t", int(time.time() * 1000))
+        # The verdict travels with the event instead of being worked out again
+        # on the other side. Two readings of the same result, one here and one
+        # in the browser, will differ eventually — and they did: the page said
+        # a result was verified while this rule called it unverified. What the
+        # server decided is what the page shows; the page keeps its own reading
+        # only for records written before this stamp existed.
+        if event.get("type") == "tool_result" and event.get("tool") in SOLVER_TOOLS:
+            event["verdict"] = classify_solver_result(event.get("result") or "")
+        if event.get("type") == "done" and event.get("outcome"):
+            event["by"] = "server"
         if event.get("type") != "status":
             self._seq += 1
             event["seq"] = self._seq
@@ -258,10 +269,12 @@ class Run:
                     else:
                         prior = prior[:-1]
                     history = _history(prior)
-                    self.thread_seeded = True
                 await stream_turn(agent=agent, user_text=text, emitter=self.emit,
                                   thread_id=f"{self.sid}:{self.thread}",
                                   history=history)
+                # only now: a turn that failed before the model saw the history
+                # would otherwise leave the next follow-up with no past at all
+                self.thread_seeded = True
         except asyncio.CancelledError:
             outcome = "interrupted"
             raise
@@ -289,7 +302,7 @@ class Run:
                 message += (f" {ended} process{'es' if ended != 1 else ''} it had started "
                             f"{'were' if ended != 1 else 'was'} ended.")
             await self.emit({"type": "error", "outcome": "failed", "message": message,
-                             "traceback": "".join(traceback.format_exception(exc))[-4000:],
+                             "traceback": _tail(traceback.format_exception(exc), 4000),
                              "processes_ended": ended})
         finally:
             if outcome == "completed":
@@ -425,6 +438,16 @@ class Run:
         return ended
 
 
+def _tail(lines, limit: int) -> str:
+    """The end of a traceback, saying so when the start was dropped: the frames
+    that matter are the last ones, and a cut with no mark reads as the whole."""
+    text = "".join(lines)
+    if len(text) <= limit:
+        return text
+    return (f"[… {len(text) - limit} characters of earlier frames left out …]\n"
+            + text[-limit:])
+
+
 def _leaf(exc: BaseException) -> BaseException:
     """The first real exception inside nested exception groups."""
     while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
@@ -438,6 +461,14 @@ def _workdir(sid: str) -> Path:
 
 
 _HISTORY_LIMIT = 60_000   # characters of earlier work handed back to the model
+
+
+def _clip(text: str, limit: int) -> str:
+    """Shorten, and say so. A conclusion cut mid-sentence at two thousand
+    characters — "…the mesh is adequate for" — reads as approval to whoever is
+    handed it next."""
+    text = str(text)
+    return text if len(text) <= limit else text[:limit] + f" […{len(text) - limit} more characters]"
 
 
 def _history(events: list[dict]) -> list[tuple[str, str]]:
@@ -477,11 +508,11 @@ def _history(events: list[dict]) -> list[tuple[str, str]]:
                     got = got[:1200] + "\n … \n" + got[-1200:]
             work.append(f"[{who}step] {call.get('tool', e.get('tool', '?'))} {args}\n→ {got}")
         elif t == "subagent_returned" and (e.get("result") or "").strip():
-            work.append(f"[critic/helper conclusion] {e['result'][:2000]}")
+            work.append("[critic/helper conclusion] " + _clip(e["result"], 2000))
         elif t == "error" and e.get("outcome") == "interrupted":
             work.append("[the user stopped the run here; a step that was running has no result]")
         elif t == "error":
-            work.append(f"[the turn failed: {str(e.get('message'))[:500]}]")
+            work.append(f"[the turn failed: {_clip(str(e.get('message')), 500)}]")
     out: list[tuple[str, str]] = []
     for prompt, work in turns:
         out.append(("user", prompt))

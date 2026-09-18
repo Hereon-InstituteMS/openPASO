@@ -81,6 +81,9 @@ def _verdict_of(node: dict) -> str | None:
     verification gate, ``trustworthy_result``. A coupling reports no status at
     all: it carries the gate's ``trustworthy_result`` beside ``converged``.
     Reading only the first shape called every verified coupling a failure."""
+    # Only an exact "completed" with the gate's flag is a verified result, so a
+    # status the product might add later (say "completed_unphysical") reads as
+    # unverified rather than as success. The prefix decides failure only.
     status = str(node.get("status", "")).lower()
     trusted = node.get("trustworthy_result")
     if status:

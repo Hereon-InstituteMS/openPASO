@@ -74,7 +74,9 @@ def procs_in(sid):
     for p in os.listdir("/proc"):
         if not p.isdigit(): continue
         try:
-            if os.readlink(f"/proc/{p}/cwd").startswith(root): n.append(int(p))
+            cwd = os.readlink(f"/proc/{p}/cwd")
+            # a separator, not a prefix: "…/webui_b/work" starts with "…/webui_b/wor"
+            if cwd == root or cwd.startswith(root + os.sep): n.append(int(p))
         except OSError: pass
     return n
 

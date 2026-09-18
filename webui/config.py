@@ -74,6 +74,24 @@ def openrouter_key() -> str | None:
 
 # MCP servers selectable in the UI. The openPASO server is the main one;
 # additional rows are placeholders for future plug-ins.
+def _fourc_env() -> dict[str, str]:
+    """Where 4C is, when it is where this machine says it is.
+
+    An exported FOURC_BINARY is read by the backend as an explicit override and
+    stops its own search, so exporting a guess at a path that does not exist
+    told a person with 4C elsewhere that they do not have 4C. What is set by
+    hand is passed on; a guess is offered only when it is actually there."""
+    out: dict[str, str] = {}
+    for name, guess in (("FOURC_ROOT", Path.home() / "4C"),
+                        ("FOURC_BINARY", Path.home() / "4C/build/4C")):
+        given = os.environ.get(name)
+        if given:
+            out[name] = given
+        elif guess.exists():
+            out[name] = str(guess)
+    return out
+
+
 def solver_library_path() -> str:
     """Where the solvers' shared libraries are, composed the way the agent does
     it: every required directory, then whatever was inherited, in order, with
@@ -114,10 +132,7 @@ MCP_SERVERS = {
         "cwd": str(REPO / "src"),
         "env_extra": {
             "PYTHONPATH": str(REPO / "src"),
-            "FOURC_ROOT": os.environ.get(
-                "FOURC_ROOT", str(Path.home() / "4C")),
-            "FOURC_BINARY": os.environ.get(
-                "FOURC_BINARY", str(Path.home() / "4C/build/4C")),
+            **_fourc_env(),
             "LD_LIBRARY_PATH": solver_library_path(),
         },
         "default_on": True,

@@ -17,8 +17,13 @@ const SHELL_TOOLS = new Set(['run_bash', 'Bash'])
 
 /** The text inside MCP's content blocks, escapes turned back into characters. */
 function readable(raw: string): string {
+  // MCP hands a result over as a Python repr of text blocks, whose escapes are
+  // the wrapper's. Undo those only where the wrapper really is: a result that
+  // is plain text keeps its backslashes, so a command or a formula containing
+  // \nabla is not turned into a line break and lost.
   const blocks = [...raw.matchAll(/'text':\s*(['"])([\s\S]*?)\1\s*(?:,\s*'|})/g)].map((m) => m[2])
-  const t = (blocks.length ? blocks.join('\n') : raw)
+  if (!blocks.length) return tidy(raw)
+  const t = blocks.join('\n')
     .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
     .replace(/\\n/g, '\n').replace(/\\t/g, '  ').replace(/\\'/g, "'").replace(/\\"/g, '"')
     .replace(/\\\\/g, '\\')
@@ -56,8 +61,8 @@ function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'fai
       if (top) {
         const why = typeof doc.verification === 'string' ? doc.verification
           : typeof doc.error === 'string' ? doc.error : ''
-        return { verdict: top, reason: (why || (top === 'failed' ? 'the solver reported a failure'
-                 : 'ran, but openPASO did not verify the result')).slice(0, 160) }
+        return { verdict: top, reason: cut(why || (top === 'failed' ? 'the solver reported a failure'
+                 : 'ran, but openPASO did not verify the result'), 160) }
       }
     } catch { /* not a whole JSON document; read it as text below */ }
   }
@@ -90,8 +95,14 @@ function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'fai
   // what broke, not the banner above it: a solver that ended in a traceback
   // was being reported as "Traceback (most recent call last):"
   const line = troubleOf(t) || (t.split('\n').map((l) => l.trim()).find(Boolean) || 'no result')
-  return { verdict: 'failed', reason: line.slice(0, 160) }
+  return { verdict: 'failed', reason: cut(line, 160) }
 }
+
+/** A line shortened for the one-line summary says it was shortened: a cut with
+    no mark reads as the whole sentence, and someone answers from what is not
+    there. The full output is always one click away under the step. */
+const cut = (text: string, n: number) => (text.length > n ? text.slice(0, n) + '…' : text)
+
 
 /** The failure an ordinary tool result reports, if it reports one. */
 export function troubleOf(raw: string): string | null {
@@ -102,15 +113,15 @@ export function troubleOf(raw: string): string | null {
   if (timeout) return timeout[0].replace(/^\[|\]$/g, '')
   if (/Error executing tool|validation error for/i.test(t)) {
     const line = t.split('\n').find((l) => /error/i.test(l)) || 'the tool refused its input'
-    return line.trim().slice(0, 140)
+    return cut(line.trim(), 140)
   }
   const exc = t.match(/^\s*([A-Za-z_][\w.]*(?:Error|Exception|Fault)): ?(.*)$/m)
-  if (exc) return `${exc[1]}: ${exc[2]}`.trim().slice(0, 140)
+  if (exc) return cut(`${exc[1]}: ${exc[2]}`.trim(), 140)
   if (/Traceback \(most recent call last\)/.test(t)) {
     // the line that says what went wrong is the LAST one, not the banner
     const raised = [...t.matchAll(/^\s*([A-Za-z_][\w.]*(?:Error|Exception|Fault|Warning)): ?(.*)$/gm)]
     const last = raised[raised.length - 1]
-    return last ? `${last[1]}: ${last[2]}`.trim().slice(0, 160) : 'the command ended in a traceback'
+    return last ? cut(`${last[1]}: ${last[2]}`.trim(), 160) : 'the command ended in a traceback'
   }
   const nonzero = t.match(/non-zero exit status (\d+)|exit(?: code|ed with)? (\d+)/i)
   if (nonzero && (nonzero[1] || nonzero[2]) !== '0') return `exit code ${nonzero[1] || nonzero[2]}`
@@ -184,7 +195,8 @@ type Call = {
   /** a review of the work, filed by the one who did the work */
   selfReview?: boolean
 }
-type Tally = { tools: number; shell: number; verified: boolean; unverified: boolean; solverFailed: string | null }
+type Tally = { tools: number; shell: number; verified: boolean; unverified: boolean
+               solverFailed: string | null; said: boolean }
 type Entry =
   | { kind: 'turn' }
   | { kind: 'you'; text: string; files: string[] }
@@ -197,7 +209,16 @@ type Entry =
   | { kind: 'mode'; mode: string }
   | { kind: 'end'; outcome: string; tally: Tally; message?: string; traceback?: string; seconds?: number; left?: number }
 
-const tally0 = (): Tally => ({ tools: 0, shell: 0, verified: false, unverified: false, solverFailed: null })
+/** Did a sub-agent actually reach a conclusion, or only stop? */
+function concluded(text: string): boolean {
+  const t = (text || '').trim()
+  if (!t) return false
+  return !/^\[sub-agent error|need more steps/i.test(t)
+      && !/returned no text|returned nothing/i.test(t.slice(0, 120))
+}
+
+const tally0 = (): Tally => ({ tools: 0, shell: 0, verified: false, unverified: false,
+                               solverFailed: null, said: false })
 
 function build(events: Ev[], live: boolean): Entry[] {
   const out: Entry[] = []
@@ -231,7 +252,7 @@ function build(events: Ev[], live: boolean): Entry[] {
       case 'agent_msg': {
         stream = ''
         const t = (e.text || '').trim()
-        if (t) out.push({ kind: 'thought', text: t, final: false })
+        if (t) { out.push({ kind: 'thought', text: t, final: false }); tally.said = true }
         break
       }
       case 'tool_call_pending': {
@@ -267,7 +288,12 @@ function build(events: Ev[], live: boolean): Entry[] {
         tally.tools += 1
         if (SHELL_TOOLS.has(c.tool)) tally.shell += 1
         if (SOLVER_TOOLS.has(c.tool)) {
-          const v = solverVerdict(c.result)
+          // what the server decided, where it said so; its own reading only
+          // for a record written before the server stamped its verdict
+          const stamped = e.verdict as 'verified' | 'unverified' | 'failed' | undefined
+          const own = solverVerdict(c.result)
+          const v = stamped ? { verdict: stamped, reason: stamped === own.verdict ? own.reason
+                                : stamped === 'verified' ? '' : own.reason } : own
           c.detail = v.reason
           if (v.verdict === 'verified') { c.state = 'done'; tally.verified = true }
           else if (v.verdict === 'unverified') { c.state = 'unverified'; tally.unverified = true }
@@ -281,7 +307,7 @@ function build(events: Ev[], live: boolean): Entry[] {
       }
       case 'tool_error': {
         const c = calls.get(e.call_id || '')
-        if (c) { c.state = 'failed'; c.detail = tidy(e.error || e.message || 'failed').slice(0, 160); c.t1 = e.t; tally.tools += 1 }
+        if (c) { c.state = 'failed'; c.detail = cut(tidy(e.error || e.message || 'failed'), 160); c.t1 = e.t; tally.tools += 1 }
         break
       }
       case 'tool_call_rejected': {
@@ -295,13 +321,15 @@ function build(events: Ev[], live: boolean): Entry[] {
         break
       }
       case 'subagent_returned': {
-        if ((e.result || '').trim() && !/need more steps|^\[sub-agent error|returned nothing/i.test(e.result || '')) {
+        // a real conclusion, from a critic: not the sentinel that says it
+        // returned nothing, not an error, and not a researcher's summary
+        if (asides.get(e.sa_id || '')?.role === 'critic' && concluded(e.result || '')) {
           criticSpoke = true
         }
         // shown where it came back, after the sub-agent's own steps
         const a = asides.get(e.sa_id || '')
         const text = (e.result || '').trim()
-        const reached = !!text && !/need more steps|^\[sub-agent error/i.test(text)
+        const reached = concluded(text)
         if (a) a.returned = true
         out.push({ kind: 'verdict', role: a?.role || 'sub-agent', text, reached })
         break
@@ -328,6 +356,7 @@ function build(events: Ev[], live: boolean): Entry[] {
         let outcome: string
         if (lastError) outcome = lastError.outcome || 'failed'
         else if (e.outcome === 'failed' || e.outcome === 'interrupted') outcome = e.outcome
+        else if (e.by === 'server' && e.outcome) outcome = e.outcome   // decided once, on the server
         else outcome = tally.verified ? 'completed' : tally.unverified ? 'unverified' : 'no_result'
         for (const c of calls.values()) {
           if (c.state === 'running') {
@@ -383,6 +412,7 @@ function endText(x: Extract<Entry, { kind: 'end' }>): string {
       return x.message || `Stopped without finishing${after}. The server this run was working in went down.`
     default:
       if (t.solverFailed) return `Ended${after}. A solver was called but computed nothing: ${t.solverFailed}.`
+      if (t.tools === 0 && !t.said) return `Ended${after}. Nothing happened in this turn: no tools were used and the model said nothing.`
       if (t.tools === 0) return `Ended${after}. No tools were used. The reply above is the model's own text, not a computation.`
       if (t.shell > 0) return `Ended${after}. openPASO's solvers were not used. Any numbers above come from commands and scripts the model ran itself (${t.shell} shell step${t.shell === 1 ? '' : 's'}). Check them before you rely on them.`
       return `Ended${after}. No solver ran in this turn.`

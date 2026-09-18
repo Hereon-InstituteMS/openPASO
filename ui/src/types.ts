@@ -1,6 +1,10 @@
 export type Ev = {
   type: string
   cost_usd_total?: number
+  /** the server's own verdict on a solver result, decided once */
+  verdict?: string
+  /** marks an ending the server decided, rather than one an old record claimed */
+  by?: string
   text?: string
   tool?: string
   args?: Record<string, unknown>

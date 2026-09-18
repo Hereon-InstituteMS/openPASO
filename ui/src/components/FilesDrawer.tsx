@@ -26,8 +26,14 @@ export default function FilesDrawer({ runId, open, onClose, refreshKey }: {
   useEffect(() => { setSub('') }, [runId])
   useEffect(() => {
     if (!open) return
+    // answers can arrive in another order than they were asked for, and the
+    // older one would then fill the list under the newer folder's name
+    let current = true
     setRows(null); setError(null)
-    api.files(runId, sub).then((d) => setRows(d.entries)).catch((e) => setError(String(e.message || e)))
+    api.files(runId, sub)
+      .then((d) => { if (current) setRows(d.entries) })
+      .catch((e) => { if (current) setError(String(e.message || e)) })
+    return () => { current = false }
   }, [runId, sub, open, refreshKey])
   // RunView passes a new onClose on every render, and it re-renders once a
   // second while a run works: depending on it here tore the trap down and set
