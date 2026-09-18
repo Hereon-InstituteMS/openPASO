@@ -85,3 +85,16 @@ def test_a_differently_spelled_question_is_a_different_question(monkeypatch):
     before = _FakeDDGS.calls
     agent.web_search.invoke({"query": "re=100 CYLINDER", "max_results": 3})
     assert _FakeDDGS.calls > before, "a different spelling is asked, not served from the cache"
+
+
+def test_the_cache_does_not_grow_without_limit(monkeypatch):
+    """A web interface keeps this process up for days, and the key is whatever
+    anyone searched for."""
+    hit = [{"title": "t", "href": "h", "body": "b"}]
+    _use(monkeypatch, [hit])
+    for i in range(agent._SEARCH_CACHE_MAX + 20):
+        agent.web_search.invoke({"query": f"question {i}", "max_results": 3})
+    assert len(agent._SEARCH_CACHE) <= agent._SEARCH_CACHE_MAX
+    # and what it still holds is the most recent, not the first
+    assert (f"question {agent._SEARCH_CACHE_MAX + 19}", 3) in agent._SEARCH_CACHE
+    assert ("question 0", 3) not in agent._SEARCH_CACHE

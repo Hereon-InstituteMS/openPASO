@@ -892,7 +892,11 @@ def _read_write_tools_for(workdir: Path, *, audit_on_submit: bool = False,
     return [read_file, write_file]
 
 
+# What has already been asked in this process. Bounded: the web interface keeps
+# a server up for days, and an unbounded dict keyed by whatever anyone searched
+# for is a slow leak. Oldest out first; 256 is far more than one run asks.
 _SEARCH_CACHE: dict[tuple[str, int], str] = {}
+_SEARCH_CACHE_MAX = 256
 
 
 @tool
@@ -943,6 +947,8 @@ def web_search(query: str, max_results: int = 5) -> str:
                     out = "\n\n".join(
                         f"{h.get('title')}\n{h.get('href')}\n{h.get('body')}"
                         for h in hits)
+                    if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+                        _SEARCH_CACHE.pop(next(iter(_SEARCH_CACHE)))
                     _SEARCH_CACHE[key] = out
                     return out
             except Exception as e:
