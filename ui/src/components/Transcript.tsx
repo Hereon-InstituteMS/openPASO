@@ -107,6 +107,8 @@ export function troubleOf(raw: string): string | null {
   if (/Traceback \(most recent call last\)/.test(t)) return 'the command ended in a traceback'
   const nonzero = t.match(/non-zero exit status (\d+)|exit(?: code|ed with)? (\d+)/i)
   if (nonzero && (nonzero[1] || nonzero[2]) !== '0') return `exit code ${nonzero[1] || nonzero[2]}`
+  if (/could not search|returned nothing after three attempts/i.test(t))
+    return 'the search provider refused; this is not evidence the web has nothing'
   if (/^\[no results\]/m.test(t)) return 'no results'
   if (/^\[rejected by user/m.test(t)) return 'you skipped this step'
   return null

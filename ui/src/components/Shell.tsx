@@ -49,6 +49,11 @@ export default function Shell({ current, view, config, children }: {
   const [problem, setProblem] = useState<string | null>(null)
   const running = rows?.filter((r) => r.running).length ?? 0
   const waiting = rows?.filter((r) => r.waiting).length ?? 0
+  // A tab left open across an update keeps running the code it loaded with, so
+  // a control fixed since then still misbehaves in front of you. The page can
+  // see that: it knows which bundle it is, and the server says which it serves.
+  const mine = import.meta.url.split('/').pop()
+  const stale = !!config?.build && !!mine && config.build !== mine
 
   useEffect(() => {
     const cur = rows?.find((r) => r.id === current)
@@ -112,6 +117,13 @@ export default function Shell({ current, view, config, children }: {
         {!open && (running > 0 || waiting > 0) && (
           <button onClick={toggle} className={`ml-2 h-9 px-3 rounded-[8px] text-[13px] ${waiting ? 'text-coral' : 'text-muted'} hover:bg-card`}>
             {waiting ? `${waiting} waiting for you` : `${running} working`}
+          </button>
+        )}
+        {stale && (
+          <button onClick={() => location.reload()}
+                  className="ml-4 h-9 px-3.5 rounded-[8px] border border-coral/50 bg-coral/[0.08] text-[14px] text-ink
+                             hover:bg-coral/[0.14] transition-colors">
+            openPASO was updated · reload this page
           </button>
         )}
         <nav className="ml-auto flex items-center gap-1 text-[15px]">

@@ -94,6 +94,8 @@ export type ModelGroup = {
 export type ModeInfo = { id: 'plan' | 'accept'; label: string; detail: string }
 
 export type AppConfig = {
+  /** the bundle this server serves; a page running another one is out of date */
+  build?: string | null
   modes: ModeInfo[]
   default_mode: string
   docs_url: string

@@ -268,16 +268,15 @@ export default function RunView({ id, config, groups }: {
 
           <div className="flex items-center gap-3 mb-3">
             <span className="text-[13px] font-medium text-muted">What happened</span>
-            <span className="ml-auto text-[13px] text-muted"
-                  title="Hidden keeps the steps, their output and the final reply, and puts away the model's own notes and the critic's long verdicts.">
-              The model's thinking
-            </span>
-            <div role="radiogroup" aria-label="The model's thinking" className="flex rounded-[8px] border line p-0.5">
-              {(['shown', 'hidden'] as const).map((v) => (
-                <button key={v} role="radio" aria-checked={(v === 'shown') === reasoning}
-                        onClick={() => { setReasoning(v === 'shown'); try { localStorage.setItem('openpaso.reasoning', v) } catch { /* */ } }}
-                        className={`h-7 px-3 rounded-[6px] text-[13px] capitalize ${(v === 'shown') === reasoning ? 'bg-card text-ink' : 'text-muted hover:text-ink'}`}>
-                  {v}
+            <div role="radiogroup" aria-label="How much to show" className="ml-auto flex rounded-[8px] border line p-0.5">
+              {([['everything', 'Everything'], ['steps', 'Steps only']] as const).map(([v, label]) => (
+                <button key={v} role="radio" aria-checked={(v === 'everything') === reasoning}
+                        title={v === 'steps'
+                          ? 'The steps, their output and the reply. Leaves out the model\'s notes to itself and a critic\'s long verdicts.'
+                          : 'Everything the run produced, in order.'}
+                        onClick={() => { setReasoning(v === 'everything'); try { localStorage.setItem('openpaso.reasoning', v === 'everything' ? 'shown' : 'hidden') } catch { /* */ } }}
+                        className={`h-7 px-3 rounded-[6px] text-[13px] ${(v === 'everything') === reasoning ? 'bg-card text-ink' : 'text-muted hover:text-ink'}`}>
+                  {label}
                 </button>
               ))}
             </div>

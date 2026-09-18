@@ -106,12 +106,28 @@ async def get_models():
     return out
 
 
+def _served_build() -> str | None:
+    """The bundle this server hands out, so a page can notice it is an old one.
+
+    A tab left open across an update keeps running the code it was loaded with.
+    Someone then uses a control that was fixed an hour ago and watches it not
+    work, which is indistinguishable from a broken product."""
+    try:
+        html = (config.REPO / "webui" / "static" / "index.html").read_text()
+        import re as _re
+        m = _re.search(r"assets/(index-[A-Za-z0-9_-]+\.js)", html)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
 @app.get("/api/config")
 async def get_config():
     return {"modes": [{"id": m, **config.MODE_INFO[m]} for m in config.MODES],
             "default_mode": config.DEFAULT_MODE,
             "docs_url": config.DOCS_URL,
-            "max_running": config.MAX_RUNNING}
+            "max_running": config.MAX_RUNNING,
+            "build": _served_build()}
 
 
 def _artefacts(work: Path) -> list[dict]:
