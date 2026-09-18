@@ -16,6 +16,14 @@ Path(S).mkdir(parents=True, exist_ok=True)
 NOTES = Path(tempfile.gettempdir()) / "openpaso_notes.csv"
 NOTES.write_text("x,u\n0,0\n0.5,0.07\n1,0\n")
 LOG = []
+
+
+def note(name, detail=""):
+    """Something a model chose, not something this interface controls: reported,
+    never counted. A suite that fails on a model's brevity means nothing."""
+    print(f"NOTE {name}" + (f"  ::  {detail}" if detail else ""), flush=True)
+
+
 def ok(name, cond, detail=""):
     LOG.append((name, bool(cond))); print(("PASS " if cond else "FAIL ") + name + (f"  ::  {detail}" if detail else ""), flush=True)
 
@@ -110,9 +118,21 @@ async def main():
         ok("end: correction was delivered or sent as follow-up", bool(re.search(r"Delivered to openPASO|sent as a follow-up", body)), re.findall(r"(Waiting: openPASO reads it[^\n]*|Delivered to openPASO|sent as a follow-up|Not delivered[^\n]*)", body)[:3])
         ok("privacy: no home directory shown", not re.search(r"/home/[a-z]", body))
 
-        await pg.get_by_role("radio", name="hidden").click(); await pg.wait_for_timeout(500)
-        await shot(pg, "b08_reasoning_hidden")
-        await pg.get_by_role("radio", name="shown").click()
+        # "Steps only" keeps the steps and puts away the model's notes to itself
+        # and a critic's verdicts, which is what fills the screen on a long run
+        everything = await pg.locator("main").inner_text()
+        steps_only = pg.get_by_role("radio", name="Steps only")
+        await steps_only.click(); await pg.wait_for_timeout(500)
+        only_steps = await pg.locator("main").inner_text()
+        ok("steps only: the control takes effect", await steps_only.get_attribute("aria-checked") == "true")
+        ok("steps only: the steps themselves stay", "run_bash" in only_steps)
+        ok("steps only: the reply stays", "Reply" in only_steps)
+        # how much it puts away depends on how much the model wrote to itself,
+        # and this run is one instruction with no notes in between: reported,
+        # not asserted, so the suite does not fail on a model's brevity
+        note("steps only: characters put away", f"{len(everything)} -> {len(only_steps)}")
+        await shot(pg, "b08_steps_only")
+        await pg.get_by_role("radio", name="Everything").click()
 
         await pg.get_by_role("button", name="Files", exact=True).click(); await pg.wait_for_timeout(1500)
         await shot(pg, "b09_files")

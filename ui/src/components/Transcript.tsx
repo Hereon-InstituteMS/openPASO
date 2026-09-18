@@ -87,8 +87,10 @@ function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'fai
   if (/\[openPASO verification:/i.test(t) && !/^(?:Backend not found|Unknown problem|Unknown solver|Error|Traceback)/im.test(t)) {
     return unverified
   }
-  const line = t.split('\n').map((l) => l.trim()).find(Boolean) || 'no result'
-  return { verdict: 'failed', reason: line.slice(0, 140) }
+  // what broke, not the banner above it: a solver that ended in a traceback
+  // was being reported as "Traceback (most recent call last):"
+  const line = troubleOf(t) || (t.split('\n').map((l) => l.trim()).find(Boolean) || 'no result')
+  return { verdict: 'failed', reason: line.slice(0, 160) }
 }
 
 /** The failure an ordinary tool result reports, if it reports one. */
@@ -104,7 +106,12 @@ export function troubleOf(raw: string): string | null {
   }
   const exc = t.match(/^\s*([A-Za-z_][\w.]*(?:Error|Exception|Fault)): ?(.*)$/m)
   if (exc) return `${exc[1]}: ${exc[2]}`.trim().slice(0, 140)
-  if (/Traceback \(most recent call last\)/.test(t)) return 'the command ended in a traceback'
+  if (/Traceback \(most recent call last\)/.test(t)) {
+    // the line that says what went wrong is the LAST one, not the banner
+    const raised = [...t.matchAll(/^\s*([A-Za-z_][\w.]*(?:Error|Exception|Fault|Warning)): ?(.*)$/gm)]
+    const last = raised[raised.length - 1]
+    return last ? `${last[1]}: ${last[2]}`.trim().slice(0, 160) : 'the command ended in a traceback'
+  }
   const nonzero = t.match(/non-zero exit status (\d+)|exit(?: code|ed with)? (\d+)/i)
   if (nonzero && (nonzero[1] || nonzero[2]) !== '0') return `exit code ${nonzero[1] || nonzero[2]}`
   if (/could not search|returned nothing after three attempts/i.test(t))
@@ -174,12 +181,14 @@ type CallState = 'waiting' | 'running' | 'done' | 'unverified' | 'failed' | 'ski
 type Call = {
   kind: 'call'; id: string; tool: string; agent: string; args?: Record<string, unknown>
   state: CallState; detail: string; result?: string; t0?: number; t1?: number; ending?: boolean
+  /** a review of the work, filed by the one who did the work */
+  selfReview?: boolean
 }
 type Tally = { tools: number; shell: number; verified: boolean; unverified: boolean; solverFailed: string | null }
 type Entry =
   | { kind: 'turn' }
   | { kind: 'you'; text: string; files: string[] }
-  | { kind: 'thought'; text: string; final: boolean }
+  | { kind: 'thought'; text: string; final: boolean; outcome?: string }
   | Call
   | { kind: 'aside'; id: string; role: string; task: string; returned: boolean }
   | { kind: 'verdict'; role: string; text: string; reached: boolean }
@@ -198,6 +207,7 @@ function build(events: Ev[], live: boolean): Entry[] {
   let stream = ''
   let turns = 0, turnT = 0
   let tally = tally0()
+  let criticSpoke = false      // did a sub-agent actually reach a verdict this turn
   let lastError: Ev | null = null
   const attachedLater = new Set<string>()
   events.forEach((e) => { if (e.type === 'user_msg') (e.attachments || []).forEach((a) => attachedLater.add(a)) })
@@ -205,7 +215,7 @@ function build(events: Ev[], live: boolean): Entry[] {
   for (const e of events) {
     switch (e.type) {
       case 'turn_start':
-        turns += 1; turnT = e.t || 0; lastError = null; tally = tally0()
+        turns += 1; turnT = e.t || 0; lastError = null; tally = tally0(); criticSpoke = false
         if (turns > 1) out.push({ kind: 'turn' })
         break
       case 'user_msg':
@@ -241,6 +251,14 @@ function build(events: Ev[], live: boolean): Entry[] {
       case 'tool_result': {
         const c = calls.get(e.call_id || '')
         if (!c) break
+        if (c.tool === 'submit_critic_review' && c.agent === 'main' && !criticSpoke) {
+          // openPASO's gate looks up a review rather than trusting a flag, but
+          // the review it finds is whatever was submitted. Here the model wrote
+          // the review of its own work and filed it — after its critic had
+          // returned nothing at all. The step succeeded; what it means is the
+          // point, and nobody reading this should take it for a second opinion.
+          c.selfReview = true
+        }
         c.result = e.result || ''; c.t1 = e.t
         if (c.ending || c.result.startsWith('[The user ended this step')) {
           c.state = 'abandoned'; c.detail = 'you ended this step'; tally.tools += 1
@@ -277,6 +295,9 @@ function build(events: Ev[], live: boolean): Entry[] {
         break
       }
       case 'subagent_returned': {
+        if ((e.result || '').trim() && !/need more steps|^\[sub-agent error|returned nothing/i.test(e.result || '')) {
+          criticSpoke = true
+        }
         // shown where it came back, after the sub-agent's own steps
         const a = asides.get(e.sa_id || '')
         const text = (e.result || '').trim()
@@ -321,7 +342,7 @@ function build(events: Ev[], live: boolean): Entry[] {
           for (let i = out.length - 1; i >= 0; i--) {
             const x = out[i]
             if (x.kind === 'call' || x.kind === 'turn' || x.kind === 'you' || x.kind === 'verdict') break
-            if (x.kind === 'thought') { x.final = true; break }
+            if (x.kind === 'thought') { x.final = true; x.outcome = outcome; break }
           }
         }
         out.push({ kind: 'end', outcome, tally: { ...tally },
@@ -357,6 +378,9 @@ function endText(x: Extract<Entry, { kind: 'end' }>): string {
       return `Failed${after}.`
     case 'interrupted':
       return x.message || 'Stopped.'
+    case 'unfinished':
+      // the server wrote why when it went down; do not replace it with a guess
+      return x.message || `Stopped without finishing${after}. The server this run was working in went down.`
     default:
       if (t.solverFailed) return `Ended${after}. A solver was called but computed nothing: ${t.solverFailed}.`
       if (t.tools === 0) return `Ended${after}. No tools were used. The reply above is the model's own text, not a computation.`
@@ -396,6 +420,12 @@ function CallRow({ c, onDecide, onEndStep, othersRunning, now }: {
           {c.state === 'running' ? `running ${c.t0 ? clock((now - c.t0) / 1000) : ''}` : secs != null ? clock(secs) : ''}
         </span>
       </div>
+      {c.selfReview && (
+        <p className="pl-7 mt-1.5 text-[14px] text-coral">
+          The model wrote this review of its own work and filed it. No critic reached a verdict in this
+          turn, so nothing here is a second opinion.
+        </p>
+      )}
       {sub
         ? (
           <div className="pl-7 mt-1">
@@ -566,7 +596,20 @@ export default function Transcript({ events, live, showReasoning, onDecide, onEn
             if (!e.final && !showReasoning) return null
             return (
               <li key={i} className={`border-l-2 pl-5 py-2.5 ${e.final ? 'border-ink2' : 'border-hairline'}`}>
-                {e.final && <div className="text-[13px] font-semibold text-ink2 mb-1">Reply</div>}
+                {e.final && (
+                  <div className="mb-1 flex items-baseline gap-2 flex-wrap">
+                    <span className="text-[13px] font-semibold text-ink2">Reply</span>
+                    {e.outcome && e.outcome !== 'completed' && (
+                      // a reply is prose whatever happened; where nothing was computed,
+                      // say so where it is read, not only underneath it
+                      <span className="text-[13px] text-coral">
+                        {e.outcome === 'unverified'
+                          ? 'a solver ran, but openPASO did not verify its result'
+                          : "no solver result in this turn — any numbers below are the model's own"}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <Fold text={e.text} lines={e.final ? 40 : 4}
                       className={e.final ? 'text-[16px] leading-[1.65] text-ink2' : 'text-[15px] leading-[1.6] text-body'} />
               </li>

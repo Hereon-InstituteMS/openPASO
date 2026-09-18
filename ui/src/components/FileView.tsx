@@ -25,7 +25,12 @@ function Chart({ header, rows }: { header: string[]; rows: string[][] }) {
       const x = Number(r[0])
       if (!Number.isFinite(x)) continue
       xs.push(x)
-      header.slice(1).forEach((_, i) => cols[i].push(Number(r[i + 1])))
+      // Number('') is 0, so a blank cell used to be drawn as a real zero: the
+      // chart invented data a solver never wrote
+      header.slice(1).forEach((_, i) => {
+        const cell = (r[i + 1] ?? '').trim()
+        cols[i].push(cell === '' ? NaN : Number(cell))
+      })
     }
     return { xs, cols }
   }, [header, rows])

@@ -165,10 +165,17 @@ async def get_manifest(sid: str):
     A result that cannot be traced back to what produced it is not a result. The
     interface shows a summary; this is the record behind it, with the full
     untruncated event log and a hash for every artefact the run wrote."""
-    try:
-        state = sessions.load(sid)
-    except Exception:
-        return JSONResponse({"error": f"no such run: {sid}"}, status_code=404)
+    # a live run's record on disk is a checkpoint, not the present: turn
+    # boundaries and endings are written at once and the rest every tenth event,
+    # so a download during a run would miss the newest steps it promises
+    live = runs.live(sid)
+    if live is not None:
+        state = live.state
+    else:
+        try:
+            state = sessions.load(sid)
+        except Exception:
+            return JSONResponse({"error": f"no such run: {sid}"}, status_code=404)
 
     events = state.get("events") or []
     outcome = outcome_fold(events)
@@ -324,15 +331,16 @@ async def sandbox_file(rel: str):
     if not _is_text(p):
         return FileResponse(p)
     disposition = {"Content-Disposition": f'inline; filename="{p.name}"'}
+    # an SVG is text and is scrubbed like text, but it is a picture: served as
+    # plain text a browser shows its source instead of drawing it
+    kind = ("image/svg+xml" if p.suffix.lower() == ".svg" else "text/plain") + "; charset=utf-8"
     if p.stat().st_size > _SCRUB_WHOLE:
-        return StreamingResponse(_scrubbed_stream(p), media_type="text/plain; charset=utf-8",
-                                 headers=disposition)
+        return StreamingResponse(_scrubbed_stream(p), media_type=kind, headers=disposition)
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
     except OSError:
         raise HTTPException(404, "could not read that file")
-    return Response(scrub_text(text), media_type="text/plain; charset=utf-8",
-                    headers=disposition)
+    return Response(scrub_text(text), media_type=kind, headers=disposition)
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -549,7 +557,16 @@ async def upload(sid: str, files_in: list[UploadFile] = File(..., alias="files")
         if Path(name).suffix.lower() not in runs.UPLOAD_SUFFIXES:
             raise HTTPException(415, f"{name}: this file type is not accepted. Accepted: "
                                      + " ".join(sorted(runs.UPLOAD_SUFFIXES)))
+        # two different names can come out of that substitution the same way
+        # ("a b.msh" and "a_b.msh"); the second write would replace the first
+        # while the answer said both were saved
         target = dest / name
+        if target.exists():
+            stem, suffix, n = Path(name).stem, Path(name).suffix, 2
+            while target.exists():
+                name = f"{stem}-{n}{suffix}"
+                target = dest / name
+                n += 1
         size = 0
         with target.open("wb") as fh:
             while chunk := await up.read(1 << 20):

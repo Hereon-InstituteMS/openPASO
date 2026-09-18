@@ -470,6 +470,59 @@ def test_a_run_over_the_limit_is_refused_before_it_is_created(client, monkeypatc
     assert len(client.get("/api/sessions?all=true").json()["sessions"]) == before
 
 
+def test_two_uploads_that_sanitise_alike_are_both_kept(client):
+    """"a b.msh" and "a_b.msh" become the same name; the second used to replace
+    the first while the answer said both were saved."""
+    sid = client.post("/api/sessions", json={"model": "mock", "test": True}).json()["id"]
+    try:
+        first = client.post(f"/api/sessions/{sid}/upload",
+                            files={"files": ("a b.msh", b"$MeshFormat\nfirst\n", "application/octet-stream")})
+        second = client.post(f"/api/sessions/{sid}/upload",
+                             files={"files": ("a_b.msh", b"$MeshFormat\nsecond\n", "application/octet-stream")})
+        assert first.status_code == 200 and second.status_code == 200
+        names = sorted(e["name"] for e in
+                       client.get(f"/api/sessions/{sid}/files", params={"sub": "uploads"}).json()["entries"])
+        assert names == ["a_b-2.msh", "a_b.msh"], names
+        assert second.json()["saved"][0]["name"] == "a_b-2.msh"
+    finally:
+        runs.RUNS.pop(sid, None)
+        client.delete(f"/api/sessions/{sid}")
+
+
+def test_a_record_downloaded_during_a_run_holds_what_has_happened(client):
+    """On disk it is a checkpoint; the manifest promised every event."""
+    sid = client.post("/api/sessions", json={"model": "mock", "test": True}).json()["id"]
+    try:
+        import asyncio as aio
+        run = runs.get(sid)
+        aio.run(run.emit({"type": "turn_start"}))
+        aio.run(run.emit({"type": "user_msg", "text": "solve it"}))
+        for i in range(4):                      # below the checkpoint interval
+            aio.run(run.emit({"type": "agent_msg", "text": f"thinking {i}"}))
+        got = client.get(f"/api/sessions/{sid}/manifest").json()
+        texts = [e.get("text") for e in got["events"] if e["type"] == "agent_msg"]
+        assert texts == ["thinking 0", "thinking 1", "thinking 2", "thinking 3"], texts
+    finally:
+        runs.RUNS.pop(sid, None)
+        client.delete(f"/api/sessions/{sid}")
+
+
+def test_a_seeded_conversation_does_not_open_with_an_empty_message():
+    """The turn has already emitted turn_start and user_msg when the history is
+    built, and dropping only the last event left a turn with no message in it."""
+    from webui.runs import _history
+    prior = [{"type": "turn_start"}, {"type": "user_msg", "text": "solve the plate"},
+             {"type": "agent_msg", "text": "done"}, {"type": "done", "outcome": "no_result"}]
+    current = prior + [{"type": "turn_start"}, {"type": "user_msg", "text": "now refine it"}]
+    for i in range(len(current) - 1, -1, -1):
+        if current[i]["type"] == "turn_start":
+            cut = current[:i]
+            break
+    h = _history(cut)
+    assert ("user", "") not in h and all(text.strip() for role, text in h if role == "user")
+    assert h[0] == ("user", "solve the plate")
+
+
 def test_upload_is_bound_to_a_run_and_to_simulation_file_types(client):
     sid = client.post("/api/sessions", json={"model": "mock", "test": True}).json()["id"]
     try:

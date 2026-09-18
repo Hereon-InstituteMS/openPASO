@@ -405,6 +405,21 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
                 {"messages": [("user", msg)]},
                 config={"recursion_limit": 40})
             res = out["messages"][-1].content
+            if not str(res).strip():
+                # It happens: a sub-agent spends its steps and ends with nothing
+                # to say. An empty string handed back to the model reads as
+                # assent — "the critic had no objection" — when in fact nobody
+                # reviewed anything, and openPASO's gate will hold no review
+                # either. Say it, so the model cannot mistake silence for a
+                # verdict.
+                # One sentence, shared word for word with langgraph_eval's own
+                # spawn_subagent, so a transcript here and a campaign trajectory
+                # say the same thing. The campaign branch carries "OASiS" until
+                # its freeze and the rename maps it to "openPASO" on the way in.
+                who = role if role in ("critic", "verifier", "researcher") else "sub-agent"
+                res = (f"[the {who} returned no text. This is NOT approval and NOT a review: "
+                       "it produced nothing. Treat the step as not done, and note that "
+                       "openPASO's verification gate holds no review for this setup.]")
         except Exception as e:
             res = f"[sub-agent error: {type(e).__name__}: {e}]"
         await emitter({"type": "subagent_returned",

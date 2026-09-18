@@ -233,9 +233,11 @@ async def _consume(proc, emit, state, errors: list[str] | None = None) -> str:
                                    "output": usage.get("output_tokens", 0)})
 
     await proc.wait()
-    if proc.returncode != 0 and not final:
-        # stderr is read as it arrives (see stream_turn), so it is here already
-        said = "\n".join(errors[-20:]).strip() if errors else ""
+    if proc.returncode != 0:
+        # A non-zero exit is a failure even when something was printed first.
+        # Treating a final message as proof of success let a crashed command be
+        # recorded as a turn that merely produced no result.
+        said = "\n".join(errors[-20:]).strip() if errors else (str(final)[-400:] if final else "")
         raise RuntimeError(f"Claude Code exited {proc.returncode}: {said[:400]}")
     return final
 

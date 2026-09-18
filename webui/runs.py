@@ -246,7 +246,18 @@ class Run:
                 agent = await self.ensure_agent()
                 history = None
                 if not self.thread_seeded:
-                    history = _history(self.state["events"][:-1])
+                    # everything before this turn: it has already emitted its
+                    # turn_start and its user_msg, and dropping only the last
+                    # left an empty turn marker, so a seeded conversation began
+                    # with a blank message from the user
+                    prior = self.state["events"]
+                    for i in range(len(prior) - 1, -1, -1):
+                        if prior[i].get("type") == "turn_start":
+                            prior = prior[:i]
+                            break
+                    else:
+                        prior = prior[:-1]
+                    history = _history(prior)
                     self.thread_seeded = True
                 await stream_turn(agent=agent, user_text=text, emitter=self.emit,
                                   thread_id=f"{self.sid}:{self.thread}",
