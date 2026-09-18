@@ -308,6 +308,43 @@ def test_a_tab_separated_table_is_read_with_tabs(tmp_path):
         p.unlink()
 
 
+def test_a_link_out_of_a_run_does_not_open_another_run(client):
+    """A run can write a symlink. The name then reads as a path inside that run
+    while pointing into a different one."""
+    a = config.SANDBOX_ROOT / "webui_aaa111" / "work"
+    b = config.SANDBOX_ROOT / "webui_bbb222" / "work"
+    a.mkdir(parents=True, exist_ok=True)
+    b.mkdir(parents=True, exist_ok=True)
+    (b / "secret.txt").write_text("another run's numbers\n")
+    link = a / "elsewhere"
+    link.unlink(missing_ok=True)
+    link.symlink_to(b, target_is_directory=True)
+    try:
+        for url in ("/api/file", "/api/viz"):
+            r = client.get(url, params={"rel": "webui_aaa111/work/elsewhere/secret.txt"})
+            assert r.status_code == 403, (url, r.status_code)
+        assert client.get("/sandbox-file/webui_aaa111/work/elsewhere/secret.txt").status_code == 403
+    finally:
+        link.unlink(missing_ok=True)
+        (b / "secret.txt").unlink(missing_ok=True)
+
+
+def test_a_listing_cannot_step_into_a_sibling_folder(client):
+    """"webui_x/work2" starts with "webui_x/work": a prefix is not a boundary."""
+    sid = client.post("/api/sessions", json={"model": "mock", "test": True}).json()["id"]
+    try:
+        run = runs.get(sid)
+        (run.workdir.parent / "work2").mkdir(parents=True, exist_ok=True)
+        (run.workdir.parent / "work2" / "not_yours.txt").write_text("x")
+        r = client.get(f"/api/sessions/{sid}/files", params={"sub": "../work2"})
+        assert r.status_code in (403, 404), r.status_code
+        if r.status_code == 200:                      # never, but be explicit
+            assert "not_yours.txt" not in r.text
+    finally:
+        runs.RUNS.pop(sid, None)
+        client.delete(f"/api/sessions/{sid}")
+
+
 def test_private_paths_never_reach_the_browser():
     from webui.privacy import scrub
     home = str(Path.home())

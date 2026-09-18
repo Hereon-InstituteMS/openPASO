@@ -58,11 +58,21 @@ async def _say_what_happened_to_live_runs():
         if not run.running:
             continue
         with contextlib.suppress(Exception):
+            if run.turn_task and not run.turn_task.done():
+                run.turn_task.cancel()
+            # and end what it had started: a solver does not stop because the
+            # server that asked for it went away, and the record would then say
+            # the run had stopped while it kept every core it was given
+            from . import proctree
+            ended = proctree.end_run_processes(run.workdir, 1.5, run.state.get("created_at"))
+            note = ("The server this run was working in was stopped, so the run stopped with it. "
+                    "What it had already done is in the record below; send a follow-up to carry on.")
+            if ended:
+                note += (f" {ended} process{'es' if ended != 1 else ''} it had started "
+                         f"{'were' if ended != 1 else 'was'} ended.")
             run.state["events"].append({
                 "type": "error", "outcome": runs.UNFINISHED, "t": int(time.time() * 1000),
-                "message": ("The server this run was working in was stopped, so the run stopped "
-                            "with it. What it had already done is in the record below; send a "
-                            "follow-up to carry on.")})
+                "message": note, "processes_ended": ended})
             run.state["events"].append({"type": "done", "outcome": runs.UNFINISHED,
                                         "t": int(time.time() * 1000)})
             run.save()
@@ -244,10 +254,19 @@ _RUN_REL = re.compile(r"^webui_[0-9a-f]{6,32}/")
 
 def _run_path(rel: str) -> str:
     """Files are served from run folders only. The sandbox also holds other
-    working directories (evaluation campaigns, scratch) that are nobody's run."""
+    working directories (evaluation campaigns, scratch) that are nobody's run.
+
+    The name is checked, and then where it actually leads: a run can write a
+    symlink, and "webui_A/work/elsewhere -> ../../webui_B/work" reads as a path
+    inside run A while pointing into run B."""
     rel = (rel or "").lstrip("/")
-    if not _RUN_REL.match(rel) or ".." in Path(rel).parts:
+    m = _RUN_REL.match(rel)
+    if not m or ".." in Path(rel).parts:
         raise HTTPException(403, "Only files inside a run's folder can be opened here.")
+    run_root = (config.SANDBOX_ROOT / m.group(0).rstrip("/")).resolve()
+    target = (config.SANDBOX_ROOT / rel).resolve()
+    if target != run_root and run_root not in target.parents:
+        raise HTTPException(403, "That file is outside the run it is asked for.")
     return rel
 
 
@@ -527,7 +546,9 @@ async def run_files(sid: str, sub: str = ""):
         listing = files.list_dir(rel)
     except PermissionError:
         raise HTTPException(403, "That path is outside this run's folder.")
-    if not (listing.get("rel") or "").startswith(base):
+    # a prefix is not a boundary: "webui_x/work2" starts with "webui_x/work"
+    got = listing.get("rel") or ""
+    if got != base and not got.startswith(base + "/"):
         raise HTTPException(403, "outside this run")
     for e in listing.get("entries", []):
         e.pop("abs_path", None)
