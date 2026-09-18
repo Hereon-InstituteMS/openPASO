@@ -892,34 +892,64 @@ def _read_write_tools_for(workdir: Path, *, audit_on_submit: bool = False,
     return [read_file, write_file]
 
 
+_SEARCH_CACHE: dict[tuple[str, int], str] = {}
+
+
 @tool
 def web_search(query: str, max_results: int = 5) -> str:
     """Search the web (DuckDuckGo). Returns up to max_results result snippets.
 
-    DuckDuckGo occasionally rate-limits the API backend; we transparently
-    try its ``html`` and ``lite`` backends as fallbacks so the tool stays
-    useful through brief blocks.
+    DuckDuckGo throttles repeated searches from one machine, and when it does it
+    answers with an EMPTY LIST rather than an error. The old code read that as
+    "no results" and said so: an agent was told the web knows nothing about the
+    Schaefer-Turek benchmark, and went on to work from memory. Measured on a
+    throttled machine, five searches in a row returned nothing on all three
+    backends while the same queries returned hits seconds later.
+
+    So: each backend is tried more than once with a pause between attempts, an
+    answer already fetched in this process is reused rather than asked for
+    again, and an empty answer is reported as what it almost always is — a
+    block, not an empty web — so nobody mistakes it for evidence of absence.
     """
     try:
         from duckduckgo_search import DDGS
     except ImportError:
-        return ("[web_search unavailable: install duckduckgo-search "
-                "(pip install duckduckgo-search) to enable]")
-    last_err = None
-    for backend in ("auto", "html", "lite"):
         try:
-            with DDGS() as ddgs:
-                hits = list(ddgs.text(query, max_results=max_results,
-                                      backend=backend))
-            if hits:
-                return "\n\n".join(
-                    f"{h.get('title')}\n{h.get('href')}\n{h.get('body')}"
-                    for h in hits)
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-            continue
-    return f"[no results; last backend error: {last_err}]" if last_err \
-        else "[no results]"
+            from ddgs import DDGS          # the package's new name
+        except ImportError:
+            return ("[web_search unavailable: install it with `pip install ddgs` "
+                    "(formerly duckduckgo-search) to enable]")
+
+    key = (query.strip().lower(), max_results)
+    if key in _SEARCH_CACHE:
+        return _SEARCH_CACHE[key]
+
+    last_err = None
+    for attempt, pause in enumerate((0.0, 1.5, 4.0)):
+        if pause:
+            time.sleep(pause)
+        for backend in ("auto", "html", "lite"):
+            try:
+                with DDGS() as ddgs:
+                    hits = list(ddgs.text(query, max_results=max_results,
+                                          backend=backend))
+                if hits:
+                    out = "\n\n".join(
+                        f"{h.get('title')}\n{h.get('href')}\n{h.get('body')}"
+                        for h in hits)
+                    _SEARCH_CACHE[key] = out
+                    return out
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+                continue
+
+    detail = f" (last error: {last_err})" if last_err else ""
+    return ("[the search returned nothing after three attempts on all backends"
+            + detail + ". DuckDuckGo answers an empty list when it is throttling "
+            "a machine, which is the usual reason for this, so treat it as "
+            "'could not search', NOT as 'the web has nothing on this'. Do not "
+            "conclude anything from it: wait and try once more, ask a shorter "
+            "query, or use openPASO's own knowledge and examples tools.]")
 
 
 # ────────────────────────────────────────────────────────────────────
