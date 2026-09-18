@@ -35,9 +35,19 @@ class _FakeDDGS:
 
 
 def _use(monkeypatch, answers):
+    """Stand in for whichever search package is installed.
+
+    The tool imports duckduckgo_search and falls back to ddgs, so a test that
+    patches one of them by name passes or fails according to what happens to be
+    installed. Both names are provided here."""
+    import types
+
     _FakeDDGS.calls, _FakeDDGS.answers = 0, answers
     monkeypatch.setattr(agent, "_SEARCH_CACHE", {}, raising=False)
-    monkeypatch.setattr("duckduckgo_search.DDGS", _FakeDDGS, raising=False)
+    for name in ("duckduckgo_search", "ddgs"):
+        module = types.ModuleType(name)
+        module.DDGS = _FakeDDGS
+        monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(agent.time, "sleep", lambda s: None)
 
 
@@ -62,5 +72,16 @@ def test_the_same_question_is_not_asked_twice(monkeypatch):
     _use(monkeypatch, [hit])
     first = agent.web_search.invoke({"query": "Re=100 cylinder", "max_results": 3})
     before = _FakeDDGS.calls
-    again = agent.web_search.invoke({"query": "  re=100 CYLINDER ", "max_results": 3})
+    again = agent.web_search.invoke({"query": "  Re=100 cylinder ", "max_results": 3})
     assert again == first and _FakeDDGS.calls == before, "a repeat costs no request"
+
+
+def test_a_differently_spelled_question_is_a_different_question(monkeypatch):
+    """What is remembered must be what was sent: a search engine's results are
+    not case-blind, so a lowercased key must not answer for another spelling."""
+    hit = [{"title": "t", "href": "h", "body": "b"}]
+    _use(monkeypatch, [hit])
+    agent.web_search.invoke({"query": "Re=100 cylinder", "max_results": 3})
+    before = _FakeDDGS.calls
+    agent.web_search.invoke({"query": "re=100 CYLINDER", "max_results": 3})
+    assert _FakeDDGS.calls > before, "a different spelling is asked, not served from the cache"

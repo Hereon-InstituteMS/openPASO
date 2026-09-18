@@ -915,17 +915,23 @@ def web_search(query: str, max_results: int = 5) -> str:
         from duckduckgo_search import DDGS
     except ImportError:
         try:
-            from ddgs import DDGS          # the package's new name
+            from ddgs import DDGS          # the same package, renamed
         except ImportError:
-            return ("[web_search unavailable: install it with `pip install ddgs` "
-                    "(formerly duckduckgo-search) to enable]")
+            return ("[web_search unavailable: install the search client to enable it — "
+                    "`pip install ddgs`, or `pip install duckduckgo-search` for the older "
+                    "name this repository still pins in "
+                    "langgraph_eval/requirements-langgraph.txt]")
 
-    key = (query.strip().lower(), max_results)
+    # the query that is remembered is the query that is sent: keying on a
+    # lowercased form while searching the original would let one spelling
+    # answer for another, and a search engine's results are not case-blind
+    query = query.strip()
+    key = (query, max_results)
     if key in _SEARCH_CACHE:
         return _SEARCH_CACHE[key]
 
     last_err = None
-    for attempt, pause in enumerate((0.0, 1.5, 4.0)):
+    for pause in (0.0, 1.5, 4.0):
         if pause:
             time.sleep(pause)
         for backend in ("auto", "html", "lite"):
