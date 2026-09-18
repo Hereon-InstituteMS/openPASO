@@ -44,6 +44,7 @@ def _use(monkeypatch, answers):
 
     _FakeDDGS.calls, _FakeDDGS.answers = 0, answers
     monkeypatch.setattr(agent, "_SEARCH_CACHE", {}, raising=False)
+    monkeypatch.setattr(agent, "_SEARCH_BLOCKED", {}, raising=False)
     for name in ("duckduckgo_search", "ddgs"):
         module = types.ModuleType(name)
         module.DDGS = _FakeDDGS
@@ -96,5 +97,36 @@ def test_the_cache_does_not_grow_without_limit(monkeypatch):
         agent.web_search.invoke({"query": f"question {i}", "max_results": 3})
     assert len(agent._SEARCH_CACHE) <= agent._SEARCH_CACHE_MAX
     # and what it still holds is the most recent, not the first
-    assert (f"question {agent._SEARCH_CACHE_MAX + 19}", 3) in agent._SEARCH_CACHE
-    assert ("question 0", 3) not in agent._SEARCH_CACHE
+    assert ("", f"question {agent._SEARCH_CACHE_MAX + 19}", 3) in agent._SEARCH_CACHE
+    assert ("", "question 0", 3) not in agent._SEARCH_CACHE
+
+
+def test_one_run_is_not_served_another_run_s_search(monkeypatch):
+    """A web interface serves many runs from one process. Without a scope, a run
+    could be handed snippets another run fetched, and its transcript would show
+    results it never asked for."""
+    hit = [{"title": "t", "href": "h", "body": "b"}]
+    _use(monkeypatch, [hit])
+    token = agent.SEARCH_SCOPE.set("run-a")
+    agent.web_search.invoke({"query": "cylinder benchmark", "max_results": 3})
+    after_a = _FakeDDGS.calls
+    agent.SEARCH_SCOPE.reset(token)
+    agent.SEARCH_SCOPE.set("run-b")
+    agent.web_search.invoke({"query": "cylinder benchmark", "max_results": 3})
+    assert _FakeDDGS.calls > after_a, "the second run asks for itself"
+
+
+def test_a_query_just_refused_is_not_retried_at_once(monkeypatch):
+    """Nine requests and five seconds of pauses per repeat, and repetition is
+    what causes the throttling."""
+    _use(monkeypatch, [[]])
+    first = agent.web_search.invoke({"query": "blocked question", "max_results": 3})
+    spent = _FakeDDGS.calls
+    again = agent.web_search.invoke({"query": "blocked question", "max_results": 3})
+    assert "could not search" in first and again.startswith(agent._BLOCKED_MESSAGE[:40])
+    assert _FakeDDGS.calls == spent, "the repeat costs nothing"
+    # and it is remembered only briefly, so a provider that recovers is reachable
+    later = agent.time.time() + 120                  # the clock the tool reads
+    monkeypatch.setattr(agent.time, "time", lambda: later)
+    _FakeDDGS.answers = [[{"title": "t", "href": "h", "body": "b"}]]
+    assert "could not search" not in agent.web_search.invoke({"query": "blocked question", "max_results": 3})

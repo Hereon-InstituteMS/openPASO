@@ -32,6 +32,7 @@ OpenAI schema.
 from __future__ import annotations
 
 import atexit
+import contextvars
 import asyncio
 import hashlib
 import os
@@ -895,8 +896,26 @@ def _read_write_tools_for(workdir: Path, *, audit_on_submit: bool = False,
 # What has already been asked in this process. Bounded: the web interface keeps
 # a server up for days, and an unbounded dict keyed by whatever anyone searched
 # for is a slow leak. Oldest out first; 256 is far more than one run asks.
-_SEARCH_CACHE: dict[tuple[str, int], str] = {}
+_BLOCKED_MESSAGE = (
+    "[the search returned nothing after three attempts on all backends. "
+    "DuckDuckGo answers an empty list when it is throttling a machine, which is "
+    "the usual reason for this, so treat it as 'could not search', NOT as 'the "
+    "web has nothing on this'. Do not conclude anything from it: wait and try "
+    "once more, ask a shorter query, or use openPASO's own knowledge and "
+    "examples tools.]")
+
+_SEARCH_CACHE: dict[tuple[str, str, int], str] = {}
 _SEARCH_CACHE_MAX = 256
+_SEARCH_BLOCKED: dict[tuple[str, str, int], float] = {}
+_SEARCH_BLOCKED_FOR = 60.0        # seconds a refusal is remembered
+
+# Whose search this is. One command-line run is one process, but the web
+# interface serves many runs for days from a single one: without this, a run
+# could be handed snippets another run fetched, and its transcript would show
+# results it never asked for. The interface sets it per run; anything that does
+# not is one scope, exactly as before.
+SEARCH_SCOPE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "openpaso_search_scope", default="")
 
 
 @tool
@@ -930,9 +949,16 @@ def web_search(query: str, max_results: int = 5) -> str:
     # lowercased form while searching the original would let one spelling
     # answer for another, and a search engine's results are not case-blind
     query = query.strip()
-    key = (query, max_results)
+    key = (SEARCH_SCOPE.get(""), query, max_results)
     if key in _SEARCH_CACHE:
         return _SEARCH_CACHE[key]
+    # A query that was just refused is refused again: retrying it immediately
+    # costs nine requests and five seconds of pauses, and repetition is what
+    # causes the throttling in the first place. Remembered briefly, so a
+    # provider that recovers is not locked out.
+    blocked_at = _SEARCH_BLOCKED.get(key)
+    if blocked_at is not None and time.time() - blocked_at < _SEARCH_BLOCKED_FOR:
+        return _BLOCKED_MESSAGE
 
     last_err = None
     for pause in (0.0, 1.5, 4.0):
@@ -955,13 +981,11 @@ def web_search(query: str, max_results: int = 5) -> str:
                 last_err = f"{type(e).__name__}: {e}"
                 continue
 
+    _SEARCH_BLOCKED[key] = time.time()
+    if len(_SEARCH_BLOCKED) > _SEARCH_CACHE_MAX:
+        _SEARCH_BLOCKED.pop(next(iter(_SEARCH_BLOCKED)))
     detail = f" (last error: {last_err})" if last_err else ""
-    return ("[the search returned nothing after three attempts on all backends"
-            + detail + ". DuckDuckGo answers an empty list when it is throttling "
-            "a machine, which is the usual reason for this, so treat it as "
-            "'could not search', NOT as 'the web has nothing on this'. Do not "
-            "conclude anything from it: wait and try once more, ask a shorter "
-            "query, or use openPASO's own knowledge and examples tools.]")
+    return _BLOCKED_MESSAGE + detail
 
 
 # ────────────────────────────────────────────────────────────────────
