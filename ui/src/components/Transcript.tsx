@@ -11,7 +11,8 @@ import Markdown from './Markdown'
    it reports as completed and trustworthy is a finished result. */
 
 // the same list the server uses; a shell command that exits zero is not a solver
-const SOLVER_TOOLS = new Set(['run_simulation', 'run_with_generator', 'coupled_solve', 'couple', 'couple_precice'])
+const SOLVER_TOOLS = new Set(['run_simulation', 'run_with_generator', 'coupled_solve', 'couple',
+                              'couple_levels', 'couple_precice', 'verify_mesh_independence'])
 const SHELL_TOOLS = new Set(['run_bash', 'Bash'])
 
 /** The text inside MCP's content blocks, escapes turned back into characters. */
@@ -28,19 +29,24 @@ function readable(raw: string): string {
     reason in plain words. Mirrors classify_solver_result in webui/outcome.py. */
 function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'failed'; reason: string } {
   const t = readable(raw)
+  // Two shapes, the same two the server reads (webui/outcome.py): a run reports
+  // "status" plus the verification gate's "trustworthy_result"; a coupling
+  // reports no status at all, only the gate's verdict beside "converged".
+  const trusted = /"trustworthy_result"\s*:\s*true/.test(t)
+  const untrusted = /"trustworthy_result"\s*:\s*false/.test(t)
   const st = t.match(/"status"\s*:\s*"([A-Za-z_]+)"/)
-  const tr = t.match(/"trustworthy_result"\s*:\s*(true|false)/)
-  if (!st) {
-    const line = t.split('\n').map((l) => l.trim()).find(Boolean) || 'no result'
-    return { verdict: 'failed', reason: line.slice(0, 140) }
-  }
-  const status = st[1].toLowerCase()
-  if (!status.startsWith('completed')) {
-    const err = t.match(/"(?:error|message)"\s*:\s*"([^"\n]{1,140})/)
+  const status = st?.[1].toLowerCase() ?? ''
+  const err = t.match(/"(?:error|message)"\s*:\s*"([^"\n]{1,140})/)
+  if (trusted) return { verdict: 'verified', reason: '' }
+  if (status && !status.startsWith('completed')) {
     return { verdict: 'failed', reason: err ? err[1] : `the solver reported “${status}”` }
   }
-  if (status === 'completed' && tr?.[1] === 'true') return { verdict: 'verified', reason: '' }
-  return { verdict: 'unverified', reason: 'ran, but openPASO did not verify the result' }
+  if (status || untrusted || /"(?:converged|all_levels_converged)"\s*:/.test(t)) {
+    if (err) return { verdict: 'failed', reason: err[1] }
+    return { verdict: 'unverified', reason: 'ran, but openPASO did not verify the result' }
+  }
+  const line = t.split('\n').map((l) => l.trim()).find(Boolean) || 'no result'
+  return { verdict: 'failed', reason: line.slice(0, 140) }
 }
 
 /** The failure an ordinary tool result reports, if it reports one. */

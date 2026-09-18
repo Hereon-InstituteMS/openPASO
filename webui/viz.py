@@ -80,34 +80,92 @@ def _csv(p: Path) -> dict:
             "rel": str(p.relative_to(config.SANDBOX_ROOT))}
 
 
+_JSON_FULL_MAX = 4 * 1024 * 1024     # above this, only the head is read
+
+
 def _json(p: Path) -> dict:
+    """A JSON file, or — for a field series, which holds one frame of numbers
+    per timestep — its description only. A run's field file is routinely tens of
+    megabytes, and the interface asks about every JSON a run writes, so parsing
+    all of it here loaded the whole thing into the server to read a dozen
+    fields."""
     try:
+        if p.stat().st_size > _JSON_FULL_MAX:
+            head = _head_fields(p)
+            if head is not None:
+                return _field_series(p, head)
+            return {"kind": "text", "text": _read_text(p),
+                    "syntax": "json", "truncated": True,
+                    "rel": str(p.relative_to(config.SANDBOX_ROOT))}
         obj = json.loads(p.read_text())
     except Exception as e:
         return {"kind": "error", "error": f"json: {e}"}
 
     # A field series is a solver's own output sampled onto a grid, one frame
-    # per stored timestep. Hand back a descriptor and let the browser fetch the
+    # per stored timestep. Hand back a description and let the browser fetch the
     # file once; re-serialising several megabytes through this endpoint would
     # buy nothing.
     if isinstance(obj, dict) and obj.get("kind") == "field_series":
-        return {
-            "kind": "field_series",
-            "url": f"/sandbox-file/{p.relative_to(config.SANDBOX_ROOT)}",
-            "name": p.name,
-            "field": obj.get("field", "field"),
-            "unit": obj.get("unit", ""),
-            "nx": obj.get("nx"), "ny": obj.get("ny"),
-            "vmin": obj.get("vmin"), "vmax": obj.get("vmax"),
-            "n_frames": len(obj.get("times") or []),
-            "x0": obj.get("x0"), "y0": obj.get("y0"),
-            "dx": obj.get("dx"), "dy": obj.get("dy"),
-            # What the picture does not show on its own: the true range behind
-            # the clip, how much is saturated, and where it came from.
-            "provenance": obj.get("provenance") or {},
-        }
+        return _field_series(p, obj)
 
     return {"kind": "json", "obj": obj, "path": str(p)}
+
+
+def _field_series(p: Path, meta: dict) -> dict:
+    """What the interface needs to draw a field: where the file is, the grid it
+    sits on, and the range behind the picture."""
+    times = meta.get("times")
+    return {
+        "kind": "field_series",
+        "url": f"/sandbox-file/{p.relative_to(config.SANDBOX_ROOT)}",
+        "name": p.name,
+        "field": meta.get("field", "field"),
+        "unit": meta.get("unit", ""),
+        "nx": meta.get("nx"), "ny": meta.get("ny"),
+        "vmin": meta.get("vmin"), "vmax": meta.get("vmax"),
+        "n_frames": len(times) if isinstance(times, list) else meta.get("n_frames"),
+        "x0": meta.get("x0"), "y0": meta.get("y0"),
+        "dx": meta.get("dx"), "dy": meta.get("dy"),
+        # What the picture does not show on its own: the true range behind
+        # the clip, how much is saturated, and where it came from.
+        "provenance": meta.get("provenance") or {},
+    }
+
+
+_HEAD_BYTES = 1024 * 1024
+
+
+def _head_fields(p: Path) -> dict | None:
+    """The description at the start of a large field series, read without
+    parsing the frames behind it. None when the file is not one.
+
+    These files are written description first, then the frames, so the fields
+    the interface needs are in the first kilobytes of a file that may be tens
+    of megabytes."""
+    import re
+    with p.open("rb") as f:
+        head = f.read(_HEAD_BYTES).decode("utf-8", "replace")
+    if '"field_series"' not in head[:200]:
+        return None
+    out: dict = {}
+    for key, value in re.findall(r'"([a-z_]+)"\s*:\s*(-?\d+\.?\d*(?:[eE][-+]?\d+)?|"[^"]*")', head):
+        if key in ("field", "unit"):
+            out[key] = value.strip('"')
+        elif key in ("nx", "ny", "vmin", "vmax", "x0", "y0", "dx", "dy", "fps"):
+            try:
+                out[key] = float(value) if "." in value or "e" in value.lower() else int(value)
+            except ValueError:
+                pass
+    times = re.search(r'"times"\s*:\s*\[([^\]]*)\]', head)
+    if times:
+        out["n_frames"] = len([x for x in times.group(1).split(",") if x.strip()])
+    prov = re.search(r'"provenance"\s*:\s*(\{[^{}]*\})', head)
+    if prov:
+        try:
+            out["provenance"] = json.loads(prov.group(1))
+        except ValueError:
+            pass
+    return out
 
 
 def _vtk(p: Path) -> dict:

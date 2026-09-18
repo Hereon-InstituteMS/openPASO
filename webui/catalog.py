@@ -57,16 +57,24 @@ def cost_of(model: str, tokens_in: int, tokens_out: int) -> float | None:
     return (tokens_in * p[0] + tokens_out * p[1]) / 1e6
 
 
-async def _local_up(port: int) -> bool:
+async def _local_models(port: int) -> list[str] | None:
+    """The model names a local server offers, or None when nothing serves here.
+
+    The runner sends the id from the picker as the model name, so a server that
+    answers on the port but offers something else fails on the first step. A
+    port that responds is not the model being there."""
     try:
         import httpx
         async with httpx.AsyncClient(timeout=1.5) as c:
             r = await c.get(f"http://127.0.0.1:{port}/v1/models")
-            # anything but a served model list means the runner would fail here:
-            # a 404 from an unrelated server used to show as a ready model
-            return r.status_code == 200 and isinstance(r.json().get("data"), list)
+            if r.status_code != 200:
+                return None
+            data = r.json().get("data")
+            if not isinstance(data, list):
+                return None
+            return [str(m.get("id")) for m in data if isinstance(m, dict) and m.get("id")]
     except Exception:
-        return False
+        return None
 
 
 def _claude_model_setting() -> str | None:
@@ -118,14 +126,18 @@ async def models() -> dict:
         })
 
     local = []
-    ups = await asyncio.gather(*[_local_up(m["port"]) for k, m in config.MODELS.items()
-                                 if k != "mock"])
-    for (mid, m), up in zip([(k, m) for k, m in config.MODELS.items() if k != "mock"], ups):
-        local.append({
-            "id": mid, "label": m["label"], "kind": "local", "available": up,
-            "status": (f"running on port {m['port']}" if up
-                       else f"not running: start its model server on port {m['port']}"),
-        })
+    rows = [(k, m) for k, m in config.MODELS.items() if k != "mock"]
+    served = await asyncio.gather(*[_local_models(m["port"]) for _, m in rows])
+    for (mid, m), names in zip(rows, served):
+        if names is None:
+            status, ok = f"not running: start its model server on port {m['port']}", False
+        elif mid in names:
+            status, ok = f"running on port {m['port']}", True
+        else:
+            offered = ", ".join(names[:3]) or "nothing"
+            status, ok = (f"port {m['port']} serves {offered}, not {mid}"), False
+        local.append({"id": mid, "label": m["label"], "kind": "local",
+                      "available": ok, "status": status})
     groups.append({
         "kind": "local", "title": "On this machine",
         "note": "Served by a local model server. Prompts stay on this machine; web search still goes out.",

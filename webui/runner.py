@@ -146,7 +146,11 @@ def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent", take_steer
             mode = get_mode()
             if mode == "plan":
                 fut = gate.open(call_id)
-                decision = await fut
+                try:
+                    decision = await fut
+                finally:
+                    # a run stopped while this waited would leave the future here
+                    gate._pending.pop(call_id, None)
                 if not decision["approved"]:
                     await emitter({"type": "tool_call_rejected",
                                    "call_id": call_id,
@@ -193,7 +197,7 @@ def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent", take_steer
             # A correction the user sent while this step ran. A ReAct agent reads
             # the tool result next, so that is where it is handed over: at most
             # one step late, and never by interrupting a solver mid-calculation.
-            steers = take_steers() if take_steers else []
+            steers = take_steers() if take_steers else []   # main agent: takes them
             if steers:
                 note = "\n\n".join(x["text"] for x in steers)
                 result = (f"{result}\n\n[MESSAGE FROM THE USER, sent while this step was "
@@ -362,7 +366,8 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
         # and gated like the main agent's: "Ask before each step" means every
         # step, including the ones a critic takes (it ran a solver unasked).
         sub_tools = [_wrap_tool(t, emitter=emitter, get_mode=get_mode,
-                                gate=gate, agent_label=role, steps=steps)
+                                gate=gate, agent_label=role, steps=steps,
+                                take_steers=(lambda: take_steers(role)) if take_steers else None)
                      for t in (mcp_tools + host) if t.name != "spawn_subagent"]
         sys = _SUB_PROMPTS.get(role, _SUB_PROMPTS["researcher"])
         sub_agent = create_react_agent(_sub_llm(), tools=sub_tools,

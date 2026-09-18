@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, clock, money } from '../api'
+import { api, clock, fileUrl, money } from '../api'
 import { navigate } from '../route'
 import type { AppConfig, FieldSeries, ModelGroup } from '../types'
 import { useRun } from '../useRun'
@@ -233,7 +233,7 @@ export default function RunView({ id, config, groups }: {
               <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
                 {pictures.map((p) => (
                   <figure key={p.rel} className="bg-soft border line rounded-[8px] p-3">
-                    <img src={`/sandbox-file/${p.rel}`} alt={p.name} loading="lazy" className="w-full rounded-[6px] bg-white" />
+                    <img src={fileUrl(p.rel)} alt={p.name} loading="lazy" className="w-full rounded-[6px] bg-white" />
                     <figcaption className="num mt-2 text-[13px] text-muted break-all">{p.name}</figcaption>
                   </figure>
                 ))}

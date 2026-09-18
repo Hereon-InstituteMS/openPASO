@@ -19,7 +19,7 @@ import re
 # a shell command that exits zero proves a shell command exited zero.
 SOLVER_TOOLS = frozenset({
     "run_simulation", "run_with_generator", "coupled_solve",
-    "couple", "couple_precice",
+    "couple", "couple_levels", "couple_precice", "verify_mesh_independence",
 })
 
 RUNNING = "running"
@@ -56,17 +56,55 @@ def _payload(raw: str) -> dict | None:
     return out
 
 
+def _verdict_of(node: dict) -> str | None:
+    """One report's verdict, or None when the node reports nothing.
+
+    Two shapes exist. A run reports ``status`` and, from openPASO's
+    verification gate, ``trustworthy_result``. A coupling reports no status at
+    all: it carries the gate's ``trustworthy_result`` beside ``converged``.
+    Reading only the first shape called every verified coupling a failure."""
+    status = str(node.get("status", "")).lower()
+    trusted = node.get("trustworthy_result")
+    if status:
+        if not status.startswith("completed"):
+            return "failed"
+        return "verified" if (status == "completed" and trusted is True) else "unverified"
+    if trusted is True:
+        return "verified"
+    if trusted is False or "converged" in node or "all_levels_converged" in node:
+        # it ran and reported on itself, but nothing here is a verified result
+        return "failed" if node.get("error") else "unverified"
+    if node.get("error"):
+        return "failed"
+    return None
+
+
+def _walk(node, out: list[str]) -> None:
+    """Every report inside a result, however deep. couple_levels returns one
+    entry per level, each with its own verdict."""
+    if isinstance(node, dict):
+        v = _verdict_of(node)
+        if v:
+            out.append(v)
+        for child in node.values():
+            _walk(child, out)
+    elif isinstance(node, list):
+        for child in node:
+            _walk(child, out)
+
+
 def classify_solver_result(raw: str) -> str:
     """'verified', 'unverified' or 'failed' for one solver tool result."""
     p = _payload(raw)
     if not p:
         return "failed"
-    status = str(p.get("status", "")).lower()
-    if not status.startswith("completed"):
-        return "failed"
-    if status == "completed" and p.get("trustworthy_result") is True:
+    found: list[str] = []
+    _walk(p, found)
+    if "verified" in found:
         return "verified"
-    return "unverified"
+    if "unverified" in found:
+        return "unverified"
+    return "failed"
 
 
 def solver_verdict(events) -> str | None:

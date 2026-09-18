@@ -39,6 +39,12 @@ export function socket(id: string): WebSocket {
    and share, and whose machine it ran on is nobody else's business. */
 /** Home directories out of anything shown. Text is otherwise left as written:
     turning a literal backslash-n into a line break broke LaTeX such as \nabla. */
+/** A run's own file, as a URL. A name may contain ? or #, which the browser
+    would read as a query or fragment and ask for a shorter path than meant. */
+export function fileUrl(rel: string): string {
+  return '/sandbox-file/' + rel.split('/').map(encodeURIComponent).join('/')
+}
+
 export function tidy(s: string): string {
   return s.replace(/\/(?:home|Users)\/[^/\s:'"]+/g, '~')
 }

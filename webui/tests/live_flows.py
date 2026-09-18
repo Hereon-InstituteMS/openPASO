@@ -261,5 +261,6 @@ async def main():
     if "critic" in which: await t_plan_critic()
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS)-len(bad)}/{len(RESULTS)} passed")
+    return 1 if bad else 0
 
-asyncio.run(main())
+sys.exit(asyncio.run(main()))

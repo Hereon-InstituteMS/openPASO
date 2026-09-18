@@ -19,7 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from webui import app as webui_app
-from webui import config, files, sessions
+from webui import config, files, runs, sessions
 
 
 @pytest.fixture
@@ -241,6 +241,88 @@ def test_a_solver_result_counts_only_when_openpaso_verified_it():
     assert c(_solver_result("failed")) == "failed"
     assert c("[{'type': 'text', 'text': 'Unknown solver: abaqus'}]") == "failed"
     assert c("") == "failed"
+
+
+def _coupling_result(**fields):
+    return "[{'type': 'text', 'text': '" + json.dumps(fields) + "'}]"
+
+
+def test_a_coupling_reports_its_verdict_in_its_own_shape():
+    """couple and couple_precice carry the verification gate's verdict with no
+    `status` field at all. Reading only the run shape called every verified
+    coupling a failure, so a real coupled result could never be finished."""
+    from webui.outcome import SOLVER_TOOLS, classify_solver_result as c
+    assert c(_coupling_result(converged=True, iterations=7, trustworthy_result=True)) == "verified"
+    assert c(_coupling_result(converged=True, trustworthy_result=False)) == "unverified"
+    assert c(_coupling_result(converged=False, error="coupling driver failed")) == "failed"
+    # couple_levels answers one level at a time
+    nested = _coupling_result(all_levels_converged=True, levels_run=2,
+                              levels=[{"converged": True, "trustworthy_result": False},
+                                      {"converged": True, "trustworthy_result": True}])
+    assert c(nested) == "verified"
+    assert {"couple", "couple_levels", "couple_precice", "verify_mesh_independence"} <= SOLVER_TOOLS
+
+
+def test_the_run_list_is_scrubbed_like_every_other_answer(client):
+    """A prompt can name the folder someone worked in."""
+    sid = client.post("/api/sessions", json={"model": "mock", "test": True}).json()["id"]
+    try:
+        run = runs.get(sid)
+        run.state["events"].append({"type": "user_msg", "seq": 1,
+                                    "text": f"use the mesh in {Path.home()}/meshes/part.msh"})
+        run.save()
+        body = client.get("/api/sessions?all=true").text
+        assert str(Path.home()) not in body and "~/meshes/part.msh" in body
+    finally:
+        client.delete(f"/api/sessions/{sid}")
+
+
+def test_a_correction_reaches_a_critic_while_it_works_and_the_main_agent_after():
+    """A critic can run for many minutes. A correction queued until it finished
+    arrived after the thing it was meant to prevent."""
+    from webui.runs import Run
+    run = Run.__new__(Run)
+    run.steers = [{"id": "st_1", "text": "Stop running MPI tests."}]
+    run.emit = lambda e: asyncio.sleep(0)
+    run.push_snapshot = lambda: asyncio.sleep(0)
+    first = run._take_steers("critic")
+    assert [s["text"] for s in first] == ["Stop running MPI tests."]
+    assert run._take_steers("critic") == [], "the critic is not told twice"
+    assert [s["text"] for s in run._take_steers("main")] == ["Stop running MPI tests."]
+    assert run.steers == []
+
+
+def test_a_large_field_file_is_described_without_being_parsed(tmp_path):
+    from webui import viz
+    p = config.SANDBOX_ROOT / "webui_abc123def" / "field.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    frames = [[[0.123456] * 100 for _ in range(100)] for _ in range(60)]
+    p.write_text(json.dumps({"kind": "field_series", "field": "vorticity", "unit": "1/s",
+                             "nx": 100, "ny": 100, "vmin": -1.0, "vmax": 1.0,
+                             "times": [i * 0.1 for i in range(40)], "frames": frames}))
+    try:
+        assert p.stat().st_size > 4 * 1024 * 1024, p.stat().st_size
+        out = viz._json(p)
+        assert out["kind"] == "field_series"
+        assert out["field"] == "vorticity" and out["nx"] == 100 and out["n_frames"] == 40
+        assert out["vmin"] == -1.0 and out["vmax"] == 1.0
+    finally:
+        p.unlink()
+
+
+def test_a_file_name_with_a_question_mark_still_downloads(client):
+    run = config.SANDBOX_ROOT / "webui_abc123def" / "work"
+    run.mkdir(parents=True, exist_ok=True)
+    odd = run / "sweep?a=1.txt"
+    odd.write_text("value 3\n")
+    try:
+        from urllib.parse import quote
+        url = "/sandbox-file/" + "/".join(quote(s, safe="") for s in
+                                          ("webui_abc123def", "work", "sweep?a=1.txt"))
+        r = client.get(url)
+        assert r.status_code == 200 and "value 3" in r.text
+    finally:
+        odd.unlink()
 
 
 def test_outcome_is_judged_per_turn_and_needs_a_verified_solver_result():

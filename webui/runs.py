@@ -298,9 +298,21 @@ class Run:
         await self.emit({"type": "user_steer", "id": sid, "text": text, "state": "queued"})
         await self.push_snapshot()
 
-    def _take_steers(self) -> list[dict]:
+    def _take_steers(self, agent: str = "main") -> list[dict]:
         """Called by the tool wrapper when a tool returns: the correction is
-        handed to the model with that result, which it reads next."""
+        handed to the model with that result, which it reads next.
+
+        A sub-agent gets a copy rather than taking it away. A critic can run for
+        many minutes, and a correction sent during its work ("stop running MPI
+        tests") is for whoever is working; queueing it until the critic finished
+        meant it arrived after the thing it was meant to prevent. The main agent
+        still receives it, so the run as a whole is not steered behind its
+        back."""
+        if agent != "main":
+            fresh = [s for s in self.steers if agent not in s.setdefault("seen_by", set())]
+            for s in fresh:
+                s["seen_by"].add(agent)
+            return [{"id": s["id"], "text": s["text"]} for s in fresh]
         taken, self.steers = self.steers, []
         for s in taken:
             asyncio.ensure_future(self.emit(

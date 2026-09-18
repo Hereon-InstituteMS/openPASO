@@ -197,5 +197,6 @@ async def main():
         ok("no page errors", not errs, "; ".join(errs[:3]))
         await b.close()
     print(f"\n{sum(1 for _, c in LOG if c)}/{len(LOG)} passed")
+    return 1 if any(not c for _, c in LOG) else 0
 
-asyncio.run(main())
+sys.exit(asyncio.run(main()))

@@ -302,7 +302,8 @@ async def list_sessions(all: bool = False):
         if not all and (not row["prompt"] or row["model_kind"] == "test"):
             continue
         rows.append(row)
-    return {"sessions": rows, "running": runs.running_count()}
+    # a prompt can name the folder someone worked in; every other route scrubs
+    return scrub({"sessions": rows, "running": runs.running_count()})
 
 
 @app.post("/api/sessions")

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { fileUrl } from '../api'
 
 /* Whatever the run wrote, readable.
 
@@ -79,7 +80,7 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
         <div className="flex items-center gap-4">
           <span className="num text-[14px] text-ink2 min-w-0 overflow-hidden
                            text-ellipsis whitespace-nowrap">{name}</span>
-          <a href={`/sandbox-file/${rel}`} download
+          <a href={fileUrl(rel)} download
              className="ml-auto h-8 px-3.5 rounded-[6px] border line text-[13px] text-muted
                         grid place-items-center transition-colors duration-150
                         hover:text-ink2">
@@ -132,7 +133,7 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
           )}
 
           {viz?.kind === 'image' && (
-            <img src={`/sandbox-file/${rel}`} alt={name}
+            <img src={fileUrl(rel)} alt={name}
                  className="max-w-full rounded-[6px] border line" />
           )}
 

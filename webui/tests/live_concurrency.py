@@ -6,7 +6,7 @@ Opt-in (real model, a few cents), server running:
 Guards the bug where closing one run's tool-server connection from a different
 task broke a second run's connection as it was being opened.
 """
-import asyncio, json, os, urllib.request
+import asyncio, json, os, sys, urllib.request
 import websockets
 
 BASE = os.environ.get("OPENPASO_UI", "http://127.0.0.1:8080")
@@ -59,5 +59,6 @@ async def main():
     for sid in [warm] + [r[0] for r in results]:
         urllib.request.urlopen(urllib.request.Request(f"{BASE}/api/sessions/{sid}", method="DELETE"), timeout=30)
     print("ALL PASS" if not bad else f"{bad} FAILED")
+    return 1 if bad else 0
 
-asyncio.run(main())
+sys.exit(asyncio.run(main()))
