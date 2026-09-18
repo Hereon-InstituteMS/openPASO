@@ -43,6 +43,10 @@ UNFINISHED = "unfinished"   # the log has no end and nothing is running it
 
 
 class Run:
+    # a default on the class, so a Run built in a test or by a path that does
+    # not run __init__ still answers this question
+    deleted = False
+
     def __init__(self, sid: str):
         self.sid = sid
         self.state = sessions.load(sid)
@@ -56,6 +60,10 @@ class Run:
         self.agent_context = None
         self.turn_task: asyncio.Task | None = None
         self.subscribers: set[WebSocket] = set()
+        # held while an event goes out and while a tab is being greeted, so the
+        # two cannot interleave and leave a tab's first view missing an event
+        self.send_lock = asyncio.Lock()
+        self.deleted = False
         self.steers: list[dict] = []           # corrections not yet delivered
         # conversation memory survives the agent being rebuilt; a new thread is
         # started (and re-seeded from the log) only when the old one cannot be
@@ -144,18 +152,37 @@ class Run:
         await self.broadcast(event)
 
     async def broadcast(self, event: dict):
+        """Send one event to every tab watching.
+
+        Sent to all of them at once, with a deadline: awaiting each in turn let
+        a tab in a background window, whose socket has stopped draining, hold up
+        the run itself and every other tab with it. A socket that cannot take an
+        event within the deadline is dropped; the run is the record, and that tab
+        reconnects and is replayed from it.
+
+        Under the same lock the handshake uses, so an event cannot slip between
+        a new tab's snapshot and its hello and be lost from that tab's view."""
         from .privacy import scrub
         text = json.dumps(scrub(event), default=str)
-        for ws in list(self.subscribers):
-            try:
-                await ws.send_text(text)
-            except Exception:
-                self.subscribers.discard(ws)
+        async with self.send_lock:
+            watchers = list(self.subscribers)
+            if not watchers:
+                return
+
+            async def to(ws):
+                try:
+                    await asyncio.wait_for(ws.send_text(text), timeout=10)
+                except Exception:
+                    self.subscribers.discard(ws)
+
+            await asyncio.gather(*(to(ws) for ws in watchers))
 
     async def push_snapshot(self):
         await self.broadcast({"type": "session", "session": self.snapshot()})
 
     def save(self):
+        if self.deleted:                  # never write a deleted run back
+            return
         try:
             sessions.save(self.state)
         except Exception:
@@ -216,7 +243,7 @@ class Run:
     # ── turns ───────────────────────────────────────────────────────────
     async def prompt(self, text: str, attachments: list[str] | None = None):
         text = (text or "").strip()
-        if not text:
+        if not text or self.deleted:      # the run and its folder are gone
             return
         if self.running:
             # a message sent while the run works is a correction, not a new turn
@@ -238,6 +265,8 @@ class Run:
         """One turn. It ends in exactly one terminal state, and subscribers are told
         which. `completed` is a claim about the physics: it needs a solver to
         have run, otherwise the run ended without a result."""
+        from .runner import set_search_scope
+        set_search_scope(self.sid)        # this run's searches are its own
         outcome = "completed"
         use_claude = self.state["model"] == config.CLAUDE_CODE_ID
         start = len(self.state["events"])

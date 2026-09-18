@@ -143,6 +143,22 @@ class StepControl:
         return [c for c, t in self.tasks.items() if not t.done()]
 
 
+def set_search_scope(name: str) -> None:
+    """Say whose searches these are.
+
+    One server process serves many runs for days, and the search tool keeps what
+    it has already fetched. Without a scope a run could be handed snippets
+    another run fetched, and its transcript would show results it never asked
+    for. Harmless where the tool has no such scope (an older agent module)."""
+    try:
+        import agent as la
+        scope = getattr(la, "SEARCH_SCOPE", None)
+        if scope is not None:
+            scope.set(name)
+    except Exception:          # the interface must not fail over a cache key
+        pass
+
+
 def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent", take_steers=None,
                steps: StepControl | None = None):
     """Return a copy of ``tool`` whose invoke emits events and (when in

@@ -70,11 +70,12 @@ async def _say_what_happened_to_live_runs():
             if ended:
                 note += (f" {ended} process{'es' if ended != 1 else ''} it had started "
                          f"{'were' if ended != 1 else 'was'} ended.")
-            run.state["events"].append({
-                "type": "error", "outcome": runs.UNFINISHED, "t": int(time.time() * 1000),
-                "message": note, "processes_ended": ended})
-            run.state["events"].append({"type": "done", "outcome": runs.UNFINISHED,
-                                        "t": int(time.time() * 1000)})
+            # through emit, so these carry the sequence numbers and the server
+            # marker every other ending has; a page that reconnects reads them
+            # exactly as it reads a normal end
+            await run.emit({"type": "error", "outcome": runs.UNFINISHED,
+                            "message": note, "processes_ended": ended})
+            await run.emit({"type": "done", "outcome": runs.UNFINISHED})
             run.save()
 # The interface is served by this app, so cross-origin access is only ever
 # wanted from the Vite dev server. A wildcard let any page a researcher had
@@ -522,6 +523,9 @@ async def delete_session(sid: str):
         await live.close_agent()
         runs.RUNS.pop(sid, None)
     import shutil
+    live = runs.live(sid)
+    if live is not None and live.running:
+        raise HTTPException(409, "This run is still working. Stop it first.")
     if not re.fullmatch(r"[0-9a-f]{6,32}", sid or ""):
         # before anything is built from it: "../other_run" would otherwise name
         # a folder whose processes were ended before the id was refused
@@ -536,7 +540,11 @@ async def delete_session(sid: str):
             since = sessions.load(sid).get("created_at")
         except Exception:
             since = None
-        await asyncio.to_thread(proctree.end_run_processes, folder / "work", 3.0, since)
+        work = folder / "work"
+        # a run can replace its own work directory with a link; ending "its"
+        # processes would then mean ending whatever lives where that points
+        if work.exists() and work.resolve().is_relative_to(folder.resolve()):
+            await asyncio.to_thread(proctree.end_run_processes, work, 3.0, since)
     try:
         deleted = sessions.delete(sid)
     except ValueError:
@@ -544,6 +552,14 @@ async def delete_session(sid: str):
     if folder.is_dir():
         shutil.rmtree(folder, ignore_errors=True)
     _SUMMARY_CACHE.pop(sid, None)
+    if live is not None:
+        # a tab still holding this run could otherwise prompt it or change its
+        # mode, and Run.save would write the record back after the delete
+        live.deleted = True
+        for ws in list(live.subscribers):
+            with contextlib.suppress(Exception):
+                await ws.close()
+        live.subscribers.clear()
     return {"deleted": deleted}
 
 
@@ -587,6 +603,11 @@ async def upload(sid: str, files_in: list[UploadFile] = File(..., alias="files")
     import re as _re
     dest = run.workdir / "uploads"
     dest.mkdir(parents=True, exist_ok=True)
+    if not dest.resolve().is_relative_to(run.workdir.resolve()):
+        # the run made "uploads" a link somewhere else; a person's file would
+        # then be written outside the run that was promised to hold it
+        raise HTTPException(409, "This run's uploads folder does not point inside the run. "
+                                 "Nothing was written.")
     saved = []
     for up in files_in:
         name = _re.sub(r"[^A-Za-z0-9._-]", "_", Path(up.filename or "file").name)[:120]
@@ -630,12 +651,17 @@ async def ws_endpoint(ws: WebSocket, sid: str):
         await ws.send_text(json.dumps({"type": "error", "message": f"no such run: {sid}"}))
         await ws.close()
         return
-    run.subscribers.add(ws)
     try:
         # The live record, not a copy read from disk: a second tab used to load
         # its own stale copy and write it back over the running one on close.
-        await ws.send_text(json.dumps(scrub({"type": "hello", "session": run.snapshot(),
-                                             "events": run.state["events"]}), default=str))
+        # Greeting and subscribing happen under the run's send lock: an event
+        # appended after the snapshot but delivered before the greeting was
+        # dropped by the page, which clears what it holds when the greeting
+        # arrives, so a step could be missing from that tab for good.
+        async with run.send_lock:
+            await ws.send_text(json.dumps(scrub({"type": "hello", "session": run.snapshot(),
+                                                 "events": run.state["events"]}), default=str))
+            run.subscribers.add(ws)
         while True:
             raw = await ws.receive_text()
             try:

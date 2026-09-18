@@ -59,7 +59,11 @@ def openrouter_key_source() -> tuple[str | None, str | None]:
     for candidate, words in _env_files():
         if not candidate.is_file():
             continue
-        for raw in candidate.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = candidate.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            continue          # unreadable is "no key here", not a broken server
+        for raw in lines:
             line = raw.strip()
             if line.startswith("OPENROUTER_API_KEY="):
                 value = line.split("=", 1)[1].strip().strip("'\"")
@@ -82,12 +86,12 @@ def _fourc_env() -> dict[str, str]:
     told a person with 4C elsewhere that they do not have 4C. What is set by
     hand is passed on; a guess is offered only when it is actually there."""
     out: dict[str, str] = {}
-    for name, guess in (("FOURC_ROOT", Path.home() / "4C"),
-                        ("FOURC_BINARY", Path.home() / "4C/build/4C")):
+    for name, guess, ok in (("FOURC_ROOT", Path.home() / "4C", Path.is_dir),
+                            ("FOURC_BINARY", Path.home() / "4C/build/4C", Path.is_file)):
         given = os.environ.get(name)
         if given:
             out[name] = given
-        elif guess.exists():
+        elif ok(guess):       # a directory where a directory is meant, a file where a file is
             out[name] = str(guess)
     return out
 

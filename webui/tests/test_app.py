@@ -526,6 +526,16 @@ def test_encoded_data_survives_every_substitution_not_only_the_newest():
     assert str(Path.home()) not in out and "~/run/out.vtu" in out
 
 
+def test_the_encoded_guard_cannot_hide_a_real_path():
+    """Protecting "any long run of base64 characters" also protects a long
+    enough home path, and the guard would then hide exactly what the scrubbing
+    exists to remove. Only the payloads that carry encoded data are protected."""
+    from webui.privacy import scrub_text
+    long_path = f"{Path.home()}/" + "a" * 60
+    out = scrub_text(f"the run wrote to {long_path} and stopped")
+    assert str(Path.home()) not in out, out[:120]
+
+
 def test_a_name_inside_encoded_data_is_left_alone():
     """The frames of a field file are base64, and a user name occurs in one by
     chance: "...+alexander/..." has exactly the characters the name pattern

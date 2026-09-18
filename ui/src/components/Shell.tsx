@@ -52,8 +52,11 @@ export default function Shell({ current, view, config, children }: {
   // A tab left open across an update keeps running the code it loaded with, so
   // a control fixed since then still misbehaves in front of you. The page can
   // see that: it knows which bundle it is, and the server says which it serves.
+  // only a built page can be out of date: under the dev server this module is
+  // its own file (Shell.tsx) and would always disagree with the served bundle
   const mine = import.meta.url.split('/').pop()
-  const stale = !!config?.build && !!mine && config.build !== mine
+  const built = /^index-.*\.js$/.test(mine || '')
+  const stale = built && !!config?.build && config.build !== mine
 
   useEffect(() => {
     const cur = rows?.find((r) => r.id === current)

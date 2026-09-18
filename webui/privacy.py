@@ -28,12 +28,17 @@ _ANY_HOME_RE = re.compile(_BOUNDARY + r"/(?:home|Users|media)/[A-Za-z0-9._-]+")
 _USER_RE = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(_USER) + r"(?![A-Za-z0-9_-])") if len(_USER) >= 3 else None
 
 
-# A long unbroken run of base64 is a field file's frames, not prose. The paths
-# above are guarded by their boundary, but a bare name needs the same care: in
-# "...+alexander/..." the characters around it are exactly the boundary this
-# pattern wants, so encoded data was being rewritten and decoded to a different
-# field than the solver produced.
-_ENCODED = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+# The encoded payloads a run writes: a field series keeps its frames and its
+# mask as base64, and those must reach the browser byte for byte or the picture
+# shows numbers nobody computed.
+#
+# Named rather than guessed. "any long run of base64 characters" also matches a
+# long enough home path — "/home/<name>/" followed by forty characters is one
+# such run — and the guard would then hide from the scrubber exactly what the
+# scrubber exists to remove. So only the values of the keys that carry encoded
+# data are protected, and everything else is scrubbed as prose.
+_ENCODED = re.compile(r'"(?:frames|mask|data|image)"\s*:\s*"[A-Za-z0-9+/=\s]{40,}"'
+                      r"|data:[\w.+-]+/[\w.+-]+;base64,[A-Za-z0-9+/=]+")
 
 
 def _scrub_prose(t: str) -> str:
