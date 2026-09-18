@@ -67,8 +67,8 @@ async def stream_turn(
     if mode == "plan":
         raise RuntimeError(
             "Claude Code runs headless here, so it cannot stop and ask you to "
-            "approve each call. Use accept or autonomous mode with it, or pick "
-            "an API model to keep plan mode.")
+            "approve each step. Choose \"Run without asking\" for it, or pick "
+            "another model to keep \"Ask before each step\".")
 
     cfg = _mcp_config(servers)
     tmp = Path(tempfile.mkdtemp(prefix="openpaso-cc-"))
@@ -108,6 +108,9 @@ async def stream_turn(
     except asyncio.CancelledError:
         _kill(proc)
         raise
+    finally:
+        # one of these per turn, left behind on a long-lived server
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _kill(proc) -> None:

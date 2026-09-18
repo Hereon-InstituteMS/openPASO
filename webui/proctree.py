@@ -62,15 +62,39 @@ def _cwd_under(pid: int, root: str) -> bool:
     return cwd == root or cwd.startswith(root + os.sep)
 
 
-def run_processes(workdir: Path) -> list[int]:
-    """Every live process belonging to the run whose work directory is given."""
+def _started_at(pid: int) -> float | None:
+    """When a process started, in epoch seconds."""
+    try:
+        boot = _boot_time()
+        ticks = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
+        return boot + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _boot_time() -> float:
+    for line in Path("/proc/stat").read_text().splitlines():
+        if line.startswith("btime "):
+            return float(line.split()[1])
+    return 0.0
+
+
+def run_processes(workdir: Path, since: float | None = None) -> list[int]:
+    """Every live process belonging to the run whose work directory is given.
+
+    ``since`` is when the run began. A process that merely sits in the folder
+    (a terminal someone opened there) is only claimed when it started after the
+    run did; anything carrying the run's marker is the run's work whenever it
+    started."""
     root = str(Path(workdir).resolve())
     marker = f"OPENPASO_CELL_WORKDIR={root}".encode()
     me = os.getpid()
     pids = [p for p in _pids() if p != me and _owned(p)]
     parent = {p: _ppid(p) for p in pids}
 
-    seeds = {p for p in pids if _environ_has(p, marker) or _cwd_under(p, root)}
+    seeds = {p for p in pids if _environ_has(p, marker)
+             or (_cwd_under(p, root)
+                 and (since is None or (_started_at(p) or 0) >= since - 1))}
     # the web server itself may have been started from inside a run folder;
     # never include it or its ancestors
     seeds.discard(me)
@@ -95,15 +119,15 @@ def _is_openpaso_server(pid: int) -> bool:
                for i, a in enumerate(argv))
 
 
-def end_step_processes(workdir: Path, grace: float = 3.0) -> int:
+def end_step_processes(workdir: Path, grace: float = 3.0, since: float | None = None) -> int:
     """End what the run's current work started, but not the openPASO server the
     run is connected to: the run continues after one step is ended."""
-    return _end([p for p in run_processes(workdir) if not _is_openpaso_server(p)], grace)
+    return _end([p for p in run_processes(workdir, since) if not _is_openpaso_server(p)], grace)
 
 
-def end_run_processes(workdir: Path, grace: float = 3.0) -> int:
+def end_run_processes(workdir: Path, grace: float = 3.0, since: float | None = None) -> int:
     """TERM, wait, then KILL every process of the run. Returns how many ended."""
-    return _end(run_processes(workdir), grace)
+    return _end(run_processes(workdir, since), grace)
 
 
 def _end(targets: list[int], grace: float) -> int:

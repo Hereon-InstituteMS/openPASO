@@ -54,60 +54,29 @@ def _syntax_for(p: Path) -> str:
             ".sh": "bash"}.get(p.suffix.lower(), "text")
 
 
+_PREVIEW_ROWS = 999
+
+
 def _csv(p: Path) -> dict:
+    """The first rows of a table, for the preview. A solver log can be hundreds
+    of megabytes, so only what is shown is read (plus one row, to know whether
+    to say the table is cut off)."""
+    from itertools import islice
+    delimiter = "\t" if p.suffix.lower() == ".tsv" else ","
     try:
         with p.open(newline="") as f:
-            rows = list(csv.reader(f))
+            rows = list(islice(csv.reader(f, delimiter=delimiter), _PREVIEW_ROWS + 2))
     except Exception as e:
         return {"kind": "error", "error": f"csv read failed: {e}"}
     if not rows:
         return {"kind": "table", "header": [], "rows": []}
     header = rows[0]
-    body = rows[1:1000]
-    cols = list(zip(*body)) if body else []
-    plot = None
-    if len(header) >= 2:
-        try:
-            x = [float(v) for v in cols[0]]
-            traces = []
-            for i, name in enumerate(header[1:], start=1):
-                ys = []
-                for v in cols[i]:
-                    try:
-                        ys.append(float(v))
-                    except ValueError:
-                        ys.append(None)
-                traces.append({"x": x, "y": ys, "name": name,
-                               "mode": "lines+markers", "type": "scatter"})
-            plot = {
-                "data": traces,
-                "layout": {
-                    "title": p.name,
-                    "xaxis": {"title": header[0]},
-                    "yaxis": {"title": "value"},
-                    "margin": {"t": 40, "l": 60, "r": 20, "b": 50},
-                },
-                # Plotly config — the frontend forwards these flags so
-                # axes, titles and legend entries become click-editable
-                # in place, and the toolbar exposes PNG/SVG download.
-                "config": {
-                    "editable": True,
-                    "edits": {"titleText": True, "axisTitleText": True,
-                              "legendText": True,
-                              "annotationText": True,
-                              "shapePosition": True},
-                    "responsive": True,
-                    "displayModeBar": True,
-                    "toImageButtonOptions": {
-                        "format": "png", "filename": p.stem,
-                        "scale": 2,
-                    },
-                },
-            }
-        except Exception:
-            plot = None
+    body = rows[1:_PREVIEW_ROWS + 1]
+    # No figure is built here: the interface draws the chart itself, and the
+    # Plotly figure and its editable-toolbar config this used to return were
+    # read by nothing.
     return {"kind": "table", "header": header, "rows": body,
-            "truncated": len(rows) > 1001, "plot": plot,
+            "truncated": len(rows) > _PREVIEW_ROWS + 1,
             "rel": str(p.relative_to(config.SANDBOX_ROOT))}
 
 

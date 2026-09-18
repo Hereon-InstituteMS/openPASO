@@ -320,7 +320,8 @@ class Run:
         await self.emit({"type": "step_ending", "call_id": call_id})
         # the step's processes first: a solver killed underneath its tool makes
         # the tool return by itself, which leaves the openPASO connection intact
-        await asyncio.to_thread(proctree.end_step_processes, self.workdir)
+        await asyncio.to_thread(proctree.end_step_processes, self.workdir, 3.0,
+                                self.state.get("created_at"))
         with contextlib.suppress(BaseException):
             await asyncio.wait_for(asyncio.shield(task), timeout=6)
         if not task.done():
@@ -340,8 +341,9 @@ class Run:
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await asyncio.wait_for(asyncio.shield(task), timeout=5)
         await self.close_agent()
-        ended = await asyncio.to_thread(proctree.end_run_processes, self.workdir)
-        left = await asyncio.to_thread(proctree.run_processes, self.workdir)
+        since = self.state.get("created_at")
+        ended = await asyncio.to_thread(proctree.end_run_processes, self.workdir, 3.0, since)
+        left = await asyncio.to_thread(proctree.run_processes, self.workdir, since)
         # the conversation may now hold a tool call with no answer; continue in a
         # fresh thread seeded from the log rather than on a broken one
         self.thread += 1

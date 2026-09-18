@@ -39,6 +39,10 @@ export function useRun(id: string) {
         let e: Ev & { session?: Session; events?: Ev[] }
         try { e = JSON.parse(m.data) } catch { return }
         if (e.type === 'hello') {
+          // the replay is the whole truth; anything buffered from the socket
+          // that just closed is in it already and would be shown twice
+          buffer.current = []
+          if (frame.current) { cancelAnimationFrame(frame.current); frame.current = 0 }
           setSession(e.session!); setEvents(e.events || []); setLink('live')
           const first = firstPrompt.get(id)
           if (first && !(e.events || []).some((x) => x.type === 'user_msg')) {

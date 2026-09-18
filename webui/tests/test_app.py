@@ -102,6 +102,70 @@ def test_files_are_served_from_run_folders_only(client):
     assert client.post("/api/extract_params", json={"source": "N = 3"}).status_code in (404, 405)
 
 
+def test_a_download_is_scrubbed_like_everything_else(client, tmp_path, monkeypatch):
+    """The download route hands over whole files; it used to be the one way a
+    home path could reach the browser."""
+    run = config.SANDBOX_ROOT / "webui_abc123def"
+    (run / "work").mkdir(parents=True, exist_ok=True)
+    log = run / "work" / "solver.log"
+    log.write_text(f"reading mesh from {Path.home()}/runs/mesh.msh\n")
+    try:
+        r = client.get("/sandbox-file/webui_abc123def/work/solver.log")
+        assert r.status_code == 200
+        assert str(Path.home()) not in r.text and "~/runs/mesh.msh" in r.text
+    finally:
+        log.unlink()
+
+
+def test_stop_leaves_a_process_that_was_already_in_the_folder(tmp_path):
+    """A terminal someone opened in the run folder is not the run's work."""
+    import subprocess, time
+    from webui import proctree
+    proc = subprocess.Popen(["bash", "-c", "sleep 60 & wait"], cwd=tmp_path, start_new_session=True)
+    try:
+        time.sleep(0.5)
+        started_later = time.time() + 5
+        assert proc.pid in proctree.run_processes(tmp_path)
+        assert proc.pid not in proctree.run_processes(tmp_path, since=started_later)
+        assert proctree.run_processes(tmp_path, since=time.time() - 60)
+    finally:
+        proc.kill(); proc.wait(timeout=10)
+
+
+def test_a_table_preview_reads_only_what_it_shows(tmp_path):
+    """A solver log can be hundreds of megabytes; the preview used to read all
+    of it to show the first 999 rows."""
+    import time
+    from webui import viz
+    big = config.SANDBOX_ROOT / "webui_abc123def" / "big.csv"
+    big.parent.mkdir(parents=True, exist_ok=True)
+    with big.open("w") as f:
+        f.write("x,y\n")
+        for i in range(400_000):          # about 5 MB
+            f.write(f"{i},{i * 2}\n")
+    try:
+        t0 = time.monotonic()
+        out = viz._csv(big)
+        took = time.monotonic() - t0
+        assert out["kind"] == "table" and out["truncated"] is True
+        assert len(out["rows"]) == 999, len(out["rows"])
+        assert took < 0.25, f"read the whole file: {took:.2f}s"
+    finally:
+        big.unlink()
+
+
+def test_a_tab_separated_table_is_read_with_tabs(tmp_path):
+    from webui import viz
+    p = config.SANDBOX_ROOT / "webui_abc123def" / "t.tsv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("x\ty\n1\t2\n")
+    try:
+        out = viz._csv(p)
+        assert out["header"] == ["x", "y"] and out["rows"] == [["1", "2"]]
+    finally:
+        p.unlink()
+
+
 def test_private_paths_never_reach_the_browser():
     from webui.privacy import scrub
     home = str(Path.home())

@@ -136,9 +136,26 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
                  className="max-w-full rounded-[6px] border line" />
           )}
 
-          {viz && !['text', 'json', 'table', 'image', 'error'].includes(viz.kind) && (
-            <div className="text-[14px] text-muted">
-              openPASO cannot show this kind of file ({viz.kind}) here. Download it and open it in a program that reads it.
+          {viz?.kind === 'vtk' && (
+            <div className="text-[15px] leading-[1.55] text-body">
+              <p>A mesh or result file in {String(viz.format || 'VTK').toUpperCase()} format. openPASO does not draw it here.</p>
+              <p className="mt-2 text-muted">Download it and open it in ParaView, VisIt or PyVista. A run can also write a picture of a field, which is shown on the run page.</p>
+            </div>
+          )}
+
+          {viz?.kind === 'hdf' && (
+            <div className="text-[15px] leading-[1.55] text-body">
+              <p>A data file in HDF5 format. openPASO does not draw it here.</p>
+              {Array.isArray(viz.keys) && viz.keys.length > 0 && (
+                <p className="num mt-2 text-[14px] text-muted break-all">It contains: {(viz.keys as string[]).join(', ')}</p>
+              )}
+              <p className="mt-2 text-muted">Download it and open it in ParaView or h5py.</p>
+            </div>
+          )}
+
+          {viz && !['text', 'json', 'table', 'image', 'error', 'vtk', 'hdf'].includes(viz.kind) && (
+            <div className="text-[15px] text-body">
+              openPASO cannot show a {viz.kind} file here. Download it and open it in a program that reads it.
             </div>
           )}
         </div>

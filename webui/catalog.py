@@ -62,7 +62,9 @@ async def _local_up(port: int) -> bool:
         import httpx
         async with httpx.AsyncClient(timeout=1.5) as c:
             r = await c.get(f"http://127.0.0.1:{port}/v1/models")
-            return r.status_code < 500
+            # anything but a served model list means the runner would fail here:
+            # a 404 from an unrelated server used to show as a ready model
+            return r.status_code == 200 and isinstance(r.json().get("data"), list)
     except Exception:
         return False
 
@@ -197,7 +199,12 @@ async def solvers(refresh: bool = False) -> dict:
             proc = await asyncio.create_subprocess_exec(
                 spec["command"], "-c", _PROBE, cwd=spec["cwd"], env=env,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except asyncio.TimeoutError:
+                proc.kill()                      # else it keeps running and holds its pipes
+                await proc.wait()
+                raise RuntimeError("the solver check took longer than 120 s")
             text = out.decode("utf-8", "replace")
             if "@@JSON@@" not in text:
                 raise RuntimeError((err.decode("utf-8", "replace").strip().splitlines() or ["no output"])[-1])

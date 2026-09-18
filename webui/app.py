@@ -29,14 +29,14 @@ import time
 import traceback
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import catalog, config, files, runs, sessions, viz
 from .outcome import fold as outcome_fold
-from .privacy import scrub
+from .privacy import scrub, scrub_text
 from .runner import _session_workdir
 
 logging.basicConfig(level=logging.INFO,
@@ -111,14 +111,23 @@ async def get_manifest(sid: str):
     work = config.SANDBOX_ROOT / f"webui_{sid}"
     artefacts = []
     if work.is_dir():
+        root = work.resolve()
         for f in sorted(work.rglob("*")):
-            if not f.is_file():
+            # a link the run made can point anywhere; hashing what it points at
+            # would put a file from outside the run into its record
+            if f.is_symlink() or not f.is_file():
                 continue
-            data = f.read_bytes()
+            if not f.resolve().is_relative_to(root):
+                continue
+            digest, size = hashlib.sha256(), 0
+            with f.open("rb") as fh:                 # a run may write gigabytes
+                for block in iter(lambda: fh.read(1024 * 1024), b""):
+                    digest.update(block)
+                    size += len(block)
             artefacts.append({
                 "path": str(f.relative_to(work)),
-                "bytes": len(data),
-                "sha256": hashlib.sha256(data).hexdigest(),
+                "bytes": size,
+                "sha256": digest.hexdigest(),
                 "modified": time.strftime("%Y-%m-%dT%H:%M:%S",
                                           time.localtime(f.stat().st_mtime)),
             })
@@ -208,6 +217,15 @@ async def api_viz(rel: str):
         raise HTTPException(403, "That path is outside the run folders.")
 
 
+# Text a run wrote can hold the home directory it worked in, and this is the
+# path a Download link uses. Everything else the browser is shown is scrubbed;
+# without this the one route that hands over whole files was the exception.
+_SCRUB_SUFFIXES = {".txt", ".log", ".out", ".err", ".md", ".json", ".yaml", ".yml",
+                   ".xml", ".csv", ".tsv", ".py", ".sh", ".dat", ".inp", ".i",
+                   ".feb", ".xdmf", ".pvd", ".geo", ".cfg", ".ini", ".toml"}
+_SCRUB_MAX = 32 * 1024 * 1024
+
+
 @app.get("/sandbox-file/{rel:path}")
 async def sandbox_file(rel: str):
     try:
@@ -216,6 +234,13 @@ async def sandbox_file(rel: str):
         raise HTTPException(403, "That path is outside the run folders.")
     if not p.is_file():
         raise HTTPException(404, "not a file")
+    if p.suffix.lower() in _SCRUB_SUFFIXES and p.stat().st_size <= _SCRUB_MAX:
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            return FileResponse(p)
+        return Response(scrub_text(text), media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition": f'inline; filename="{p.name}"'})
     return FileResponse(p)
 
 
