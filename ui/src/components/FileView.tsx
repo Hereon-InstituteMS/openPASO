@@ -74,11 +74,14 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
 
   // it announces itself as a modal, so it has to behave as one: focus moves in,
   // Tab stays inside, and whatever opened it gets focus back
+  // the run view hands down a new onClose every second while a run works
+  const close = useRef(onClose)
+  close.current = onClose
   useEffect(() => {
     const returnTo = document.activeElement as HTMLElement | null
     panel.current?.focus()
     const key = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return }
+      if (e.key === 'Escape') { e.stopPropagation(); close.current(); return }
       if (e.key !== 'Tab') return
       const inside = panel.current?.querySelectorAll<HTMLElement>(
         'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')
@@ -90,7 +93,7 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
     }
     document.addEventListener('keydown', key, true)
     return () => { document.removeEventListener('keydown', key, true); returnTo?.focus?.() }
-  }, [onClose])
+  }, [rel])
 
   useEffect(() => {
     // opening files quickly could show the first file's contents under the

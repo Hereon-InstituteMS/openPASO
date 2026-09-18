@@ -74,6 +74,22 @@ def openrouter_key() -> str | None:
 
 # MCP servers selectable in the UI. The openPASO server is the main one;
 # additional rows are placeholders for future plug-ins.
+def solver_library_path() -> str:
+    """Where the solvers' shared libraries are, composed the way the agent does
+    it: every required directory, then whatever was inherited, in order, with
+    duplicates and directories that do not exist dropped. Defaulting to one of
+    them left preCICE out of Claude Code runs only."""
+    wanted = ["/opt/4C-dependencies/lib", "/opt/precice/lib"]
+    seen, parts = set(), []
+    for d in wanted + [x for x in os.environ.get("LD_LIBRARY_PATH", "").split(":") if x]:
+        if d in seen:
+            continue
+        seen.add(d)
+        if Path(d).is_dir():
+            parts.append(d)
+    return ":".join(parts)
+
+
 def server_python() -> str:
     """The interpreter the openPASO MCP server runs on.
 
@@ -102,8 +118,7 @@ MCP_SERVERS = {
                 "FOURC_ROOT", str(Path.home() / "4C")),
             "FOURC_BINARY": os.environ.get(
                 "FOURC_BINARY", str(Path.home() / "4C/build/4C")),
-            "LD_LIBRARY_PATH": os.environ.get(
-                "LD_LIBRARY_PATH", "/opt/4C-dependencies/lib"),
+            "LD_LIBRARY_PATH": solver_library_path(),
         },
         "default_on": True,
     },

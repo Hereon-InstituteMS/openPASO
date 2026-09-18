@@ -418,10 +418,9 @@ async def start_run(sid: str, body: dict | None = None):
         run = runs.get(sid)
     except (FileNotFoundError, ValueError):
         raise HTTPException(404, "no such run")
-    if not run.running and runs.running_count() >= config.MAX_RUNNING:
-        raise HTTPException(409, f"{config.MAX_RUNNING} runs are already working on this machine. "
-                                 "Your prompt was not sent. Wait for one to finish or stop one.")
-    await run.prompt(text, body.get("attachments") or [])
+    refused = await runs.start_turn(run, text, body.get("attachments") or [])
+    if refused:
+        raise HTTPException(409, refused)
     return {"sent": True}
 
 
@@ -573,11 +572,9 @@ async def _tell(ws: WebSocket, message: str):
 async def _handle_inbound(run: "runs.Run", msg: dict, ws: WebSocket):
     t = msg.get("type")
     if t == "prompt":
-        if not run.running and runs.running_count() >= config.MAX_RUNNING:
-            await _tell(ws, f"{config.MAX_RUNNING} runs are already working on this machine. "
-                            "Wait for one to finish or stop one, then send this again.")
-            return
-        await run.prompt(msg.get("text", ""), msg.get("attachments"))
+        refused = await runs.start_turn(run, msg.get("text", ""), msg.get("attachments"))
+        if refused:
+            await _tell(ws, refused)
     elif t == "steer":
         if run.running:
             await run.steer(msg.get("text", "").strip())

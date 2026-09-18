@@ -119,6 +119,14 @@ def _url_for(p: Path) -> str:
     return "/sandbox-file/" + "/".join(quote(part, safe="") for part in rel.parts)
 
 
+# What a field picture is worth knowing about: the range behind it, how much is
+# saturated, which solver wrote it and when. The writer also records the machine
+# it ran on, which is not shown anywhere and has no business leaving it.
+_PROVENANCE_SHOWN = ("field", "unit", "true_min", "true_max", "clip_low", "clip_high",
+                     "saturated_fraction", "quantisation_step", "levels", "interpolation",
+                     "solver", "source", "notes", "written_at", "commit")
+
+
 def _field_series(p: Path, meta: dict) -> dict:
     """What the interface needs to draw a field: where the file is, the grid it
     sits on, and the range behind the picture."""
@@ -136,7 +144,8 @@ def _field_series(p: Path, meta: dict) -> dict:
         "dx": meta.get("dx"), "dy": meta.get("dy"),
         # What the picture does not show on its own: the true range behind
         # the clip, how much is saturated, and where it came from.
-        "provenance": meta.get("provenance") or {},
+        "provenance": {k: v for k, v in (meta.get("provenance") or {}).items()
+                       if k in _PROVENANCE_SHOWN},
     }
 
 

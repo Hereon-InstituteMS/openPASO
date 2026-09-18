@@ -300,7 +300,9 @@ class Run:
                 shown={"text": joined, "attachments": []}))
             await self.push_snapshot()
             return
-        if not self.subscribers:
+        # a follow-up may have arrived between the end of that turn and this:
+        # closing the connection under it would break the turn now running
+        if not self.subscribers and not self.running:
             await self.close_agent()
 
     # ── corrections ─────────────────────────────────────────────────────
@@ -497,3 +499,21 @@ def live(sid: str) -> Run | None:
 
 def running_count() -> int:
     return sum(1 for r in RUNS.values() if r.running)
+
+
+_ADMISSION = asyncio.Lock()
+
+
+async def start_turn(run: "Run", text: str, attachments: list[str] | None = None) -> str | None:
+    """Start a turn if the machine has room for it. Returns why it could not.
+
+    Counting and starting have to happen together: two prompts arriving at the
+    same moment both saw a count below the limit and both started, so the limit
+    the interface advertises was a suggestion under exactly the conditions it
+    exists for."""
+    async with _ADMISSION:
+        if not run.running and running_count() >= config.MAX_RUNNING:
+            return (f"{config.MAX_RUNNING} runs are already working on this machine. "
+                    "Your message was not sent. Wait for one to finish or stop one, then send it again.")
+        await run.prompt(text, attachments)
+        return None

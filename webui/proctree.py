@@ -97,12 +97,16 @@ def run_processes(workdir: Path, since: float | None = None,
     pids = [p for p in _pids() if p != me and _owned(p)]
     parent = {p: _ppid(p) for p in pids}
 
-    def young_enough(p: int) -> bool:
-        return since is None or (_started_at(p) or 0) >= since - 1
+    # a process that merely sits in the folder is judged against the run's start,
+    # where a second of slack is harmless; a step's own processes are judged
+    # against the step's start, where a second of slack would take in the step
+    # that ran before it
+    def after(p: int, slack: float) -> bool:
+        return since is None or (_started_at(p) or 0) >= since - slack
 
     seeds = {p for p in pids
-             if (_environ_has(p, marker) and (young_enough(p) if since_covers_marker else True))
-             or (_cwd_under(p, root) and young_enough(p))}
+             if (_environ_has(p, marker) and (after(p, 0.0) if since_covers_marker else True))
+             or (_cwd_under(p, root) and after(p, 1.0))}
     # the web server itself may have been started from inside a run folder;
     # never include it or its ancestors
     seeds.discard(me)

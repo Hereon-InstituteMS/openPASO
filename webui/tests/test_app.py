@@ -405,6 +405,62 @@ def test_ending_one_step_leaves_a_step_that_started_earlier(tmp_path):
             p.kill(); p.wait(timeout=10)
 
 
+def test_two_prompts_at_once_cannot_both_pass_the_run_limit(monkeypatch):
+    """Counting and starting were separate, so two prompts arriving together
+    both saw room and both started."""
+    import asyncio as aio
+    from webui import runs as runs_mod
+
+    started = []
+
+    class FakeRun:
+        running = False
+        async def prompt(self, text, attachments=None):
+            started.append(text)
+            await aio.sleep(0)
+
+    monkeypatch.setattr(config, "MAX_RUNNING", 2)
+    monkeypatch.setattr(runs_mod, "running_count", lambda: len(started))
+
+    async def main():
+        runs = [FakeRun() for _ in range(5)]
+        answers = await aio.gather(*[runs_mod.start_turn(r, f"go {i}") for i, r in enumerate(runs)])
+        return answers
+
+    answers = aio.run(main())
+    assert len(started) == 2, started
+    refused = [a for a in answers if a]
+    assert len(refused) == 3 and "not sent" in refused[0]
+
+
+def test_scrubbing_leaves_a_field_file_s_numbers_alone():
+    """Frames are megabytes of base64, in which a path can appear by chance.
+    Replacing it changed the numbers a run had computed."""
+    import base64, os
+    from webui.privacy import scrub_text
+    frames = base64.b64encode(os.urandom(300_000)).decode()
+    doc = json.dumps({"kind": "field_series", "frames": frames,
+                      "provenance": {"source": f"{Path.home()}/run/out.vtu"}})
+    out = scrub_text(doc)
+    assert json.loads(out)["frames"] == frames, "the data must come back exactly"
+    assert str(Path.home()) not in out and "~/run/out.vtu" in out
+    # and a path written where a path really occurs is still found
+    assert "~" in scrub_text(f"--prefix={Path.home()}/opt")
+
+
+def test_the_machine_name_is_not_handed_to_the_browser(tmp_path):
+    from webui import viz
+    p = config.SANDBOX_ROOT / "webui_abc123def" / "f.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("{}")
+    try:
+        out = viz._field_series(p, {"field": "u", "provenance": {
+            "host": "hereon-workstation-3", "solver": "FEniCSx", "true_max": 1.5}})
+        assert out["provenance"] == {"solver": "FEniCSx", "true_max": 1.5}
+    finally:
+        p.unlink()
+
+
 def test_a_run_over_the_limit_is_refused_before_it_is_created(client, monkeypatch):
     from webui import runs
     monkeypatch.setattr(runs, "running_count", lambda: config.MAX_RUNNING)

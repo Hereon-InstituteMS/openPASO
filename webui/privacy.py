@@ -17,8 +17,14 @@ try:
 except Exception:
     _USER = ""
 
-_HOME_RE = re.compile(re.escape(_HOME) + r"(?=[/\s'\"\\:,)\]}]|$)")
-_ANY_HOME_RE = re.compile(r"/(?:home|Users|media)/[A-Za-z0-9._-]+")
+# A path is recognised only where one can begin. Base64 (a field file's frames
+# are megabytes of it) uses A-Z a-z 0-9 + / =, so "/home/<name>" occurs inside
+# it by chance; replacing that changed the numbers a run had computed. Requiring
+# a boundary in front leaves encoded data alone and still catches every path in
+# prose, JSON, logs and tracebacks.
+_BOUNDARY = r"(?<![A-Za-z0-9+/])"   # "=" stays a boundary: --prefix=/home/... is a path
+_HOME_RE = re.compile(_BOUNDARY + re.escape(_HOME) + r"(?=[/\s'\"\\:,)\]}]|$)")
+_ANY_HOME_RE = re.compile(_BOUNDARY + r"/(?:home|Users|media)/[A-Za-z0-9._-]+")
 _USER_RE = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(_USER) + r"(?![A-Za-z0-9_-])") if len(_USER) >= 3 else None
 
 
