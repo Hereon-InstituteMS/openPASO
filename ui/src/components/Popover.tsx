@@ -7,13 +7,19 @@ export default function Popover({ open, onClose, children, align = 'left', up = 
   align?: 'left' | 'right'; up?: boolean; width?: number
 }) {
   const box = useRef<HTMLDivElement>(null)
+  // The pickers pass a new onClose on every render of their parent, and a run
+  // view re-renders once a second while a run works. Depending on it here meant
+  // this effect tore down and set up every second, handing focus back to the
+  // opener mid-click. Only opening and closing may run it.
+  const close = useRef(onClose)
+  close.current = onClose
   useEffect(() => {
     if (!open) return
     const opener = document.activeElement as HTMLElement | null
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onClose() } }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); close.current() } }
     const down = (e: MouseEvent) => {
       if (box.current && !box.current.contains(e.target as Node)
-          && !(opener && opener.contains(e.target as Node))) onClose()
+          && !(opener && opener.contains(e.target as Node))) close.current()
     }
     document.addEventListener('keydown', key)
     document.addEventListener('mousedown', down)
@@ -22,7 +28,7 @@ export default function Popover({ open, onClose, children, align = 'left', up = 
       document.removeEventListener('mousedown', down)
       opener?.focus?.()
     }
-  }, [open, onClose])
+  }, [open])
   if (!open) return null
   return (
     <div ref={box} role="dialog"

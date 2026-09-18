@@ -287,8 +287,13 @@ class Run:
             for s in pending:
                 await self.emit({"type": "steer_state", "id": s["id"], "state": "sent_as_followup"})
             joined = "\n\n".join(s["text"] for s in pending)
+            self._turn_ended = False
+            # shown, so the log holds it as a message from the user: the history
+            # a restarted run is given is rebuilt from those, and without it the
+            # model lost a follow-up the transcript said had been sent
             self.turn_task = asyncio.create_task(self._turn(
-                "While you were working I sent the following. Act on it now:\n\n" + joined))
+                "While you were working I sent the following. Act on it now:\n\n" + joined,
+                shown={"text": joined, "attachments": []}))
             await self.push_snapshot()
             return
         if not self.subscribers:

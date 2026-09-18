@@ -345,6 +345,46 @@ def _coupling_result(**fields):
     return "[{'type': 'text', 'text': '" + json.dumps(fields) + "'}]"
 
 
+def test_the_legacy_coupled_solve_report_is_read_as_a_run_that_happened():
+    """coupled_solve answers in prose, not JSON: a convergence report and
+    openPASO's verification note. Read as JSON it became "failed", and a
+    coupling that really ran was reported as having computed nothing."""
+    from webui.outcome import classify_solver_result as c
+    ran = ("Coupling converged in 12 iterations (residual 4.1e-07)\n\n"
+           "[openPASO verification: NOT VERIFIED — openPASO's independent critic has not "
+           "reviewed this setup...]")
+    reviewed = ("Coupling converged in 9 iterations\n\n"
+                "[openPASO verification: LEGACY coupled_solve — critic-reviewed. Trust is "
+                "governed by the convergence report above...]")
+    assert c(ran) == "unverified"
+    assert c(reviewed) == "unverified", "prose carries no machine-readable verdict"
+    assert c("Backend not found: fenicsx or dealii") == "failed"
+    assert c("Unknown problem: thermoelastic. Available: ['fsi']") == "failed"
+
+
+def test_stop_counts_the_processes_that_really_ended(monkeypatch):
+    from webui import proctree
+    alive = {41, 42}
+    monkeypatch.setattr(proctree, "_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(proctree.os, "kill", lambda pid, sig: alive.discard(pid) if pid == 41 else None)
+    # 41 dies, 42 will not: the count is what ended, not what was asked to end
+    assert proctree._end([41, 42], grace=0.2) == 1
+
+
+def test_a_correction_sent_late_becomes_a_message_the_record_keeps():
+    """It is run as a follow-up turn. Without a user message in the log, the
+    history a restarted run is given lost it, though the transcript showed it."""
+    from webui.runs import _history
+    events = [
+        {"type": "turn_start"}, {"type": "user_msg", "text": "Solve it."},
+        {"type": "done", "outcome": "no_result"},
+        {"type": "turn_start"}, {"type": "user_msg", "text": "Use a finer mesh."},
+        {"type": "agent_msg", "text": "Refining."}, {"type": "done", "outcome": "no_result"},
+    ]
+    h = _history(events)
+    assert ("user", "Use a finer mesh.") in h
+
+
 def test_a_coupling_reports_its_verdict_in_its_own_shape():
     """couple and couple_precice carry the verification gate's verdict with no
     `status` field at all. Reading only the run shape called every verified

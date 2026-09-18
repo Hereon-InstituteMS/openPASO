@@ -55,7 +55,16 @@ export default function Home({ config, groups }: { config: AppConfig | null; gro
     try {
       const s = await api.createRun(model, mode)
       let names: string[] = []
-      if (files.length) names = (await api.upload(s.id, files)).saved.map((x) => x.name)
+      if (files.length) {
+        try {
+          names = (await api.upload(s.id, files)).saved.map((x) => x.name)
+        } catch (e) {
+          // the run exists but was never prompted, so it is hidden from the
+          // list: leaving it would leave a folder nobody can reach or remove
+          await api.deleteRun(s.id).catch(() => {})
+          throw e
+        }
+      }
       firstPrompt.set(s.id, { text, attachments: names })
       runsChanged()
       navigate({ run: s.id })

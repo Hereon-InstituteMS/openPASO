@@ -131,6 +131,9 @@ def end_run_processes(workdir: Path, grace: float = 3.0, since: float | None = N
 
 
 def _end(targets: list[int], grace: float) -> int:
+    """How many of these processes are gone afterwards — not how many were
+    asked to go. Reporting the request as the result told the user that every
+    process had been ended while some were still alive."""
     if not targets:
         return 0
     for sig in (signal.SIGTERM, signal.SIGKILL):
@@ -144,7 +147,7 @@ def _end(targets: list[int], grace: float) -> int:
             if not any(_alive(p) for p in targets):
                 return len(targets)
             time.sleep(0.1)
-    return len(targets)
+    return sum(1 for p in targets if not _alive(p))
 
 
 def _alive(pid: int) -> bool:

@@ -136,12 +136,29 @@ async def stream_turn(
         env={**os.environ, "PYVISTA_OFF_SCREEN": "true", "OPENPASO_CELL_WORKDIR": root},
         start_new_session=True,
     )
+    # Its diagnostics go to stderr, which nothing read until stdout had ended.
+    # A chatty run filled the pipe, and the child then blocked before writing
+    # its result: the run hung with no way to tell why.
+    errors: list[str] = []
+
+    async def drain() -> None:
+        while True:
+            line = await proc.stderr.readline()
+            if not line:
+                return
+            if len(errors) < 200:
+                errors.append(line.decode("utf-8", "replace").rstrip())
+
+    draining = asyncio.create_task(drain())
     try:
-        return await _consume(proc, emit, state)
+        return await _consume(proc, emit, state, errors)
     except asyncio.CancelledError:
         _kill(proc)
         raise
+    except RuntimeError:
+        raise                 # already carries what Claude Code said
     finally:
+        draining.cancel()
         # one of these per turn, left behind on a long-lived server
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -155,7 +172,7 @@ def _kill(proc) -> None:
             return
 
 
-async def _consume(proc, emit, state) -> str:
+async def _consume(proc, emit, state, errors: list[str] | None = None) -> str:
 
     final = ""
     calls: dict[str, str] = {}
@@ -215,10 +232,11 @@ async def _consume(proc, emit, state) -> str:
                                    "input": usage.get("input_tokens", 0),
                                    "output": usage.get("output_tokens", 0)})
 
-    err = (await proc.stderr.read()).decode("utf-8", "replace") if proc.stderr else ""
     await proc.wait()
     if proc.returncode != 0 and not final:
-        raise RuntimeError(f"Claude Code exited {proc.returncode}: {err.strip()[:400]}")
+        # stderr is read as it arrives (see stream_turn), so it is here already
+        said = "\n".join(errors[-20:]).strip() if errors else ""
+        raise RuntimeError(f"Claude Code exited {proc.returncode}: {said[:400]}")
     return final
 
 

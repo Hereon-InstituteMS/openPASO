@@ -304,7 +304,11 @@ _SUMMARY_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 def _summary(path: Path) -> dict | None:
+    """One row of the run list, or None when the record is gone — another tab
+    may delete a run between the listing and this."""
     sid = path.stem
+    if not path.exists():
+        return None
     live = runs.live(sid)
     if live is not None:
         st, running, outcome = live.state, live.running, live.outcome()

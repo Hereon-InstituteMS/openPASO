@@ -110,10 +110,23 @@ def _walk(node, out: list[str]) -> None:
             _walk(child, out)
 
 
+# The legacy coupled_solve answers in prose: a convergence report followed by
+# openPASO's verification note. Neither branch of that note is a machine-readable
+# verdict — the tool itself says to use `couple` for one — so the most it can be
+# is "it ran, and nothing verified it". Reading it as JSON made it "failed", and
+# a coupling that really ran was reported as having computed nothing.
+_NOTE = re.compile(r"\[openPASO verification:", re.I)
+_BROKEN = re.compile(r"^(?:Backend not found|Unknown problem|Unknown solver|Error|Traceback)",
+                     re.I | re.M)
+
+
 def classify_solver_result(raw: str) -> str:
     """'verified', 'unverified' or 'failed' for one solver tool result."""
     p = _payload(raw)
     if not p:
+        text = raw or ""
+        if _NOTE.search(text) and not _BROKEN.search(text):
+            return "unverified"
         return "failed"
     found: list[str] = []
     _walk(p, found)

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fileUrl } from '../api'
 
 /* Whatever the run wrote, readable.
@@ -63,6 +63,27 @@ function Chart({ header, rows }: { header: string[]; rows: string[][] }) {
 
 export default function FileView({ rel, onClose }: { rel: string; onClose: () => void }) {
   const [viz, setViz] = useState<Viz | null>(null)
+  const panel = useRef<HTMLElement>(null)
+
+  // it announces itself as a modal, so it has to behave as one: focus moves in,
+  // Tab stays inside, and whatever opened it gets focus back
+  useEffect(() => {
+    const returnTo = document.activeElement as HTMLElement | null
+    panel.current?.focus()
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); return }
+      if (e.key !== 'Tab') return
+      const inside = panel.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])')
+      if (!inside?.length) return
+      const first = inside[0], last = inside[inside.length - 1]
+      const here = document.activeElement
+      if (!e.shiftKey && (here === last || here === panel.current)) { e.preventDefault(); first.focus() }
+      else if (e.shiftKey && (here === first || here === panel.current)) { e.preventDefault(); last.focus() }
+    }
+    document.addEventListener('keydown', key, true)
+    return () => { document.removeEventListener('keydown', key, true); returnTo?.focus?.() }
+  }, [onClose])
 
   useEffect(() => {
     // opening files quickly could show the first file's contents under the
@@ -81,8 +102,9 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
   return (
     <div className="fixed inset-0 z-30 flex" role="dialog" aria-modal="true" aria-label={name}>
       <div className="flex-1 bg-black/55" onClick={onClose} />
-      <aside className="w-[760px] h-full bg-card border-l line overflow-y-auto scroll p-8
-                        overscroll-contain">
+      <aside ref={panel} tabIndex={-1}
+             className="w-[760px] h-full bg-card border-l line overflow-y-auto scroll p-8
+                        overscroll-contain outline-none">
         <div className="flex items-center gap-4">
           <span className="num text-[14px] text-ink2 min-w-0 overflow-hidden
                            text-ellipsis whitespace-nowrap">{name}</span>
