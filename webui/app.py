@@ -402,6 +402,29 @@ async def new_session(body: dict | None = None):
     return s
 
 
+@app.post("/api/sessions/{sid}/prompt")
+async def start_run(sid: str, body: dict | None = None):
+    """Send a run its message over HTTP.
+
+    The first prompt used to be held in the browser and sent once the socket
+    said hello. Closing the tab in that moment left a run with no prompt: it was
+    on the server, hidden from the list because nothing had been asked of it,
+    and the message was gone."""
+    body = body or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "nothing to send")
+    try:
+        run = runs.get(sid)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "no such run")
+    if not run.running and runs.running_count() >= config.MAX_RUNNING:
+        raise HTTPException(409, f"{config.MAX_RUNNING} runs are already working on this machine. "
+                                 "Your prompt was not sent. Wait for one to finish or stop one.")
+    await run.prompt(text, body.get("attachments") or [])
+    return {"sent": True}
+
+
 @app.get("/api/sessions/{sid}")
 async def get_session(sid: str):
     try:
@@ -420,6 +443,10 @@ async def delete_session(sid: str):
         await live.close_agent()
         runs.RUNS.pop(sid, None)
     import shutil
+    if not re.fullmatch(r"[0-9a-f]{6,32}", sid or ""):
+        # before anything is built from it: "../other_run" would otherwise name
+        # a folder whose processes were ended before the id was refused
+        raise HTTPException(400, "bad run id")
     folder = config.SANDBOX_ROOT / f"webui_{sid}"
     # A run the server no longer holds (it was restarted under it) can still
     # have a solver of its own running. Deleting the folder under it left it

@@ -111,13 +111,21 @@ def _json(p: Path) -> dict:
     return {"kind": "json", "obj": obj, "path": str(p)}
 
 
+def _url_for(p: Path) -> str:
+    """The address the browser fetches a run's file from. A name may hold ? or
+    #, which the browser would read as a query or a fragment."""
+    from urllib.parse import quote
+    rel = p.relative_to(config.SANDBOX_ROOT)
+    return "/sandbox-file/" + "/".join(quote(part, safe="") for part in rel.parts)
+
+
 def _field_series(p: Path, meta: dict) -> dict:
     """What the interface needs to draw a field: where the file is, the grid it
     sits on, and the range behind the picture."""
     times = meta.get("times")
     return {
         "kind": "field_series",
-        "url": f"/sandbox-file/{p.relative_to(config.SANDBOX_ROOT)}",
+        "url": _url_for(p),
         "name": p.name,
         "field": meta.get("field", "field"),
         "unit": meta.get("unit", ""),
@@ -176,7 +184,7 @@ def _vtk(p: Path) -> dict:
     """
     return {
         "kind": "vtk",
-        "url": f"/sandbox-file/{p.relative_to(config.SANDBOX_ROOT)}",
+        "url": _url_for(p),
         "format": p.suffix.lower().lstrip("."),
         "name": p.name,
     }

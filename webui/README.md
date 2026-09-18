@@ -51,7 +51,9 @@ A model that cannot work is shown with the reason and cannot be picked.
   says how many.
 * A message sent while a run works is a **correction**: it is handed to the
   model when the current step finishes. A message after it ends is a
-  **follow-up** in the same conversation.
+  **follow-up** in the same conversation. Claude Code runs as one command that
+  cannot be spoken to while it works, so a correction to it is sent the moment
+  the turn ends; the interface says so where you type it.
 * **Attach files** (geometry, meshes, input decks, data) puts them in the run's
   `uploads/` folder and tells the model where they are.
 * **Files** shows the run's own folder; **Download the run record** gives the

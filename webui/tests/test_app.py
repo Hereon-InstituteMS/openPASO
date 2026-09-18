@@ -9,6 +9,7 @@ the end-to-end spawn_subagent chain is exercised in <1 s.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -338,6 +339,70 @@ def test_session_lifecycle(client):
     assert not any(s["id"] == sid for s in listed)
     assert any(s["id"] == sid for s in client.get("/api/sessions?all=true").json()["sessions"])
     assert client.delete(f"/api/sessions/{sid}").json()["deleted"]
+
+
+def test_the_first_prompt_reaches_the_server_without_the_tab(client, monkeypatch):
+    """It used to be held in the browser until the socket said hello: closing
+    the tab in that moment lost the message and left a run nobody could see."""
+    sent = {}
+
+    async def record(self, text, attachments=None):
+        sent["run"], sent["text"], sent["files"] = self.sid, text, attachments
+
+    monkeypatch.setattr(runs.Run, "prompt", record)
+    sid = client.post("/api/sessions", json={"model": "mock", "test": True}).json()["id"]
+    try:
+        assert client.post(f"/api/sessions/{sid}/prompt", json={"text": " "}).status_code == 400
+        assert client.post("/api/sessions/nosuchrun00/prompt", json={"text": "hi"}).status_code == 404
+        r = client.post(f"/api/sessions/{sid}/prompt",
+                        json={"text": "hello there", "attachments": ["part.msh"]})
+        assert r.status_code == 200 and r.json()["sent"]
+        assert sent == {"run": sid, "text": "hello there", "files": ["part.msh"]}
+    finally:
+        runs.RUNS.pop(sid, None)
+        client.delete(f"/api/sessions/{sid}")
+
+
+def test_the_prompt_is_on_disk_as_soon_as_it_is_sent(client):
+    """Only every tenth event was written, so a restart during the first turn
+    left a record with no prompt — and a run with no prompt is hidden."""
+    import asyncio as aio
+    sid = client.post("/api/sessions", json={"model": "mock", "test": True}).json()["id"]
+    try:
+        run = runs.get(sid)
+        aio.run(run.emit({"type": "turn_start"}))
+        aio.run(run.emit({"type": "user_msg", "text": "solve the plate"}))
+        saved = json.loads((config.SESSION_DIR / f"{sid}.json").read_text())
+        assert [e["type"] for e in saved["events"]] == ["turn_start", "user_msg"]
+        assert saved["events"][1]["text"] == "solve the plate"
+    finally:
+        runs.RUNS.pop(sid, None)
+        client.delete(f"/api/sessions/{sid}")
+
+
+def test_deleting_refuses_a_made_up_id_before_touching_anything(client):
+    for bad in ("../webui_other", "..%2Fx", "not-hex-id", ""):
+        assert client.delete(f"/api/sessions/{bad}").status_code in (400, 404, 405)
+
+
+def test_ending_one_step_leaves_a_step_that_started_earlier(tmp_path):
+    """Both carry the run's marker; only the one being ended may be ended."""
+    import subprocess, time
+    from webui import proctree
+    env = {**os.environ, "OPENPASO_CELL_WORKDIR": str(tmp_path.resolve())}
+    earlier = subprocess.Popen(["bash", "-c", "sleep 60 & wait"], cwd="/tmp", env=env, start_new_session=True)
+    time.sleep(0.6)
+    step_started = time.time()
+    time.sleep(0.6)
+    later = subprocess.Popen(["bash", "-c", "sleep 60 & wait"], cwd="/tmp", env=env, start_new_session=True)
+    try:
+        time.sleep(0.6)
+        claimed = proctree.run_processes(tmp_path, step_started, since_covers_marker=True)
+        assert later.pid in claimed, claimed
+        assert earlier.pid not in claimed, claimed
+    finally:
+        for p in (earlier, later):
+            p.kill(); p.wait(timeout=10)
 
 
 def test_a_run_over_the_limit_is_refused_before_it_is_created(client, monkeypatch):

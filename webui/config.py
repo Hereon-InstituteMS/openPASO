@@ -74,10 +74,25 @@ def openrouter_key() -> str | None:
 
 # MCP servers selectable in the UI. The openPASO server is the main one;
 # additional rows are placeholders for future plug-ins.
+def server_python() -> str:
+    """The interpreter the openPASO MCP server runs on.
+
+    The same order the agent uses: OPENPASO_PYTHON, then the repo's own
+    environment. Hard-coding the second one here meant an install that sets the
+    override reported no solvers and could not start a Claude Code run, while
+    the other path worked."""
+    for candidate in (os.environ.get("OPENPASO_PYTHON"),
+                      str(REPO / ".venv/bin/python"),
+                      str(Path.home() / "Schreibtisch/open-fem-agent/.venv/bin/python")):
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return str(REPO / ".venv/bin/python")      # reported honestly when it fails
+
+
 MCP_SERVERS = {
     "openpaso": {
         "label": "openPASO — Open Agentic Simulation System",
-        "command": str(REPO / ".venv/bin/python"),
+        "command": server_python(),
         "args": ["-m", "server"],
         "cwd": str(REPO / "src"),
         "env_extra": {

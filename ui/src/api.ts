@@ -17,6 +17,11 @@ export const api = {
     fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' },
                              body: JSON.stringify({ model, mode }) }).then((r) => j<Session>(r)),
   deleteRun: (id: string) => fetch(`/api/sessions/${id}`, { method: 'DELETE' }).then((r) => j(r)),
+  // the first message goes to the server before the page moves, so closing the
+  // tab in between cannot lose it
+  startRun: (id: string, text: string, attachments: string[]) =>
+    fetch(`/api/sessions/${id}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ text, attachments }) }).then((r) => j(r)),
   files: (id: string, sub = '') =>
     fetch(`/api/sessions/${id}/files?sub=${encodeURIComponent(sub)}`)
       .then((r) => j<{ entries: FileRow[]; sub: string; exists: boolean }>(r)),

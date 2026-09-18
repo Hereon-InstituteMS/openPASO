@@ -2,10 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { socket } from './api'
 import type { Ev, Session } from './types'
 
-/* A message to send as soon as a new run's socket is open. The home page creates
-   the run and navigates to it; the run view sends the first prompt. */
-export const firstPrompt = new Map<string, { text: string; attachments: string[] }>()
-
 export type Link = 'connecting' | 'live' | 'lost' | 'missing'
 
 export function useRun(id: string) {
@@ -44,11 +40,6 @@ export function useRun(id: string) {
           buffer.current = []
           if (frame.current) { cancelAnimationFrame(frame.current); frame.current = 0 }
           setSession(e.session!); setEvents(e.events || []); setLink('live')
-          const first = firstPrompt.get(id)
-          if (first && !(e.events || []).some((x) => x.type === 'user_msg')) {
-            firstPrompt.delete(id)
-            s.send(JSON.stringify({ type: 'prompt', ...first }))
-          }
           return
         }
         if (e.type === 'session') { setSession(e.session!); return }

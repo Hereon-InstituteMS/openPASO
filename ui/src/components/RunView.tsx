@@ -28,28 +28,30 @@ function useField(runId: string, settle: number) {
     // skipped it and a field the run really wrote vanished from the page.
     const seen = new Map<string, number>()
     const pics: { rel: string; name: string; mtime: number }[] = []
-    const walk = async (sub: string, depth: number): Promise<FieldSeries | null> => {
-      if (depth > 3) return null
+    // the whole folder is walked, even after a field is found: stopping there
+    // left out every picture that came after it
+    let found: FieldSeries | null = null
+    const walk = async (sub: string, depth: number): Promise<void> => {
+      if (depth > 3) return
       const d = await api.files(runId, sub).catch(() => null)
-      if (!d) return null
+      if (!d) return
       for (const f of d.entries) {
         if (f.is_dir) {
           if (/^(\.|__pycache__|node_modules|uploads$)/.test(f.name)) continue
-          const hit = await walk(f.sub, depth + 1); if (hit) return hit
+          await walk(f.sub, depth + 1)
           continue
         }
         if (/\.(png|jpe?g|svg|gif|webp)$/i.test(f.name)) pics.push({ rel: f.rel_path, name: f.sub || f.name, mtime: f.mtime })
-        if (!f.name.endsWith('.json') || (f.size ?? 0) < 200) continue
+        if (found || !f.name.endsWith('.json') || (f.size ?? 0) < 200) continue
         if (seen.get(f.rel_path) === f.mtime) continue
         seen.set(f.rel_path, f.mtime)
         const v = await api.viz(f.rel_path).catch(() => null)
-        if (v?.kind === 'field_series') return v as unknown as FieldSeries
+        if (v?.kind === 'field_series') found = v as unknown as FieldSeries
       }
-      return null
     }
-    walk('', 0).then((hit) => {
+    walk('', 0).then(() => {
       if (dead) return
-      if (hit) setField(hit)
+      if (found) setField(found)
       setPictures(pics.sort((a, b) => b.mtime - a.mtime).slice(0, 6))
     })
     return () => { dead = true }
@@ -268,9 +270,11 @@ export default function RunView({ id, config, groups }: {
       <div className="border-t line px-10 py-4">
         <div className="max-w-[1040px] mx-auto">
           <Composer
-            placeholder={running
-              ? 'Send a correction. openPASO reads it as soon as the current step finishes.'
-              : 'Ask a follow-up about this run, or tell openPASO what to change and run again'}
+            placeholder={!running
+              ? 'Ask a follow-up about this run, or tell openPASO what to change and run again'
+              : model?.kind === 'claude-code'
+                ? 'Send a correction. Claude Code cannot be interrupted, so it is sent the moment this turn ends.'
+                : 'Send a correction. openPASO reads it as soon as the current step finishes.'}
             submitLabel={running ? 'Send correction' : 'Send'}
             onSubmit={followUp} busy={busy} draftKey={`run.${id}`}
             left={session && (

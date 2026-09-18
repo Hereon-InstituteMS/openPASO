@@ -108,7 +108,11 @@ class Run:
             self._seq += 1
             event["seq"] = self._seq
             self.state["events"].append({k: v for k, v in event.items() if k != "session"})
-            if self._seq % 10 == 0:
+            # what a turn is and how it ended is written at once; the rest is
+            # checkpointed. A restart during an early turn used to leave a
+            # record with no prompt in it, which the run list then hides.
+            if event.get("type") in ("turn_start", "user_msg", "done", "error",
+                                     "file_uploaded", "mode_changed") or self._seq % 10 == 0:
                 self.save()
         if event.get("type") == "cost":
             self.state["cost_usd"] = round(self.state.get("cost_usd", 0.0) + (event.get("usd") or 0.0), 6)
@@ -303,7 +307,13 @@ class Run:
     async def steer(self, text: str):
         sid = f"st_{uuid.uuid4().hex[:8]}"
         self.steers.append({"id": sid, "text": text})
-        await self.emit({"type": "user_steer", "id": sid, "text": text, "state": "queued"})
+        # Claude Code runs as one command that cannot be spoken to while it
+        # works: there is no tool result of ours to attach the message to, so it
+        # is sent as a follow-up the moment the turn ends. Saying "it will reach
+        # the model at the next step" would be a promise this path cannot keep.
+        state = ("queued_until_turn_ends"
+                 if self.state.get("model") == config.CLAUDE_CODE_ID else "queued")
+        await self.emit({"type": "user_steer", "id": sid, "text": text, "state": state})
         await self.push_snapshot()
 
     def _take_steers(self, agent: str = "main") -> list[dict]:

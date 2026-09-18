@@ -439,6 +439,7 @@ const roleName = (r: string) => r.charAt(0).toUpperCase() + r.slice(1)
 
 const STEER: Record<string, string> = {
   queued: 'Waiting: openPASO reads it when the current step finishes. If the step hangs, End this step delivers it now.',
+  queued_until_turn_ends: 'Waiting: Claude Code runs as one command and cannot be spoken to while it works, so this is sent the moment the turn ends.',
   delivered: 'Delivered to openPASO',
   sent_as_followup: 'The step had already finished, so it was sent as a follow-up',
   not_delivered: 'Not delivered: the run was stopped first',

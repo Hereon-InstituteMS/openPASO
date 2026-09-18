@@ -4,7 +4,6 @@ import { api } from '../api'
 import { heroIn } from '../motion'
 import { navigate } from '../route'
 import type { AppConfig, ModelGroup } from '../types'
-import { firstPrompt } from '../useRun'
 import Composer, { ModePicker, ModelPicker, findModel } from './Composer'
 import Logo from './Logo'
 import { runsChanged } from './Shell'
@@ -65,7 +64,12 @@ export default function Home({ config, groups }: { config: AppConfig | null; gro
           throw e
         }
       }
-      firstPrompt.set(s.id, { text, attachments: names })
+      try {
+        await api.startRun(s.id, text, names)
+      } catch (e) {
+        await api.deleteRun(s.id).catch(() => {})
+        throw e
+      }
       runsChanged()
       navigate({ run: s.id })
       return true

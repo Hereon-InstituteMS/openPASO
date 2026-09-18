@@ -79,22 +79,30 @@ def _boot_time() -> float:
     return 0.0
 
 
-def run_processes(workdir: Path, since: float | None = None) -> list[int]:
+def run_processes(workdir: Path, since: float | None = None,
+                  *, since_covers_marker: bool = False) -> list[int]:
     """Every live process belonging to the run whose work directory is given.
 
     ``since`` is when the run began. A process that merely sits in the folder
     (a terminal someone opened there) is only claimed when it started after the
     run did; anything carrying the run's marker is the run's work whenever it
-    started."""
+    started.
+
+    ``since_covers_marker`` applies the same cut-off to the marker, which is what
+    ending ONE step needs: a worker another step left running carries the same
+    marker, and ending this step must not end that one."""
     root = str(Path(workdir).resolve())
     marker = f"OPENPASO_CELL_WORKDIR={root}".encode()
     me = os.getpid()
     pids = [p for p in _pids() if p != me and _owned(p)]
     parent = {p: _ppid(p) for p in pids}
 
-    seeds = {p for p in pids if _environ_has(p, marker)
-             or (_cwd_under(p, root)
-                 and (since is None or (_started_at(p) or 0) >= since - 1))}
+    def young_enough(p: int) -> bool:
+        return since is None or (_started_at(p) or 0) >= since - 1
+
+    seeds = {p for p in pids
+             if (_environ_has(p, marker) and (young_enough(p) if since_covers_marker else True))
+             or (_cwd_under(p, root) and young_enough(p))}
     # the web server itself may have been started from inside a run folder;
     # never include it or its ancestors
     seeds.discard(me)
@@ -122,7 +130,8 @@ def _is_openpaso_server(pid: int) -> bool:
 def end_step_processes(workdir: Path, grace: float = 3.0, since: float | None = None) -> int:
     """End what the run's current work started, but not the openPASO server the
     run is connected to: the run continues after one step is ended."""
-    return _end([p for p in run_processes(workdir, since) if not _is_openpaso_server(p)], grace)
+    targets = run_processes(workdir, since, since_covers_marker=since is not None)
+    return _end([p for p in targets if not _is_openpaso_server(p)], grace)
 
 
 def end_run_processes(workdir: Path, grace: float = 3.0, since: float | None = None) -> int:
