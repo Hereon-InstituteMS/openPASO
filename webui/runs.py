@@ -347,9 +347,11 @@ class Run:
         self.steps.ended.add(call_id)
         await self.emit({"type": "step_ending", "call_id": call_id})
         # the step's processes first: a solver killed underneath its tool makes
-        # the tool return by itself, which leaves the openPASO connection intact
-        await asyncio.to_thread(proctree.end_step_processes, self.workdir, 3.0,
-                                self.state.get("created_at"))
+        # the tool return by itself, which leaves the openPASO connection intact.
+        # Only what began with this step: a run can have another step working at
+        # the same time, and that one is not the one being ended.
+        since = self.steps.started.get(call_id) or self.state.get("created_at")
+        await asyncio.to_thread(proctree.end_step_processes, self.workdir, 3.0, since)
         with contextlib.suppress(BaseException):
             await asyncio.wait_for(asyncio.shield(task), timeout=6)
         if not task.done():

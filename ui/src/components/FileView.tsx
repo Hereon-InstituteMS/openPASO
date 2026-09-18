@@ -34,9 +34,15 @@ function Chart({ header, rows }: { header: string[]; rows: string[][] }) {
   // points drawn as a line is a meaningless zig-zag
   const ordered = series.xs.every((x, i) => i === 0 || x >= series.xs[i - 1])
   if (series.xs.length < 2 || !ordered || new Set(series.xs).size < series.xs.length * 0.9) return null
+  // a table may hold words or gaps; only columns that are really numbers are
+  // drawn, and a table with none is shown as a table and nothing else
+  const drawn = series.cols
+    .map((col, i) => ({ name: header[i + 1], col }))
+    .filter(({ col }) => col.filter(Number.isFinite).length >= 2)
+  const all = drawn.flatMap(({ col }) => col).filter(Number.isFinite)
+  if (!drawn.length || !all.length) return null
   const W = 640, H = 240, P = 32
   const xmin = Math.min(...series.xs), xmax = Math.max(...series.xs)
-  const all = series.cols.flat().filter(Number.isFinite)
   const ymin = Math.min(...all), ymax = Math.max(...all)
   const sx = (v: number) => P + (v - xmin) / (xmax - xmin || 1) * (W - 2 * P)
   const sy = (v: number) => H - P - (v - ymin) / (ymax - ymin || 1) * (H - 2 * P)
@@ -44,12 +50,13 @@ function Chart({ header, rows }: { header: string[]; rows: string[][] }) {
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full mt-4" role="img"
-         aria-label={`${header.slice(1).join(', ')} against ${header[0]}`}>
+         aria-label={`${drawn.map((d) => d.name).join(', ')} against ${header[0]}`}>
       <line x1={P} y1={H - P} x2={W - P} y2={H - P} stroke="rgb(100 116 139 / .28)" />
       <line x1={P} y1={P} x2={P} y2={H - P} stroke="rgb(100 116 139 / .28)" />
-      {series.cols.map((col, i) => (
+      {drawn.map(({ col }, i) => (
         <polyline key={i} fill="none" strokeWidth="1.5" stroke={stroke[i % stroke.length]}
-          points={col.map((v, j) => `${sx(series.xs[j])},${sy(v)}`).join(' ')} />
+          points={col.map((v, j) => (Number.isFinite(v) ? `${sx(series.xs[j])},${sy(v)}` : ''))
+                     .filter(Boolean).join(' ')} />
       ))}
       <text x={P} y={H - 10} fill="#94A3B8" fontSize="11" fontFamily="monospace">
         {header[0]}

@@ -22,6 +22,13 @@ from webui import app as webui_app
 from webui import catalog, config, files, runs, sessions
 
 
+@pytest.fixture(autouse=True)
+def allow_the_test_model(monkeypatch):
+    """The fake model is refused unless the server was started for testing
+    (OPENPASO_TEST_MODEL). These tests are that case, and say so."""
+    monkeypatch.setattr(config, "ALLOW_TEST_MODEL", True)
+
+
 @pytest.fixture
 def client():
     return TestClient(webui_app.app)
@@ -52,6 +59,42 @@ def test_a_fresh_install_has_no_default_model_rather_than_a_server_it_lacks(monk
     monkeypatch.setattr(claude_code, "available", lambda: False)
     monkeypatch.setattr(config, "openrouter_key", lambda: None)
     assert config.default_model() is None
+
+
+def test_the_fake_model_needs_the_server_to_be_started_for_testing(client, monkeypatch):
+    """Asking for it over the API is not enough: this API has no authentication,
+    and the fake model fabricates answers."""
+    monkeypatch.setattr(config, "ALLOW_TEST_MODEL", False)
+    r = client.post("/api/sessions", json={"model": "mock", "test": True})
+    assert r.status_code == 400 and "mock" in r.json()["detail"]
+
+
+def test_an_approval_that_arrives_first_is_not_lost():
+    """The step is announced before the gate opens, so a fast client can answer
+    before there is anything to answer, and the run waited for ever."""
+    import asyncio as aio
+    from webui.runner import ApprovalGate
+
+    async def main():
+        gate = ApprovalGate()
+        gate.resolve("tc_1", True)            # the answer, before the question
+        decision = await aio.wait_for(gate.open("tc_1"), timeout=1)
+        assert decision["approved"] is True
+
+    aio.run(main())
+
+
+def test_switching_to_run_without_asking_releases_a_waiting_step():
+    import asyncio as aio
+    from webui.runner import ApprovalGate
+
+    async def main():
+        gate = ApprovalGate()
+        fut = gate.open("tc_9")
+        assert gate.open_all(True) == 1
+        assert (await aio.wait_for(fut, timeout=1))["approved"] is True
+
+    aio.run(main())
 
 
 def test_the_fake_model_is_never_offered_to_a_person(client):

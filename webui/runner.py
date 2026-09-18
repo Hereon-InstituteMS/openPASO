@@ -96,17 +96,35 @@ class ApprovalGate:
 
     def __init__(self):
         self._pending: dict[str, asyncio.Future] = {}
+        self._early: dict[str, dict] = {}
 
     def open(self, call_id: str) -> asyncio.Future:
         loop = asyncio.get_running_loop()
         fut = loop.create_future()
+        early = self._early.pop(call_id, None)
+        if early is not None:
+            fut.set_result(early)     # the answer arrived before we asked
         self._pending[call_id] = fut
         return fut
 
     def resolve(self, call_id: str, approved: bool, reason: str = ""):
         fut = self._pending.pop(call_id, None)
-        if fut and not fut.done():
+        if fut is None:
+            # the step is announced before the gate is open, so a fast client
+            # can answer first; hold the decision rather than dropping it and
+            # leaving the run waiting for an answer that already came
+            self._early[call_id] = {"approved": approved, "reason": reason}
+            return
+        if not fut.done():
             fut.set_result({"approved": approved, "reason": reason})
+
+    def open_all(self, approved: bool = True, reason: str = "") -> int:
+        """Answer every waiting step at once, for a switch to "run without
+        asking" while one is waiting."""
+        waiting = list(self._pending)
+        for call_id in waiting:
+            self.resolve(call_id, approved, reason)
+        return len(waiting)
 
 
 # ───────────────────────────────────────────────────────────────────
@@ -119,6 +137,7 @@ class StepControl:
     def __init__(self):
         self.tasks: dict[str, asyncio.Future] = {}
         self.ended: set[str] = set()
+        self.started: dict[str, float] = {}
 
     def running(self) -> list[str]:
         return [c for c, t in self.tasks.items() if not t.done()]
@@ -166,6 +185,7 @@ def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent", take_steer
                 else asyncio.to_thread(tool.invoke, kwargs))
             if steps is not None:
                 steps.tasks[call_id] = inner
+                steps.started[call_id] = time.time()
             ended_by_user = lambda: steps is not None and call_id in steps.ended  # noqa: E731
             try:
                 result = await inner
@@ -185,6 +205,7 @@ def _wrap_tool(tool, *, emitter, get_mode, gate, agent_label="agent", take_steer
             finally:
                 if steps is not None:
                     steps.tasks.pop(call_id, None)
+                    steps.started.pop(call_id, None)
             if ended_by_user():
                 steps.ended.discard(call_id)
                 secs = time.monotonic() - started

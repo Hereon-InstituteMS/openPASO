@@ -372,13 +372,17 @@ async def new_session(body: dict | None = None):
     body = body or {}
     model = body.get("model")
     mode = body.get("mode") or config.DEFAULT_MODE
+    # the test model fabricates answers: it exists for the test suites, which
+    # set OPENPASO_TEST_MODEL. A request asking for it is not enough, or any
+    # caller of this unauthenticated local API could make one.
+    allow_mock = bool(body.get("test")) and config.ALLOW_TEST_MODEL
     known = (set(config.OPENROUTER_MODELS) | {config.CLAUDE_CODE_ID}
-             | {k for k in config.MODELS if k != "mock" or body.get("test")})
+             | {k for k in config.MODELS if k != "mock" or allow_mock})
     if model not in known:
         raise HTTPException(400, f"unknown model: {model}")
     if mode not in config.MODES:
         raise HTTPException(400, f"unknown mode: {mode}")
-    if not body.get("test"):
+    if not allow_mock:
         # the same answer the picker gives, so a run cannot be started against a
         # model server that is not running or a key that is not there
         offered = {m["id"]: m for g in (await catalog.models())["groups"] for m in g["models"]}
@@ -573,7 +577,13 @@ async def _handle_inbound(run: "runs.Run", msg: dict, ws: WebSocket):
             return
         run.state["mode"] = mode
         run.save()
+        released = run.gate.open_all(True) if mode == "accept" else 0
         await run.emit({"type": "mode_changed", "mode": mode})
+        if released:
+            # the wrapper reads the mode before it waits, so a step already
+            # waiting stayed waiting and the run looked stuck on "Waiting for you"
+            await _tell(ws, f"{released} step{'s' if released != 1 else ''} that "
+                            f"{'were' if released != 1 else 'was'} waiting for you now run.")
         await run.push_snapshot()
     elif t == "set_model":
         if any(e.get("type") == "user_msg" for e in run.state["events"]):

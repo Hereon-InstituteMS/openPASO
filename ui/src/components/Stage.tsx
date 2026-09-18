@@ -41,10 +41,13 @@ export default function Stage({ series }: { series: FieldSeries }) {
   const data = useRef<Data | null>(null)
   const lut = useRef(ramp())
   const raf = useRef(0)
-  const [frame, setFrame] = useState(0)
   const [playing, setPlaying] = useState(true)
-  const [time, setTime] = useState(0)
   const [n, setN] = useState(0)
+  // the clock and the slider are written straight to the DOM while it plays:
+  // React state for them re-rendered the whole stage on every frame
+  const clockEl = useRef<HTMLSpanElement>(null)
+  const slider = useRef<HTMLInputElement>(null)
+  const at = useRef(0)
 
   // draw is deliberately not a hook dependency: it reads refs, so a redraw
   // never re-renders React.
@@ -74,7 +77,9 @@ export default function Stage({ series }: { series: FieldSeries }) {
       }
     }
     ctx.putImageData(img, 0, 0)
-    setTime(d.times[i] ?? 0)
+    at.current = i
+    if (clockEl.current) clockEl.current.textContent = `t = ${(d.times[i] ?? 0).toFixed(3)} s`
+    if (slider.current && document.activeElement !== slider.current) slider.current.value = String(i)
   }
 
   useEffect(() => {
@@ -91,7 +96,6 @@ export default function Stage({ series }: { series: FieldSeries }) {
         setN(m.times.length)
         const cv = canvas.current
         if (cv) { cv.width = m.nx; cv.height = m.ny }
-        setFrame(0)
         draw(0)
         if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) setPlaying(false)
       })
@@ -101,13 +105,12 @@ export default function Stage({ series }: { series: FieldSeries }) {
   useEffect(() => {
     if (!playing || !n) return
     let last = 0
-    let i = frame
+    let i = at.current
     const tick = (now: number) => {
       const d = data.current
       if (d && now - last >= 1000 / d.fps) {
         i = (i + 1) % n
-        setFrame(i)
-        draw(i)
+        draw(i)                 // the canvas and the clock, without a re-render
         last = now
       }
       raf.current = requestAnimationFrame(tick)
@@ -145,14 +148,12 @@ export default function Stage({ series }: { series: FieldSeries }) {
         >
           {playing ? 'Pause' : 'Play'}
         </button>
-        <span className="num text-[13px] text-muted">t = {time.toFixed(3)} s</span>
+        <span ref={clockEl} className="num text-[13px] text-muted">t = 0.000 s</span>
         <input
-          type="range" min={0} max={Math.max(0, n - 1)} value={frame}
+          ref={slider}
+          type="range" min={0} max={Math.max(0, n - 1)} defaultValue={0}
           aria-label="Frame"
-          onChange={(e) => {
-            const i = Number(e.target.value)
-            setPlaying(false); setFrame(i); draw(i)
-          }}
+          onChange={(e) => { setPlaying(false); draw(Number(e.target.value)) }}
           className="w-64 accent-coral"
         />
         <span className="ml-auto flex items-center gap-2.5 font-mono text-[13px] text-muted">

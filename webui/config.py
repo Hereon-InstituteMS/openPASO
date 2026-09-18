@@ -126,6 +126,11 @@ def default_model() -> str | None:
 
 DEFAULT_MODEL = "mock"   # kept for the test suite; the interface never offers it
 
+# The fake model answers without a model and runs no solver. The test suites
+# need it; nothing else may have it, so asking for it over the API is refused
+# unless the server was started with this set.
+ALLOW_TEST_MODEL = os.environ.get("OPENPASO_TEST_MODEL", "") not in ("", "0", "false", "no")
+
 # How many runs may work at the same time on this machine. A solver can take
 # every core it is given, so this is a guard against a slowdown nobody notices,
 # not a licence limit.

@@ -76,6 +76,11 @@ Records are JSON files in `data/webui_sessions/`; run folders are in
 
 ## Tests
 
+The fake model that answers without a model and runs no solver exists only for
+these tests. The server refuses to create a run with it unless it was started
+with `OPENPASO_TEST_MODEL=1`, so nothing on a normal machine can produce a
+fabricated run through the API.
+
 ```bash
 # fast, no network, no model: config, file safety, uploads, outcome rules,
 # Stop ending processes, corrections, a run that outlives its tab

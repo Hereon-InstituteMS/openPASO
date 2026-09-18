@@ -37,13 +37,23 @@ function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'fai
   const st = t.match(/"status"\s*:\s*"([A-Za-z_]+)"/)
   const status = st?.[1].toLowerCase() ?? ''
   const err = t.match(/"(?:error|message)"\s*:\s*"([^"\n]{1,140})/)
-  if (trusted) return { verdict: 'verified', reason: '' }
-  if (status && !status.startsWith('completed')) {
-    return { verdict: 'failed', reason: err ? err[1] : `the solver reported “${status}”` }
+  const unverified = { verdict: 'unverified' as const, reason: 'ran, but openPASO did not verify the result' }
+  // The status decides first, exactly as the server does. Checking the
+  // verification flag first made "completed_with_warnings" with a trusted flag
+  // read as verified here while the header and the record said otherwise.
+  if (status) {
+    if (!status.startsWith('completed')) {
+      return { verdict: 'failed', reason: err ? err[1] : `the solver reported “${status}”` }
+    }
+    return status === 'completed' && trusted ? { verdict: 'verified', reason: '' } : unverified
   }
-  if (status || untrusted || /"(?:converged|all_levels_converged)"\s*:/.test(t)) {
-    if (err) return { verdict: 'failed', reason: err[1] }
-    return { verdict: 'unverified', reason: 'ran, but openPASO did not verify the result' }
+  if (trusted) return { verdict: 'verified', reason: '' }
+  if (untrusted || /"(?:converged|all_levels_converged)"\s*:/.test(t)) {
+    return err ? { verdict: 'failed', reason: err[1] } : unverified
+  }
+  // the legacy coupled_solve answers in prose with openPASO's verification note
+  if (/\[openPASO verification:/i.test(t) && !/^(?:Backend not found|Unknown problem|Unknown solver|Error|Traceback)/im.test(t)) {
+    return unverified
   }
   const line = t.split('\n').map((l) => l.trim()).find(Boolean) || 'no result'
   return { verdict: 'failed', reason: line.slice(0, 140) }
@@ -314,8 +324,9 @@ const GLYPH: Record<CallState, string> = {
   waiting: '▷', running: '◐', done: '✓', unverified: '△', failed: '✕', skipped: '⊘', abandoned: '■',
 }
 
-function CallRow({ c, onDecide, onEndStep, now }: {
-  c: Call; onDecide?: (id: string, ok: boolean) => void; onEndStep?: (id: string) => void; now: number
+function CallRow({ c, onDecide, onEndStep, othersRunning, now }: {
+  c: Call; onDecide?: (id: string, ok: boolean) => void; onEndStep?: (id: string) => void
+  othersRunning?: boolean; now: number
 }) {
   const [open, setOpen] = useState(false)
   const [full, setFull] = useState(false)
@@ -365,7 +376,7 @@ function CallRow({ c, onDecide, onEndStep, now }: {
           {c.ending ? <span className="text-[13px] text-muted">Ending this step…</span>
             : confirmEnd ? (
               <>
-                <span className="text-[14px] text-ink2">End this step and the processes it started? The run continues.</span>
+                <span className="text-[14px] text-ink2">End this step and the processes it started? The run continues.{othersRunning ? ' Another step is running as well; if it started later, its processes end too.' : ''}</span>
                 <button onClick={() => { onEndStep(c.id); setConfirmEnd(false) }}
                         className="h-8 px-3 rounded-[8px] bg-bad text-white text-[13px] font-semibold">End step</button>
                 <button onClick={() => setConfirmEnd(false)} className="h-8 px-3 rounded-[8px] text-[13px] text-body hover:bg-card">Keep it running</button>
@@ -462,6 +473,7 @@ export default function Transcript({ events, live, showReasoning, onDecide, onEn
   onDecide?: (id: string, ok: boolean) => void; onEndStep?: (id: string) => void; modelKind?: string; now?: number
 }) {
   const entries = useMemo(() => build(events, live), [events, live])
+  const running = entries.filter((e) => e.kind === 'call' && e.state === 'running').length
   const [trace, setTrace] = useState<number | null>(null)
   const act = live ? activity(entries, events, now) : null
 
@@ -514,7 +526,12 @@ export default function Transcript({ events, live, showReasoning, onDecide, onEn
               </li>
             )
           case 'call':
-            return <li key={e.id || i}><CallRow c={e} onDecide={onDecide} onEndStep={live ? onEndStep : undefined} now={now} /></li>
+            return (
+              <li key={e.id || i}>
+                <CallRow c={e} onDecide={onDecide} onEndStep={live ? onEndStep : undefined}
+                         othersRunning={running > 1} now={now} />
+              </li>
+            )
           case 'aside':
             return (
               <li key={i} className="border-l-2 border-hairline pl-5 py-3 bg-soft/60 rounded-r-[8px]">

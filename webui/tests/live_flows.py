@@ -48,8 +48,14 @@ async def recv_until(ws, pred, timeout):
             return got, e
     return got, None
 
+class TestModelRefused(Exception):
+    """The server was not started with OPENPASO_TEST_MODEL=1."""
+
+
 def new_run(mode="accept", model=MODEL, test=False):
     st, s = http("POST", "/api/sessions", {"model": model, "mode": mode, "test": test})
+    if test and st == 400:
+        raise TestModelRefused(s.get("detail", ""))
     assert st == 200, (st, s)
     return s["id"]
 
@@ -247,10 +253,23 @@ def t_upload_and_rules():
     st, r = http("POST", "/api/sessions", {"model": "mock", "mode": "accept"})
     check("rules: the fake model is not creatable by a person", st == 400, str(st))
 
+def skip(name, exc):
+    print(f"SKIP {name}: {exc}. Start the server with OPENPASO_TEST_MODEL=1 to include it.",
+          flush=True)
+
+
 async def main():
     which = sys.argv[1:] or ["mock", "rules", "parallel", "stop", "plan", "endstep", "critic"]
-    if "mock" in which: await t_mock()
-    if "rules" in which: t_upload_and_rules()
+    if "mock" in which:
+        try:
+            await t_mock()
+        except TestModelRefused as exc:
+            skip("the fake-model flow", exc)
+    if "rules" in which:
+        try:
+            t_upload_and_rules()
+        except TestModelRefused as exc:
+            skip("upload and creation rules", exc)
     if "parallel" in which:
         t0 = time.time()
         await asyncio.gather(t_survive(), t_steer())   # two runs at the same time

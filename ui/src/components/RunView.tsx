@@ -20,10 +20,13 @@ function pref(key: string, fallback: string) {
 function useField(runId: string, settle: number) {
   const [field, setField] = useState<FieldSeries | null>(null)
   const [pictures, setPictures] = useState<{ rel: string; name: string; mtime: number }[]>([])
-  const seen = useRef<Map<string, number>>(new Map())
-  useEffect(() => { setField(null); setPictures([]); seen.current = new Map() }, [runId])
+  useEffect(() => { setField(null); setPictures([]) }, [runId])
   useEffect(() => {
     let dead = false
+    // each scan keeps its own record of what it has looked at. A shared one let
+    // a scan that was replaced mark a file as seen, so the scan that followed
+    // skipped it and a field the run really wrote vanished from the page.
+    const seen = new Map<string, number>()
     const pics: { rel: string; name: string; mtime: number }[] = []
     const walk = async (sub: string, depth: number): Promise<FieldSeries | null> => {
       if (depth > 3) return null
@@ -37,8 +40,8 @@ function useField(runId: string, settle: number) {
         }
         if (/\.(png|jpe?g|svg|gif|webp)$/i.test(f.name)) pics.push({ rel: f.rel_path, name: f.sub || f.name, mtime: f.mtime })
         if (!f.name.endsWith('.json') || (f.size ?? 0) < 200) continue
-        if (seen.current.get(f.rel_path) === f.mtime) continue
-        seen.current.set(f.rel_path, f.mtime)
+        if (seen.get(f.rel_path) === f.mtime) continue
+        seen.set(f.rel_path, f.mtime)
         const v = await api.viz(f.rel_path).catch(() => null)
         if (v?.kind === 'field_series') return v as unknown as FieldSeries
       }
