@@ -32,6 +32,7 @@ OpenAI schema.
 from __future__ import annotations
 
 import atexit
+import contextvars
 import asyncio
 import hashlib
 import os
@@ -892,34 +893,115 @@ def _read_write_tools_for(workdir: Path, *, audit_on_submit: bool = False,
     return [read_file, write_file]
 
 
+# What has already been asked in this process. Bounded: the web interface keeps
+# a server up for days, and an unbounded dict keyed by whatever anyone searched
+# for is a slow leak. Oldest out first; 256 is far more than one run asks.
+_BLOCKED_MESSAGE = (
+    "[the search returned nothing after three attempts on all backends. "
+    "DuckDuckGo answers an empty list when it is throttling a machine, which is "
+    "the usual reason for this, so treat it as 'could not search', NOT as 'the "
+    "web has nothing on this'. Do not conclude anything from it: wait and try "
+    "once more, ask a shorter query, or use openPASO's own knowledge and "
+    "examples tools.]")
+
+_SEARCH_CACHE: dict[tuple[str, str, int], str] = {}
+_SEARCH_CACHE_MAX = 256
+_SEARCH_BLOCKED: dict[tuple[str, str, int], float] = {}
+_SEARCH_BLOCKED_FOR = 60.0        # seconds a refusal is remembered
+
+# Whose search this is. One command-line run is one process, but the web
+# interface serves many runs for days from a single one: without this, a run
+# could be handed snippets another run fetched, and its transcript would show
+# results it never asked for. The interface sets it per run; anything that does
+# not is one scope, exactly as before.
+SEARCH_SCOPE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "openpaso_search_scope", default="")
+
+
 @tool
 def web_search(query: str, max_results: int = 5) -> str:
     """Search the web (DuckDuckGo). Returns up to max_results result snippets.
 
-    DuckDuckGo occasionally rate-limits the API backend; we transparently
-    try its ``html`` and ``lite`` backends as fallbacks so the tool stays
-    useful through brief blocks.
+    DuckDuckGo throttles repeated searches from one machine, and when it does it
+    answers with an EMPTY LIST rather than an error. The old code read that as
+    "no results" and said so: an agent was told the web knows nothing about the
+    Schaefer-Turek benchmark, and went on to work from memory. Measured on a
+    throttled machine, five searches in a row returned nothing on all three
+    backends while the same queries returned hits seconds later.
+
+    So: each backend is tried more than once with a pause between attempts, an
+    answer already fetched in this process is reused rather than asked for
+    again, and an empty answer is reported as what it almost always is — a
+    block, not an empty web — so nobody mistakes it for evidence of absence.
     """
     try:
         from duckduckgo_search import DDGS
     except ImportError:
-        return ("[web_search unavailable: install duckduckgo-search "
-                "(pip install duckduckgo-search) to enable]")
-    last_err = None
-    for backend in ("auto", "html", "lite"):
         try:
-            with DDGS() as ddgs:
-                hits = list(ddgs.text(query, max_results=max_results,
-                                      backend=backend))
-            if hits:
-                return "\n\n".join(
-                    f"{h.get('title')}\n{h.get('href')}\n{h.get('body')}"
-                    for h in hits)
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-            continue
-    return f"[no results; last backend error: {last_err}]" if last_err \
-        else "[no results]"
+            from ddgs import DDGS          # the same package, renamed
+        except ImportError:
+            return ("[web_search unavailable: install the search client to enable it — "
+                    "`pip install ddgs`, or `pip install duckduckgo-search` for the older "
+                    "name this repository still pins in "
+                    "langgraph_eval/requirements-langgraph.txt]")
+
+    # the query that is remembered is the query that is sent: keying on a
+    # lowercased form while searching the original would let one spelling
+    # answer for another, and a search engine's results are not case-blind
+    query = query.strip()
+    key = (SEARCH_SCOPE.get(""), query, max_results)
+    if key in _SEARCH_CACHE:
+        return _SEARCH_CACHE[key]
+    # A query that was just refused is refused again: retrying it immediately
+    # costs nine requests and five seconds of pauses, and repetition is what
+    # causes the throttling in the first place. Remembered briefly, so a
+    # provider that recovers is not locked out.
+    blocked_at = _SEARCH_BLOCKED.get(key)
+    if blocked_at is not None and time.time() - blocked_at < _SEARCH_BLOCKED_FOR:
+        return _BLOCKED_MESSAGE
+
+    last_err = None
+    empties = 0                      # answers that came back with nothing in them
+    for pause in (0.0, 1.5, 4.0):
+        if pause:
+            time.sleep(pause)
+        for backend in ("auto", "html", "lite"):
+            try:
+                with DDGS() as ddgs:
+                    hits = list(ddgs.text(query, max_results=max_results,
+                                          backend=backend))
+                if hits:
+                    out = "\n\n".join(
+                        f"{h.get('title')}\n{h.get('href')}\n{h.get('body')}"
+                        for h in hits)
+                    if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+                        _SEARCH_CACHE.pop(next(iter(_SEARCH_CACHE)))
+                    _SEARCH_CACHE[key] = out
+                    return out
+                empties += 1
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+                continue
+
+    if empties == 0 and last_err:
+        # Nothing ever answered: a broken connection or a refused request, not
+        # a provider saying "nothing". Reported as itself and NOT remembered as
+        # a refusal, because the next attempt may get through.
+        #
+        # Decided on whether any answer came back at all, not on whether an
+        # error was seen anywhere: one transient error followed by empty
+        # answers IS the throttle, and reading the presence of an error as
+        # "unreachable" named the wrong failure and skipped the memory that
+        # keeps a stuck run from paying nine requests again.
+        return (f"[the search could not be made: {last_err}. This is a failure to reach the "
+                "search provider, NOT an answer about the web. Do not conclude anything from "
+                "it: try again, or use openPASO's own knowledge and examples tools.]")
+    _SEARCH_BLOCKED[key] = time.time()
+    if len(_SEARCH_BLOCKED) > _SEARCH_CACHE_MAX:
+        _SEARCH_BLOCKED.pop(next(iter(_SEARCH_BLOCKED)))
+    if last_err:                     # some answered empty, one could not be reached
+        return _BLOCKED_MESSAGE + f" (one attempt also failed: {last_err})"
+    return _BLOCKED_MESSAGE
 
 
 # ────────────────────────────────────────────────────────────────────
