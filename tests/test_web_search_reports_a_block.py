@@ -107,13 +107,20 @@ def test_one_run_is_not_served_another_run_s_search(monkeypatch):
     results it never asked for."""
     hit = [{"title": "t", "href": "h", "body": "b"}]
     _use(monkeypatch, [hit])
-    token = agent.SEARCH_SCOPE.set("run-a")
-    agent.web_search.invoke({"query": "cylinder benchmark", "max_results": 3})
-    after_a = _FakeDDGS.calls
-    agent.SEARCH_SCOPE.reset(token)
-    agent.SEARCH_SCOPE.set("run-b")
-    agent.web_search.invoke({"query": "cylinder benchmark", "max_results": 3})
-    assert _FakeDDGS.calls > after_a, "the second run asks for itself"
+    first = agent.SEARCH_SCOPE.set("run-a")
+    try:
+        agent.web_search.invoke({"query": "cylinder benchmark", "max_results": 3})
+        after_a = _FakeDDGS.calls
+    finally:
+        agent.SEARCH_SCOPE.reset(first)
+    second = agent.SEARCH_SCOPE.set("run-b")
+    try:
+        agent.web_search.invoke({"query": "cylinder benchmark", "max_results": 3})
+        assert _FakeDDGS.calls > after_a, "the second run asks for itself"
+    finally:
+        # put the scope back: a test that leaves it set makes every test after
+        # it depend on the order they ran in
+        agent.SEARCH_SCOPE.reset(second)
 
 
 def test_a_query_just_refused_is_not_retried_at_once(monkeypatch):
