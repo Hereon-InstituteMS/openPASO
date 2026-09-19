@@ -155,3 +155,32 @@ def test_a_broken_connection_is_not_reported_as_a_block(monkeypatch):
     assert "could not be made" in out and "connection reset" in out
     assert "could not search" not in out, "a broken connection is not a throttle"
     assert agent._SEARCH_BLOCKED == {}, "and it is not held against the query"
+
+
+def test_one_transient_error_does_not_rename_a_throttle(monkeypatch):
+    """last_err was set by any attempt that raised and never cleared, so a
+    single transient error followed by empty answers was reported as "could not
+    be made" — the wrong failure — and skipped the memory that keeps a stuck
+    run cheap."""
+    import types
+
+    class _OnceBroken(_FakeDDGS):
+        def text(self, query, max_results=5, backend="auto"):
+            type(self).calls += 1
+            if type(self).calls == 1:
+                raise OSError("transient blip")
+            return []                       # throttled: an answer, with nothing in it
+
+    _OnceBroken.calls = 0
+    monkeypatch.setattr(agent, "_SEARCH_CACHE", {}, raising=False)
+    monkeypatch.setattr(agent, "_SEARCH_BLOCKED", {}, raising=False)
+    for name in ("duckduckgo_search", "ddgs"):
+        module = types.ModuleType(name)
+        module.DDGS = _OnceBroken
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+
+    out = agent.web_search.invoke({"query": "throttled question", "max_results": 3})
+    assert "could not search" in out, out[:120]
+    assert "transient blip" in out, "the error is still reported, as the aside it is"
+    assert agent._SEARCH_BLOCKED, "and the refusal is remembered, so a repeat is cheap"

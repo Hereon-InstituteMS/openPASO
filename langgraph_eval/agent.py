@@ -961,6 +961,7 @@ def web_search(query: str, max_results: int = 5) -> str:
         return _BLOCKED_MESSAGE
 
     last_err = None
+    empties = 0                      # answers that came back with nothing in them
     for pause in (0.0, 1.5, 4.0):
         if pause:
             time.sleep(pause)
@@ -977,22 +978,29 @@ def web_search(query: str, max_results: int = 5) -> str:
                         _SEARCH_CACHE.pop(next(iter(_SEARCH_CACHE)))
                     _SEARCH_CACHE[key] = out
                     return out
+                empties += 1
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
                 continue
 
-    if last_err:
-        # every attempt raised: that is a broken connection or a refused
-        # request, not a provider answering "nothing". Saying "could not
-        # search" would be true but would hide which of the two it was, and
-        # holding it against the query for a minute would delay a retry that
-        # might well work.
+    if empties == 0 and last_err:
+        # Nothing ever answered: a broken connection or a refused request, not
+        # a provider saying "nothing". Reported as itself and NOT remembered as
+        # a refusal, because the next attempt may get through.
+        #
+        # Decided on whether any answer came back at all, not on whether an
+        # error was seen anywhere: one transient error followed by empty
+        # answers IS the throttle, and reading the presence of an error as
+        # "unreachable" named the wrong failure and skipped the memory that
+        # keeps a stuck run from paying nine requests again.
         return (f"[the search could not be made: {last_err}. This is a failure to reach the "
                 "search provider, NOT an answer about the web. Do not conclude anything from "
                 "it: try again, or use openPASO's own knowledge and examples tools.]")
     _SEARCH_BLOCKED[key] = time.time()
     if len(_SEARCH_BLOCKED) > _SEARCH_CACHE_MAX:
         _SEARCH_BLOCKED.pop(next(iter(_SEARCH_BLOCKED)))
+    if last_err:                     # some answered empty, one could not be reached
+        return _BLOCKED_MESSAGE + f" (one attempt also failed: {last_err})"
     return _BLOCKED_MESSAGE
 
 
