@@ -84,8 +84,10 @@ with `OPENPASO_TEST_MODEL=1`, so nothing on a normal machine can produce a
 fabricated run through the API.
 
 ```bash
-# fast, no network, no model: config, file safety, uploads, outcome rules,
-# Stop ending processes, corrections, a run that outlives its tab
+# fast, no model and nothing leaving this machine: config, file safety,
+# uploads, outcome rules, Stop ending processes, corrections, a run that
+# outlives its tab. (It does ask localhost whether a model server is
+# listening, which answers at once either way.)
 .venv-lg/bin/pytest webui/tests/test_app.py -q
 
 # live, with a hosted model (a few cents) and the server running

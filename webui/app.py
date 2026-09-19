@@ -101,7 +101,7 @@ async def index():
 async def get_models():
     """Models grouped by where they run, each with whether it works right now,
     what it costs and where the data goes. The mock is never offered."""
-    out = await catalog.models()
+    out = scrub(await catalog.models())
     # what this person's own runs with each model have cost: a measured range,
     # not an estimate, and only where there is one
     costs: dict[str, list[float]] = {}

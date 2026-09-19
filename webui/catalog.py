@@ -24,12 +24,17 @@ _PRICES: dict[str, tuple[float, float]] = {}
 _PRICES_AT = 0.0
 
 
-async def openrouter_prices() -> dict[str, tuple[float, float]]:
+async def openrouter_prices(have_key: bool = True) -> dict[str, tuple[float, float]]:
     """USD per million tokens (input, output), read from OpenRouter itself and
     cached for an hour. Never invented: if the list cannot be fetched, no price
     is shown."""
     global _PRICES, _PRICES_AT
     if _PRICES and time.time() - _PRICES_AT < 3600:
+        return _PRICES
+    if not have_key:
+        # without a key those models cannot be used, so their prices are of no
+        # help — and asking for them would put a network call in the way of a
+        # page (and of a test suite) that needs none
         return _PRICES
     try:
         import httpx
@@ -86,9 +91,8 @@ def _claude_model_setting() -> str | None:
 
 async def models() -> dict:
     groups = []
-    prices = await openrouter_prices()
-
     key, key_source = config.openrouter_key_source()
+    prices = await openrouter_prices(bool(key))
     hosted = []
     for mid, label in config.OPENROUTER_MODELS.items():
         pr = prices.get(mid)

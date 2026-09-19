@@ -803,6 +803,44 @@ def test_a_correction_reaches_a_critic_while_it_works_and_the_main_agent_after()
     assert run.steers == []
 
 
+def test_a_big_file_that_merely_mentions_a_field_series_is_not_read_as_one(tmp_path):
+    """The head was searched for the words, so an ordinary large JSON whose
+    notes mention a field series came back as a broken field descriptor and the
+    page tried to draw it."""
+    from webui import viz
+    p = config.SANDBOX_ROOT / "webui_abc123def" / "notes.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"kind": "notes",
+                             "text": "compared against a field_series written earlier",
+                             "pad": "x" * 5_000_000}))
+    try:
+        assert viz._json(p)["kind"] != "field_series"
+    finally:
+        p.unlink()
+
+
+def test_the_model_list_needs_no_network_without_a_key(monkeypatch):
+    """A cold model list reached OpenRouter even with no key, which put a
+    network call in front of a page (and a test suite) that needs none."""
+    import asyncio as aio
+    asked = []
+
+    async def record(self, url, *a, **k):
+        asked.append(str(url))
+        raise OSError("no network in this test")
+
+    monkeypatch.setattr(catalog, "_PRICES", {}, raising=False)
+    monkeypatch.setattr(catalog, "_PRICES_AT", 0, raising=False)
+    monkeypatch.setattr("httpx.AsyncClient.get", record)
+    monkeypatch.setattr(config, "openrouter_key_source", lambda: (None, None))
+    groups = aio.run(catalog.models())
+    # the local probes still happen — they ask this machine whether a model
+    # server is listening — but nothing leaves it
+    assert not [u for u in asked if u.startswith(config.OPENROUTER_URL)], asked
+    assert any(m["status"].startswith("no OpenRouter key")
+               for g in groups["groups"] for m in g["models"] if g["kind"] == "openrouter")
+
+
 def test_a_large_field_file_is_described_without_being_parsed(tmp_path):
     from webui import viz
     p = config.SANDBOX_ROOT / "webui_abc123def" / "field.json"

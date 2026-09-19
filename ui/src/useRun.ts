@@ -32,6 +32,9 @@ export function useRun(id: string) {
       ws.current = s
       s.onopen = () => { retry = 0 }
       s.onmessage = (m) => {
+        // a socket that has been replaced can still deliver what it had
+        // queued; without this its events land in the run now on screen
+        if (dead || ws.current !== s) return
         let e: Ev & { session?: Session; events?: Ev[] }
         try { e = JSON.parse(m.data) } catch { return }
         if (e.type === 'hello') {

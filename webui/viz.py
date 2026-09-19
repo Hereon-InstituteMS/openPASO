@@ -16,6 +16,7 @@ import csv
 import io
 import json
 import os
+import re
 from pathlib import Path
 
 from . import config, files
@@ -167,7 +168,9 @@ def _head_fields(p: Path) -> dict | None:
     import re
     with p.open("rb") as f:
         head = f.read(_HEAD_BYTES).decode("utf-8", "replace")
-    if '"field_series"' not in head[:200]:
+    # the kind, not the word: an ordinary large JSON whose notes mention a
+    # field series would otherwise come back as a broken field descriptor
+    if not re.search(r'"kind"\s*:\s*"field_series"', head[:2000]):
         return None
     out: dict = {}
     for key, value in re.findall(r'"([a-z_]+)"\s*:\s*(-?\d+\.?\d*(?:[eE][-+]?\d+)?|"[^"]*")', head):

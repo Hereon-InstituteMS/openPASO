@@ -30,7 +30,7 @@ export function ModelPicker({ groups, value, onChange, disabled, up = true }: {
         <span className="text-ink">{cur ? cur.label : groups ? 'Choose a model' : 'Loading…'}</span>
         {!disabled && <span aria-hidden className="text-muted text-[11px]">▾</span>}
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} up={up} width={520}>
+      <Popover open={open} onClose={() => setOpen(false)} up={up} width={520} label="Choose a model">
         {groups?.map((g) => (
           <section key={g.kind} className="p-2">
             <div className="px-2 pt-1 text-[14px] font-semibold text-ink">{g.title}</div>
@@ -89,7 +89,7 @@ export function ModePicker({ modes, value, onChange, planAllowed, up = true }: {
         <span className="text-ink">{cur?.label ?? value}</span>
         <span aria-hidden className="text-muted text-[11px]">▾</span>
       </button>
-      <Popover open={open} onClose={() => setOpen(false)} up={up} width={440}>
+      <Popover open={open} onClose={() => setOpen(false)} up={up} width={440} label="Choose how steps run">
         <ul>
           {modes?.map((m) => {
             const blocked = m.id === 'plan' && !planAllowed
