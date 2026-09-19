@@ -1,0 +1,218 @@
+"""How a run ended, decided once.
+
+The server, the run list and the saved record all read this. The interface
+mirrors the same rule for records written before a turn carried its outcome.
+
+The rule that matters: ``completed`` is a claim about the physics. It is not
+"no exception escaped" and it is not "a solver tool was called". A solver tool
+reports its own verdict, and only a result it reports as completed and
+trustworthy is a finished result. A call that returned "Unknown solver: abaqus"
+computed nothing; a result openPASO's attestation marks as not trustworthy ran
+but is not a result anyone should report.
+"""
+from __future__ import annotations
+
+import json
+import re
+
+# Tools whose return can be a solver result. run_bash is deliberately absent:
+# a shell command that exits zero proves a shell command exited zero.
+SOLVER_TOOLS = frozenset({
+    "run_simulation", "run_with_generator", "coupled_solve",
+    "couple", "couple_levels", "couple_precice", "verify_mesh_independence",
+})
+
+RUNNING = "running"
+UNFINISHED = "unfinished"     # stopped without an end of its own (the server went down)
+COMPLETED = "completed"        # a solver ran and openPASO verified its result
+UNVERIFIED = "unverified"      # a solver ran, openPASO did not verify the result
+NO_RESULT = "no_result"        # ended cleanly, no solver result
+FAILED = "failed"
+INTERRUPTED = "interrupted"
+
+
+RESULT_LIMIT = 8000
+
+
+def shorten(text: str, limit: int = RESULT_LIMIT) -> str:
+    """A tool result, short enough to carry around but never cut where it
+    matters. openPASO stamps its verification verdict at the END of a report,
+    so taking the first 8000 characters of a long verified run threw away the
+    one field that says the result can be trusted, and the run then showed as
+    unverified. Keep both ends."""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    head, tail = int(limit * 0.7), limit - int(limit * 0.7)
+    return (text[:head] + f"\n\n[… {len(text) - limit} characters left out of the middle …]\n\n"
+            + text[-tail:])
+
+
+def _payload(raw: str) -> dict | None:
+    """The JSON object inside a tool result, which MCP wraps as a repr of text
+    blocks. None when the result is not a JSON report (e.g. an error string)."""
+    text = raw or ""
+    m = re.search(r"'text':\s*(['\"])([\s\S]*?)\1\s*[,}]", text)
+    if m:
+        text = m.group(2).encode("utf-8").decode("unicode_escape", "ignore")
+    start = text.find("{")
+    if start < 0:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text[start:])
+        return obj if isinstance(obj, dict) else None
+    except ValueError:
+        pass
+    # fall back to reading the two fields that matter
+    st = re.search(r'"status"\s*:\s*"([A-Za-z_]+)"', text)
+    tr = re.search(r'"trustworthy_result"\s*:\s*(true|false)', text)
+    if not st:
+        return None
+    out = {"status": st.group(1)}
+    if tr:
+        out["trustworthy_result"] = tr.group(1) == "true"
+    return out
+
+
+def _verdict_of(node: dict) -> str | None:
+    """One report's verdict, or None when the node reports nothing.
+
+    Two shapes exist. A run reports ``status`` and, from openPASO's
+    verification gate, ``trustworthy_result``. A coupling reports no status at
+    all: it carries the gate's ``trustworthy_result`` beside ``converged``.
+    Reading only the first shape called every verified coupling a failure."""
+    # Only an exact "completed" with the gate's flag is a verified result, so a
+    # status the product might add later (say "completed_unphysical") reads as
+    # unverified rather than as success. The prefix decides failure only.
+    status = str(node.get("status", "")).lower()
+    trusted = node.get("trustworthy_result")
+    if status:
+        if not status.startswith("completed"):
+            return "failed"
+        return "verified" if (status == "completed" and trusted is True) else "unverified"
+    if trusted is True:
+        return "verified"
+    if trusted is False or "converged" in node or "all_levels_converged" in node:
+        # it ran and reported on itself, but nothing here is a verified result
+        return "failed" if node.get("error") else "unverified"
+    if node.get("error"):
+        return "failed"
+    return None
+
+
+def _walk(node, out: list[str]) -> None:
+    """Every report inside a result, however deep. couple_levels returns one
+    entry per level, each with its own verdict."""
+    if isinstance(node, dict):
+        v = _verdict_of(node)
+        if v:
+            out.append(v)
+        for child in node.values():
+            _walk(child, out)
+    elif isinstance(node, list):
+        for child in node:
+            _walk(child, out)
+
+
+# The legacy coupled_solve answers in prose: a convergence report followed by
+# openPASO's verification note. Neither branch of that note is a machine-readable
+# verdict — the tool itself says to use `couple` for one — so the most it can be
+# is "it ran, and nothing verified it". Reading it as JSON made it "failed", and
+# a coupling that really ran was reported as having computed nothing.
+_NOTE = re.compile(r"\[openPASO verification:", re.I)
+_BROKEN = re.compile(r"^(?:Backend not found|Unknown problem|Unknown solver|Error|Traceback)",
+                     re.I | re.M)
+
+
+def classify_solver_result(raw: str) -> str:
+    """'verified', 'unverified' or 'failed' for one solver tool result.
+
+    A report's own verdict decides it. Only when the top of the report says
+    nothing about verification is the inside consulted: a ladder of couplings
+    answers for the ladder, and "levels 1 and 2 verified, level 3 a null
+    exchange" is a ladder that is NOT verified, however good its first levels
+    were. Taking the best evidence anywhere in the tree would report exactly
+    that ladder as finished."""
+    p = _payload(raw)
+    if not p:
+        text = raw or ""
+        if _NOTE.search(text) and not _BROKEN.search(text):
+            return "unverified"
+        return "failed"
+    top = _verdict_of(p)
+    if top:
+        return top
+    found: list[str] = []
+    _walk(p, found)
+    if "verified" in found:
+        return "verified"
+    if "unverified" in found:
+        return "unverified"
+    return "failed"
+
+
+def solver_verdict(events) -> str | None:
+    """The best solver evidence in these events: 'verified', 'unverified',
+    'failed' (a solver tool was called and computed nothing), or None."""
+    seen = None
+    for e in events:
+        if e.get("type") == "tool_result" and e.get("tool") in SOLVER_TOOLS:
+            v = classify_solver_result(e.get("result") or "")
+            if v == "verified":
+                return v
+            if v == "unverified" or seen is None:
+                seen = v
+    return seen
+
+
+def solver_ran(events) -> bool:
+    """True when some solver tool produced a result, verified or not."""
+    return solver_verdict(events) in ("verified", "unverified")
+
+
+def clean_outcome(events) -> str:
+    """The outcome of a turn that ended without an error."""
+    v = solver_verdict(events)
+    return COMPLETED if v == "verified" else UNVERIFIED if v == "unverified" else NO_RESULT
+
+
+def _turns(events):
+    """Split the log into turns. A turn starts at `turn_start` (or, in records
+    written before that event existed, at `user_msg`)."""
+    turns, cur, has_marker = [], [], any(e.get("type") == "turn_start" for e in events)
+    starter = "turn_start" if has_marker else "user_msg"
+    for e in events:
+        if e.get("type") == starter and cur:
+            turns.append(cur)
+            cur = []
+        cur.append(e)
+    if cur:
+        turns.append(cur)
+    return turns
+
+
+def fold(events, *, live_default: str = RUNNING) -> str:
+    """How the latest turn of a run ended, from its event log.
+
+    Each turn is judged on its own. An error decides the turn, and an error that
+    carries no outcome of its own is a failure. A clean end is judged by the
+    solver evidence, never by what the log's `done` event claimed: records
+    written before today said "completed" for turns that computed nothing."""
+    turns = _turns(events)
+    if not turns:
+        return live_default
+    turn = turns[-1]
+    outcome = live_default
+    decided = None                      # an error says how the turn ended
+    for e in turn:
+        t = e.get("type")
+        if t == "error":
+            decided = e.get("outcome") or FAILED
+            outcome = decided
+        elif t == "done":
+            if decided:
+                outcome = decided
+                continue
+            stated = e.get("outcome")
+            outcome = stated if stated in (FAILED, INTERRUPTED, UNFINISHED) else clean_outcome(turn)
+    return outcome
