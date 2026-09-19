@@ -239,6 +239,43 @@ def test_a_long_result_keeps_the_verdict_at_its_end():
     assert len(shorten(raw)) <= RESULT_LIMIT + 200
 
 
+def test_claude_code_reporting_an_error_is_not_a_turn_that_merely_had_no_result():
+    """Its result message can say the run failed while the command exits zero.
+    Taking any text as a finished turn recorded a failure as an empty success."""
+    import asyncio as aio
+    from webui import claude_code
+
+    class _Proc:
+        returncode = 0
+
+        class _Out:
+            def __init__(self):
+                self.lines = [
+                    json.dumps({"type": "result", "subtype": "error_during_execution",
+                                "is_error": True, "result": "tool use failed"}).encode() + b"\n",
+                    b"",
+                ]
+
+            async def readline(self):
+                return self.lines.pop(0) if self.lines else b""
+
+        def __init__(self):
+            self.stdout = self._Out()
+            self.stderr = None
+
+        async def wait(self):
+            return 0
+
+    async def emit(_e):
+        return None
+
+    try:
+        aio.run(claude_code._consume(_Proc(), emit, None, []))
+        raise AssertionError("a reported error must not pass as a finished turn")
+    except RuntimeError as exc:
+        assert "stopped with an error" in str(exc) and "tool use failed" in str(exc)
+
+
 def test_claude_code_writes_its_results_into_the_run(tmp_path):
     """Its openPASO server took the shared install directories, so a Claude Code
     run's output landed outside the run and two runs could collide."""

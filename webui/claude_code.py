@@ -221,6 +221,13 @@ async def _consume(proc, emit, state, errors: list[str] | None = None) -> str:
                                    "result": shorten(body)})
         elif kind == "result":
             final = msg.get("result") or final
+            # Claude Code can report a failure in this message and still exit
+            # zero: is_error, or a subtype that names one. Treating any text as
+            # a finished turn recorded such a run as a turn that merely
+            # produced no result, which is a different thing entirely.
+            if msg.get("is_error") or str(msg.get("subtype", "")).startswith("error"):
+                failed = str(final or msg.get("subtype") or "it reported an error").strip()
+                raise RuntimeError("Claude Code stopped with an error: " + failed[:400])
             if state is not None and msg.get("session_id"):
                 state["claude_session_id"] = msg["session_id"]
             cost = msg.get("total_cost_usd")
