@@ -508,6 +508,28 @@ def test_scrubbing_leaves_a_field_file_s_numbers_alone():
     assert "~" in scrub_text(f"--prefix={Path.home()}/opt")
 
 
+def test_a_streamed_field_file_keeps_its_frames_whole(client):
+    """Above the whole-file limit the download is streamed, and a chunk
+    boundary inside the base64 used to put the payload back in the scrubber's
+    way — the same corruption, one path further on."""
+    import base64
+    work = config.SANDBOX_ROOT / "webui_abc123def" / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    frames = base64.b64encode(os.urandom(9_000_000)).decode()      # over the 8 MB limit
+    big = work / "field.json"
+    big.write_text(json.dumps({"kind": "field_series", "note": f"written in {Path.home()}/run",
+                               "frames": frames}))
+    try:
+        r = client.get("/sandbox-file/webui_abc123def/work/field.json")
+        assert r.status_code == 200
+        assert len(r.text) > 8 * 1024 * 1024, "this is the streamed path"
+        back = json.loads(r.text)
+        assert back["frames"] == frames, "the frames must survive byte for byte"
+        assert str(Path.home()) not in r.text and "~/run" in back["note"]
+    finally:
+        big.unlink()
+
+
 def test_encoded_data_survives_every_substitution_not_only_the_newest():
     """A path pattern keeps out of the middle of base64 by requiring a boundary,
     but "=" must stay a boundary so that --prefix=/home/... is caught — and "="

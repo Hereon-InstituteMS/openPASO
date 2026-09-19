@@ -324,24 +324,53 @@ def _is_text(p: Path) -> bool:
     return True
 
 
+_ENCODED_KEY = re.compile(r'"(?:frames|mask|data|image)"\s*:\s*"')
+
+
 def _scrubbed_stream(p: Path):
-    """The file, scrubbed, in pieces, so a huge log does not have to be held in
-    memory at once. Each piece keeps the tail of the one before it in view, so a
-    path that straddles the boundary is still found."""
-    carry = ""
+    """The file, scrubbed, in pieces, so a huge log need not be held in memory.
+
+    Each piece keeps the tail of the one before it in view, so a path across a
+    boundary is still found — and the encoded payloads are passed through as
+    they are, which the whole-file path does by looking at the value entire.
+    A field file is tens of megabytes, so its frames cannot be held to be
+    examined: this follows the key that opens the value and copies everything
+    until the quote that closes it, however many pieces that takes. Without it
+    a chunk boundary inside the base64 put the payload back in the scrubber's
+    way, and the numbers a solver produced could be rewritten again."""
+    carry, inside = "", False
     with p.open("r", encoding="utf-8", errors="replace") as fh:
         while True:
             chunk = fh.read(1024 * 1024)
             if not chunk:
                 break
             text = carry + chunk
-            keep = text[-_CARRY:] if len(text) > _CARRY else text
-            out = scrub_text(text[:-len(keep)] if len(text) > _CARRY else "")
-            carry = keep
-            if out:
-                yield out.encode("utf-8")
+            carry = ""
+            while text:
+                if inside:                      # copying an encoded value
+                    end = text.find('"')
+                    if end < 0:
+                        yield text.encode("utf-8")
+                        text = ""
+                        break
+                    yield text[:end + 1].encode("utf-8")
+                    text, inside = text[end + 1:], False
+                    continue
+                m = _ENCODED_KEY.search(text)
+                if m:
+                    yield scrub_text(text[:m.end()]).encode("utf-8")
+                    text, inside = text[m.end():], True
+                    continue
+                # no key in view: scrub all but a tail, which may hold half of
+                # a path or half of a key and is judged with the next piece
+                if len(text) > _CARRY:
+                    yield scrub_text(text[:-_CARRY]).encode("utf-8")
+                    carry = text[-_CARRY:]
+                else:
+                    carry = text
+                text = ""
     if carry:
-        yield scrub_text(carry).encode("utf-8")
+        yield (carry if inside else scrub_text(carry)).encode("utf-8")
 
 
 @app.get("/sandbox-file/{rel:path}")
@@ -426,8 +455,15 @@ async def list_sessions(all: bool = False):
     (a page that was opened and left) and test-model runs are not work, so they
     are left out unless asked for."""
     rows = []
-    paths = sorted(config.SESSION_DIR.glob("*.json"),
-                   key=lambda x: x.stat().st_mtime, reverse=True)
+    # the mtime is read once, here, and a record that disappears between the
+    # glob and this is simply not in the list rather than a failed request
+    dated = []
+    for path in config.SESSION_DIR.glob("*.json"):
+        try:
+            dated.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    paths = [path for _, path in sorted(dated, key=lambda x: x[0], reverse=True)]
     for path in paths:
         # a live run is read on the event loop: its events and its pending
         # approvals change there, and reading them from a worker thread could
