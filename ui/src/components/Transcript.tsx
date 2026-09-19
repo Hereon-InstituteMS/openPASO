@@ -307,7 +307,15 @@ function build(events: Ev[], live: boolean): Entry[] {
       }
       case 'tool_error': {
         const c = calls.get(e.call_id || '')
-        if (c) { c.state = 'failed'; c.detail = cut(tidy(e.error || e.message || 'failed'), 160); c.t1 = e.t; tally.tools += 1 }
+        if (c) {
+          c.state = 'failed'
+          c.detail = cut(tidy(e.error || e.message || 'failed'), 160)
+          c.t1 = e.t
+          tally.tools += 1
+          // a solver tool that raised has been called and produced nothing;
+          // without this the closing line said no solver ran at all
+          if (SOLVER_TOOLS.has(c.tool)) tally.solverFailed = tally.solverFailed ?? c.detail
+        }
         break
       }
       case 'tool_call_rejected': {

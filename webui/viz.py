@@ -39,8 +39,11 @@ def visualize(rel: str) -> dict:
     if kind == "json":
         return _json(p)
     if kind in ("yaml", "mesh", "text"):
-        return {"kind": "text", "text": _read_text(p),
-                "syntax": _syntax_for(p)}
+        text = _read_text(p)
+        return {"kind": "text", "text": text, "syntax": _syntax_for(p),
+                # a preview that stops without saying so invites a conclusion
+                # from what is not in it
+                "truncated": p.stat().st_size > len(text.encode("utf-8", "replace"))}
     return {"kind": "unknown", "path": str(p)}
 
 

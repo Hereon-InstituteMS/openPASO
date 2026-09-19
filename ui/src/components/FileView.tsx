@@ -9,9 +9,9 @@ import { fileUrl } from '../api'
    asked for them. */
 
 type Viz =
-  | { kind: 'text'; text: string; syntax?: string }
+  | { kind: 'text'; text: string; syntax?: string; truncated?: boolean }
   | { kind: 'json'; obj: unknown }
-  | { kind: 'table'; rows: string[][]; header: string[] }
+  | { kind: 'table'; rows: string[][]; header: string[]; truncated?: boolean }
   | { kind: 'image'; rel: string }
   | { kind: 'error'; error: string }
   | { kind: string; [k: string]: unknown }
@@ -152,6 +152,12 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
             <div className="text-[14px] text-[#D85A6F]">{String(viz.error)}</div>
           )}
 
+          {viz?.kind === 'text' && (viz as { truncated?: boolean }).truncated && (
+            <p className="text-[14px] text-coral mb-3">
+              The beginning of a longer file. Download it to see all of it.
+            </p>
+          )}
+
           {viz?.kind === 'text' && (
             <pre className="num text-[13px] leading-[1.65] text-body whitespace-pre-wrap
                             break-words">{(viz as { text: string }).text}</pre>
@@ -165,6 +171,12 @@ export default function FileView({ rel, onClose }: { rel: string; onClose: () =>
 
           {viz?.kind === 'table' && (
             <>
+              {(viz as { truncated?: boolean }).truncated && (
+                <p className="text-[14px] text-coral mb-3">
+                  The first {(viz as { rows: string[][] }).rows.length.toLocaleString()} rows of a longer
+                  file. Download it for the rest — what is drawn and shown below stops here.
+                </p>
+              )}
               <Chart header={(viz as { header: string[] }).header}
                      rows={(viz as { rows: string[][] }).rows} />
               <table className="w-full mt-6 num text-[13px]">

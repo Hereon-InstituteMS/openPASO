@@ -508,6 +508,23 @@ def test_scrubbing_leaves_a_field_file_s_numbers_alone():
     assert "~" in scrub_text(f"--prefix={Path.home()}/opt")
 
 
+def test_a_data_field_holding_prose_is_still_scrubbed_when_streamed(client):
+    """The key is not enough: a "data" field can hold text, and passing it
+    through unread because of its name would carry a home path out."""
+    work = config.SANDBOX_ROOT / "webui_abc123def" / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    doc = work / "notes.json"
+    filler = "the run wrote a long note here. " * 400_000          # over the stream limit
+    doc.write_text(json.dumps({"data": f"{filler} written in {Path.home()}/run/x", "n": 1}))
+    try:
+        r = client.get("/sandbox-file/webui_abc123def/work/notes.json")
+        assert r.status_code == 200 and len(r.text) > 8 * 1024 * 1024
+        assert str(Path.home()) not in r.text, "prose under any key is scrubbed"
+        assert "~/run/x" in r.text
+    finally:
+        doc.unlink()
+
+
 def test_a_streamed_field_file_keeps_its_frames_whole(client):
     """Above the whole-file limit the download is streamed, and a chunk
     boundary inside the base64 used to put the payload back in the scrubber's

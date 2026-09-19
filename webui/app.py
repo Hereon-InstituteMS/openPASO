@@ -325,6 +325,8 @@ def _is_text(p: Path) -> bool:
 
 
 _ENCODED_KEY = re.compile(r'"(?:frames|mask|data|image)"\s*:\s*"')
+_LOOKS_ENCODED = re.compile(r"[A-Za-z0-9+/=\s]{64}")
+_PEEK = 64          # how much of a value is examined before trusting the key
 
 
 def _scrubbed_stream(p: Path):
@@ -358,8 +360,19 @@ def _scrubbed_stream(p: Path):
                     continue
                 m = _ENCODED_KEY.search(text)
                 if m:
+                    # the key is not enough: a "data" field can hold prose, and
+                    # passing that through unread would carry a home path out
+                    value = text[m.end():]
+                    if len(value) < _PEEK and len(text) < 1024 * 1024:
+                        carry = text          # decide once the value is in view
+                        text = ""
+                        break
+                    if _LOOKS_ENCODED.match(value[:_PEEK]):
+                        yield scrub_text(text[:m.end()]).encode("utf-8")
+                        text, inside = text[m.end():], True
+                        continue
                     yield scrub_text(text[:m.end()]).encode("utf-8")
-                    text, inside = text[m.end():], True
+                    text = text[m.end():]     # ordinary text: scrub it as prose
                     continue
                 # no key in view: scrub all but a tail, which may hold half of
                 # a path or half of a key and is judged with the next piece
