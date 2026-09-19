@@ -2,9 +2,9 @@
 openPASO — MCP Server
 
 Connects any LLM to multiple open-source FEM codes via the Model Context Protocol.
-Supported backends (catalog ships 8, runtime depends on local installs):
+Supported backends (catalog ships 9, runtime depends on local installs):
 4C Multiphysics, FEniCSx (dolfinx), deal.II, NGSolve, scikit-fem, Kratos
-Multiphysics, DUNE-fem, FEBio. Call `discover(query='list')` after start-up
+Multiphysics, DUNE-fem, FEBio, SPARTA. Call `discover(query='list')` after start-up
 for the current availability and per-backend install hints.
 """
 

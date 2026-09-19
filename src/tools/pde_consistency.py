@@ -74,13 +74,27 @@ class ConsistencyResult:
         }
 
 
-def _detect_midpoint_grid(coords: list) -> tuple:
+def _detect_midpoint_grid(coords: list, box: list | None = None) -> tuple:
     """Is this a tensor grid of cell midpoints, and what is the cell volume?
 
     The quadrature below is a midpoint rule, which is second-order accurate on
     exactly this arrangement and meaningless on a scatter. Returning the weight
     ONLY when the arrangement is right is what keeps a number from being
     reported that the method cannot support.
+
+    UNIFORM WAS NOT ENOUGH, AND THE GAP BLESSED A WRONG FIELD. Given the box,
+    the points must also be the CENTRES of its cells: the outermost one sits
+    half a step inside each face. A VERTEX grid -- the corners of the same
+    tiling, which is what a participant's own mesh dump is -- is just as
+    uniform, and under the midpoint weight its boundary row carries a whole
+    cell where it should carry half. Measured on a coupled run that graded
+    correct, over its own mesh dumps: the delivered field read 0.370, 0.200,
+    0.104 and the same field scaled by 1.20 read 0.245, 0.040, 0.076 -- the
+    20 % error scoring BETTER than the truth, both CONSISTENT. On that run's
+    probe-grid deliverables, true cell midpoints, the same check separates them
+    (1.79e-02 -> 1.63e-03 against a flat 1.9e-01).
+
+    `box` stays optional so a caller that has none keeps the old behaviour.
     """
     axes = []
     for d in range(len(coords[0])):
@@ -94,6 +108,25 @@ def _detect_midpoint_grid(coords: list) -> tuple:
         axes.append((vals, h))
     if len(coords) != math.prod(len(v) for v, _ in axes):
         return None, "the points do not fill a full tensor grid"
+    if box is not None:
+        for d, (vals, h) in enumerate(axes):
+            try:
+                lo, hi = float(box[d][0]), float(box[d][1])
+            except (IndexError, TypeError, ValueError):
+                break
+            near_lo, near_hi = vals[0] - lo, hi - vals[-1]
+            if (abs(near_lo - h / 2) > 0.05 * h) or (abs(near_hi - h / 2) > 0.05 * h):
+                shape = ("the corners of the cells (a vertex grid)"
+                         if min(abs(near_lo), abs(near_hi)) < 0.05 * h
+                         else f"offset {near_lo:.4g} and {near_hi:.4g} from the faces")
+                return None, (
+                    f"along axis {d} the points are not the CENTRES of the box's "
+                    f"cells but {shape}, and this check integrates with a midpoint "
+                    f"rule: every point carries one whole cell, so a row sitting on "
+                    f"a face carries twice its share. Hand in the field at the "
+                    f"points your task prescribes -- a probe grid is cell midpoints "
+                    f"-- rather than your own mesh nodes, or the residual measures "
+                    f"the quadrature instead of the field")
     weight = 1.0
     for _, h in axes:
         weight *= h
@@ -210,8 +243,23 @@ def _eval_source(expr: str, pts, dim: int):
 
 
 def check_levels(levels: dict, source_expr: str, coefficient,
-                 box: list) -> ConsistencyResult:
-    """levels maps a level number to a list of (coords..., u) rows."""
+                 box: list, reaction: float = 0.0) -> ConsistencyResult:
+    """levels maps a level number to a list of (coords..., u) rows.
+
+    `reaction` is the constant c of -div(K grad u) + c u = f. The operator stays
+    self-adjoint, so the adjoint of the test function gains exactly + c v and
+    the identity is otherwise unchanged; c = 0 reproduces the pure-diffusion
+    behaviour bit for bit.
+
+    WHY IT IS HERE. Without it the check judges a reacting field against a
+    different equation than the one that produced it. Measured on the two
+    coupled runs that graded correct this week, over their own delivered probe
+    files: side A (c = 10) reads 1.79e-02 -> 5.18e-03 -> 1.63e-03 CONSISTENT
+    with the term and 3.61e-01 -> 3.54e-01 -> 3.52e-01 INCONSISTENT without it.
+    A flat 35 % residual on the one field that is right is not a weak check, it
+    is a wrong one, and every reacting side of every coupled problem would get
+    it.
+    """
     import numpy as np
     res = ConsistencyResult()
     for lvl in sorted(levels):
@@ -228,7 +276,7 @@ def check_levels(levels: dict, source_expr: str, coefficient,
                 lvl, len(rows), float("nan"),
                 "the delivered field carries a non-finite value"))
             continue
-        weight, why = _detect_midpoint_grid(pts)
+        weight, why = _detect_midpoint_grid(pts, box)
         if weight is None:
             res.levels.append(LevelResult(lvl, len(rows), float("nan"), why))
             continue
@@ -278,6 +326,8 @@ def check_levels(levels: dict, source_expr: str, coefficient,
         # merely converges there, which is the only thing given up, and the
         # verdict reads the FALL not an absolute floor. Convergence is enough.
         v, Lv = _adjoint_of_v_flat(coefficient, pts, box)
+        if reaction:
+            Lv = Lv + float(reaction) * v
         f = _eval_source(source_expr, pts, dim)
         lhs = float(np.sum(u * Lv) * weight)
         rhs = float(np.sum(f * v) * weight)
@@ -455,7 +505,7 @@ def check_levels_elastic(levels: dict, source_x: str, source_y: str,
                 lvl, len(rows), float("nan"),
                 "the delivered field carries a non-finite value"))
             continue
-        weight, why = _detect_midpoint_grid(pts)
+        weight, why = _detect_midpoint_grid(pts, box)
         if weight is None:
             res.levels.append(LevelResult(lvl, len(rows), float("nan"), why))
             continue

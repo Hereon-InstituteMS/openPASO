@@ -2735,6 +2735,193 @@ def _fourc_deck_state(side: Path, work: Path) -> dict | None:
              "deck until its VTU folder appears; a deck that ran is not touched.")
     return {"what": "; ".join(what) + ".", "brief": brief}
 
+def _side_operators(work: Path) -> dict:
+    """Each side's operator, as that side's OWN config.json states it.
+
+    The served contracts read ./config.json for the level keys and carry the
+    subdomain's box, coefficient, reaction and source in the same file, so the
+    operator is already on disk next to the participant that solved it. Nothing
+    here comes from a task file or a key: it is the agent's own statement of
+    the problem it implemented, which is what its own field can be judged
+    against.
+    """
+    out = {}
+    for cfg_path in sorted(work.glob("*/config.json")):
+        try:
+            cfg = json.loads(cfg_path.read_text() or "{}")
+        except Exception:                                    # noqa: BLE001
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        side = cfg_path.parent.name
+        missing = [k for k in ("x0", "x1", "y0", "y1", "k") if k not in cfg]
+        entry = {"dir": cfg_path.parent, "missing": missing}
+        if not missing:
+            try:
+                entry["box"] = [(float(cfg["x0"]), float(cfg["x1"])),
+                                (float(cfg["y0"]), float(cfg["y1"]))]
+                entry["k"] = float(cfg["k"])
+                entry["reaction"] = float(cfg.get("reaction") or 0.0)
+            except (TypeError, ValueError):
+                entry["missing"] = ["a numeric x0, x1, y0, y1 and k"]
+        src = str(cfg.get("source_expr") or cfg.get("source") or "").strip()
+        entry["source"] = src.replace("^", "**")
+        if not src:
+            entry["missing"] = entry["missing"] + ["source_expr"]
+        out[side] = entry
+    return out
+
+
+def _per_level_field_sets(work: Path, box: list) -> list:
+    """Sets of the agent's own CSVs that are per-level fields on `box`.
+
+    Found by SHAPE, never by name: files whose names differ only in one integer
+    are one set, the integer is the level, and a file joins the set only if its
+    rows are (x, y, value) inside the box AND form a grid of that box's cell
+    midpoints -- the arrangement the identity's quadrature is exact on. A
+    participant's own mesh dump is uniform but sits on the cell corners, and is
+    refused there (see pde_consistency._detect_midpoint_grid), which is the
+    point: it is the file that must not be judged.
+    """
+    from .pde_consistency import _detect_midpoint_grid
+
+    groups: dict = {}
+    seen = set()
+    for path in sorted(list(work.glob("*.csv")) + list(work.glob("*/*.csv"))):
+        if path.resolve() in seen:
+            continue
+        seen.add(path.resolve())
+        nums = re.findall(r"\d+", path.name)
+        if not nums:
+            continue
+        rows = []
+        try:
+            with path.open() as fh:
+                for row in _csv.reader(fh):
+                    try:
+                        vals = tuple(float(c) for c in row)
+                    except ValueError:
+                        continue                              # header
+                    if len(vals) >= 3:
+                        rows.append(vals[:3])
+        except OSError:
+            continue
+        if len(rows) < 4:
+            continue
+        pts = [r[:2] for r in rows]
+        (lo_x, hi_x), (lo_y, hi_y) = box
+        pad = 1e-9 + 1e-6 * max(hi_x - lo_x, hi_y - lo_y)
+        if not all(lo_x - pad <= p[0] <= hi_x + pad and lo_y - pad <= p[1] <= hi_y + pad
+                   for p in pts):
+            continue
+        weight, _why = _detect_midpoint_grid(pts, box)
+        if weight is None:
+            continue
+        key = re.sub(r"\d+", "#", path.name)
+        groups.setdefault(key, {})[int(nums[0])] = rows
+    return sorted((g for g in groups.values() if len(g) >= 2),
+                  key=lambda g: (len(g), len(next(iter(g.values())))), reverse=True)
+
+
+def equation_findings(work: Path) -> list[dict]:
+    """Does each side's delivered field satisfy the equation that side states?
+
+    NOT VOLUNTARY, FOR THE REASON THE SIGN CHECK IS NOT. `verify_pde_consistency`
+    is the only check that separates a field converging cleanly to the RIGHT
+    function from one converging just as cleanly to a wrong one -- a refinement
+    study cannot, and the run's own mesh-independence verdict fires on half the
+    correct runs. Measured across every coupled cell on disk: 1118 runs, the
+    tool called in ONE. Two wordings of the invitation were tried and measured
+    (2 calls against 14 asks, then 0 against 7). So it is computed here, from
+    files the agent already wrote, and reported whether or not anyone asks.
+
+    It judges the field against the operator the AGENT'S OWN config.json
+    states, so it is a self-consistency check and leaks nothing: no task file,
+    no key, no reference solution. A side whose config does not state the
+    operator is told which key is missing rather than guessed at.
+    """
+    out: list[dict] = []
+    for side, op in sorted(_side_operators(work).items()):
+        if op.get("missing"):
+            out.append({
+                "sequence": f"equation check side {side}", "values": [],
+                "priority": 26, "informational": True,
+                "finding": (
+                    f"SIDE {side}'S FIELD WAS NOT CHECKED AGAINST ITS OWN EQUATION: "
+                    f"its ./config.json does not state {', '.join(op['missing'])}. "
+                    f"The served contract reads the subdomain box (x0, x1, y0, y1), "
+                    f"the coefficient k, the reaction (0 when there is none) and "
+                    f"source_expr from that file; with them this audit checks the "
+                    f"delivered field against the equation you implemented, which is "
+                    f"the one check that separates a field converging to the right "
+                    f"function from one converging to a wrong one.")})
+            continue
+        sets = _per_level_field_sets(work, op["box"])
+        if not sets:
+            out.append({
+                "sequence": f"equation check side {side}", "values": [],
+                "priority": 26, "informational": True,
+                "finding": (
+                    f"SIDE {side}'S FIELD WAS NOT CHECKED AGAINST ITS OWN EQUATION: "
+                    f"no per-level file of yours holds that side's field at the cell "
+                    f"MIDPOINTS of its box {op['box']}. A participant's own mesh dump "
+                    f"sits on the mesh nodes, and the check's quadrature is a midpoint "
+                    f"rule, so it would measure the quadrature rather than the field. "
+                    f"Write the per-level file your task asks for -- the field "
+                    f"interpolated at the probe points it prescribes -- and this "
+                    f"audit checks it.")})
+            continue
+        levels = {lvl: rows for lvl, rows in sorted(sets[0].items())}
+        try:
+            from .pde_consistency import check_levels
+            res = check_levels(levels, op["source"], op["k"], op["box"],
+                               reaction=op["reaction"]).as_dict()
+        except Exception as exc:                              # noqa: BLE001
+            out.append({"sequence": f"equation check side {side}", "values": [],
+                        "priority": 26, "informational": True,
+                        "finding": (f"SIDE {side}'S EQUATION CHECK COULD NOT RUN: "
+                                    f"{type(exc).__name__}: {exc}")})
+            continue
+        resid = [l.get("relative_weak_residual") for l in res.get("levels", [])]
+        verdict = str(res.get("verdict"))
+        shown = ", ".join(f"{r:.3e}" for r in resid
+                          if isinstance(r, float) and r == r)
+        op_txt = (f"-div({op['k']:g} grad u)"
+                  + (f" + {op['reaction']:g} u" if op["reaction"] else "")
+                  + " = f")
+        if verdict == "CONSISTENT":
+            out.append({
+                "sequence": f"equation check side {side}", "values": resid,
+                "priority": 26, "informational": True,
+                "finding": (
+                    f"SIDE {side} SATISFIES ITS OWN EQUATION {op_txt} on the field you "
+                    f"delivered: the weak residual falls {shown} across the levels, "
+                    f"which is what a field solving the stated problem does. This is "
+                    f"self-consistency, not a comparison with any reference: it says "
+                    f"your field solves the equation your config states, with the "
+                    f"source you gave it.")})
+        elif verdict == "INCONSISTENT":
+            out.append({
+                "sequence": f"equation check side {side}", "values": resid,
+                "priority": 5,
+                "finding": (
+                    f"SIDE {side}'S FIELD DOES NOT SATISFY THE EQUATION ITS OWN CONFIG "
+                    f"STATES ({op_txt}): the weak residual is {shown} across the "
+                    f"levels -- it does not fall, and a field that solves the stated "
+                    f"problem drives it down by roughly four per refinement. Refining "
+                    f"will not fix this and your convergence study cannot see it: the "
+                    f"field is converging cleanly to a different function. Check the "
+                    f"source term you implemented against the one your task states, "
+                    f"the coefficient, and which subdomain each belongs to.")})
+        else:
+            why = "; ".join(str(l.get("detail", ""))[:200] for l in res.get("levels", [])[:2])
+            out.append({
+                "sequence": f"equation check side {side}", "values": resid,
+                "priority": 26, "informational": True,
+                "finding": (f"SIDE {side}'S EQUATION CHECK RETURNED {verdict}: {why}")})
+    return out
+
+
 def wrong_level_run_log_findings(work: Path) -> list[dict]:
     """A run log that is a copy of ANOTHER level's console. Measured (round 29): four cells coupled
     three refined levels (consoles 54, 187, 693 dofs) and handed in run logs reading 54 at every
@@ -3313,6 +3500,7 @@ def audit(work_dir: str, claimed_order: float | None = None,
         findings.extend(identical_solution_levels_findings(work))
         findings.extend(wrong_level_run_log_findings(work))
         findings.extend(solution_rows_grow_findings(work))
+        findings.extend(equation_findings(work))
         findings = findings + [
             {"sequence": "level files", "values": [],
              "finding": (
@@ -3459,6 +3647,11 @@ def audit(work_dir: str, claimed_order: float | None = None,
     findings.extend(identical_solution_levels_findings(work))
     findings.extend(wrong_level_run_log_findings(work))
     findings.extend(solution_rows_grow_findings(work))
+    # NOT VOLUNTARY: see equation_findings. The one check that separates a field
+    # converging to the right function from one converging to a wrong one was
+    # called in 1 of 1118 recorded coupled runs, so it is computed here from the
+    # agent's own files and reported whether or not it was asked for.
+    findings.extend(equation_findings(work))
     clean = not [f for f in findings if not f.get("informational")]
     # THE LADDER: the next unmet step of a coupled run, from the files. It
     # leads a clean reply and closes a dirty one, so the agent always knows
