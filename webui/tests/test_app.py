@@ -508,6 +508,51 @@ def test_scrubbing_leaves_a_field_file_s_numbers_alone():
     assert "~" in scrub_text(f"--prefix={Path.home()}/opt")
 
 
+def test_an_svg_a_run_wrote_cannot_run_as_code(client):
+    """A model can write an SVG with a script in it. Drawn in a page it never
+    runs; opened at its own address it would run in this interface's origin."""
+    work = config.SANDBOX_ROOT / "webui_abc123def" / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    art = work / "plot.svg"
+    art.write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("/api/sessions")</script></svg>')
+    try:
+        r = client.get("/sandbox-file/webui_abc123def/work/plot.svg")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/svg+xml")
+        assert "default-src 'none'" in r.headers.get("content-security-policy", "")
+        assert r.headers.get("x-content-type-options") == "nosniff"
+    finally:
+        art.unlink()
+
+
+def test_a_pdf_is_not_mistaken_for_text_and_rewritten(client):
+    """A PDF opens with an ASCII header and turns binary later, so a sniff of
+    the first kilobytes called it text and it was changed on the way out."""
+    work = config.SANDBOX_ROOT / "webui_abc123def" / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    doc = work / "report.pdf"
+    body = b"%PDF-1.7\n" + b"a" * 9000 + b"\x00\x01\x02binary tail" + str(Path.home()).encode()
+    doc.write_bytes(body)
+    try:
+        r = client.get("/sandbox-file/webui_abc123def/work/report.pdf")
+        assert r.status_code == 200
+        assert r.content == body, "served exactly as the run wrote it"
+    finally:
+        doc.unlink()
+
+
+def test_a_file_calling_itself_a_field_must_carry_a_field(tmp_path):
+    """Adopted on its word, the page asked for frames that were not there."""
+    from webui import viz
+    p = config.SANDBOX_ROOT / "webui_abc123def" / "claims.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"kind": "field_series", "note": "written by hand"}))
+    try:
+        assert viz._json(p)["kind"] != "field_series"
+    finally:
+        p.unlink()
+
+
 def test_a_data_field_holding_prose_is_still_scrubbed_when_streamed(client):
     """The key is not enough: a "data" field can hold text, and passing it
     through unread because of its name would carry a home path out."""

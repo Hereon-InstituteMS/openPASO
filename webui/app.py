@@ -305,7 +305,19 @@ _SCRUB_WHOLE = 8 * 1024 * 1024        # bigger than this is streamed in pieces
 _CARRY = 4096                          # so a path split across two pieces still matches
 
 
+# Formats that are binary whatever their first bytes look like. A PDF opens
+# with an ASCII header and turns binary later, so a sniff of the first kilobytes
+# called it text, scrubbed it and served it as text: the file was changed on the
+# way out and no longer opened.
+_ALWAYS_BINARY = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".zip", ".gz",
+                  ".bz2", ".xz", ".tar", ".h5", ".hdf5", ".npy", ".npz", ".vtu",
+                  ".vtk", ".vtp", ".pvtu", ".exo", ".e", ".med", ".msh", ".stl",
+                  ".step", ".stp", ".iges", ".igs", ".brep", ".woff", ".woff2", ".ttf"}
+
+
 def _is_text(p: Path) -> bool:
+    if p.suffix.lower() in _ALWAYS_BINARY:
+        return False
     try:
         with p.open("rb") as fh:
             head = fh.read(_SNIFF_BYTES)
@@ -400,6 +412,14 @@ async def sandbox_file(rel: str):
     # an SVG is text and is scrubbed like text, but it is a picture: served as
     # plain text a browser shows its source instead of drawing it
     kind = ("image/svg+xml" if p.suffix.lower() == ".svg" else "text/plain") + "; charset=utf-8"
+    if p.suffix.lower() == ".svg":
+        # An SVG is a document: a model can write one containing a script, and
+        # opening its address in a tab would run that script in this
+        # interface's own origin, where the run records live. Drawn in a page
+        # (<img>) it never runs; served directly it is locked down instead of
+        # being served as something it is not.
+        disposition["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+        disposition["X-Content-Type-Options"] = "nosniff"
     if p.stat().st_size > _SCRUB_WHOLE:
         return StreamingResponse(_scrubbed_stream(p), media_type=kind, headers=disposition)
     try:

@@ -345,6 +345,8 @@ class Run:
                     lambda: asyncio.ensure_future(self._after_turn()))
 
     async def _after_turn(self):
+        if self.deleted:
+            return
         await self.push_snapshot()
         # corrections that arrived after the last step finished are not dropped:
         # they become the next turn, and the log says so
@@ -361,6 +363,8 @@ class Run:
                 "While you were working I sent the following. Act on it now:\n\n" + joined,
                 shown={"text": joined, "attachments": []}))
             await self.push_snapshot()
+            return
+        if self.deleted:            # the run and its folder are gone
             return
         # a follow-up may have arrived between the end of that turn and this:
         # closing the connection under it would break the turn now running
@@ -539,7 +543,15 @@ def _history(events: list[dict]) -> list[tuple[str, str]]:
         elif t == "subagent_returned" and (e.get("result") or "").strip():
             work.append("[critic/helper conclusion] " + _clip(e["result"], 2000))
         elif t == "error" and e.get("outcome") == "interrupted":
-            work.append("[the user stopped the run here; a step that was running has no result]")
+            unfinished = [f"{c.get('tool')} {json.dumps(c.get('args') or {}, default=str)[:300]}"
+                          for cid, c in calls.items()
+                          if not any(x.get("call_id") == cid and x.get("type") in
+                                     ("tool_result", "tool_error", "tool_call_rejected")
+                                     for x in events)]
+            work.append("[the user stopped the run here"
+                        + (f"; this step was running and has no result: {unfinished[-1]}"
+                           if unfinished else "; a step that was running has no result")
+                        + "]")
         elif t == "error":
             work.append(f"[the turn failed: {_clip(str(e.get('message')), 500)}]")
     out: list[tuple[str, str]] = []

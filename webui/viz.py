@@ -99,7 +99,7 @@ def _json(p: Path) -> dict:
     try:
         if p.stat().st_size > _JSON_FULL_MAX:
             head = _head_fields(p)
-            if head is not None:
+            if head is not None and _drawable({**head, "_head": True}):
                 return _field_series(p, head)
             return {"kind": "text", "text": _read_text(p),
                     "syntax": "json", "truncated": True,
@@ -112,7 +112,7 @@ def _json(p: Path) -> dict:
     # per stored timestep. Hand back a description and let the browser fetch the
     # file once; re-serialising several megabytes through this endpoint would
     # buy nothing.
-    if isinstance(obj, dict) and obj.get("kind") == "field_series":
+    if isinstance(obj, dict) and obj.get("kind") == "field_series" and _drawable(obj):
         return _field_series(p, obj)
 
     return {"kind": "json", "obj": obj, "path": str(p)}
@@ -134,6 +134,20 @@ def _url_for(p: Path) -> str:
 _PROVENANCE_SHOWN = ("true_min", "true_max", "clip_percentile", "saturated_fraction",
                      "quantisation_step", "levels", "interpolation", "solver", "source",
                      "notes", "written_at", "commit", "sha256")
+
+
+def _drawable(meta: dict) -> bool:
+    """Whether this really is a field the interface can draw.
+
+    A file may say "field_series" and carry none of what drawing one needs.
+    Adopted on its word, the page then asked for frames that are not there and
+    showed nothing with no explanation."""
+    if not isinstance(meta.get("times") or meta.get("n_frames"), (list, int)):
+        return False
+    for key in ("nx", "ny"):
+        if not isinstance(meta.get(key), int) or meta[key] <= 0:
+            return False
+    return isinstance(meta.get("frames"), str) or meta.get("frames_url") or meta.get("_head")
 
 
 def _field_series(p: Path, meta: dict) -> dict:
