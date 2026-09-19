@@ -132,6 +132,26 @@ def check_solvers() -> int:
     return len(usable)
 
 
+def check_mesh_generator() -> bool:
+    """generate_mesh runs IN THIS INTERPRETER, unlike the solvers.
+
+    The solvers are found wherever they live -- a conda env, a binary on disk -- so the list above
+    can read 9 of 9 while `generate_mesh` still cannot work, because it imports gmsh in-process.
+    Measured on a real run: the model was told the mesh tool was unavailable, wrote its own gmsh
+    script, and that could not import gmsh either; the run spent its budget and produced nothing.
+    """
+    try:
+        import gmsh                                       # noqa: F401
+    except Exception:                                     # noqa: BLE001
+        print(f"{HM} The mesh generator is not installed — to get it:  pip install gmsh")
+        print("   Without it `generate_mesh` cannot build a mesh, even when every solver is found:")
+        print("   it runs in THIS Python, not in a solver's environment. Attach a mesh file instead,")
+        print("   or install it here.")
+        return False
+    print(f"{OK} The mesh generator (Gmsh) is installed, so `generate_mesh` can build meshes.")
+    return True
+
+
 def check_agent_packages() -> bool:
     """Option B (`python run_agent.py`) needs these; Option A (an AI app) does not."""
     try:
@@ -197,6 +217,7 @@ def main() -> int:
 
     usable = check_solvers()
     print()
+    check_mesh_generator()
     check_agent_packages()
     check_key()
     print()

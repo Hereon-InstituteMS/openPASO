@@ -43,15 +43,26 @@ dependencies = [
     # .bp and only emits an honesty note, so a NaN-filled .bp could read as
     # verified — the SEV-HIGH fabrication gap this closes.
     "adios2>=2.10",
+    # generate_mesh imports gmsh IN THIS INTERPRETER, unlike the solvers, which are found
+    # wherever they live. Measured on a real run: every solver was found, the mesh tool could
+    # not work, the model wrote its own gmsh script which could not import gmsh either, and the
+    # run spent its budget producing nothing. A mesh generator every install has is worth 50 MB.
+    "gmsh>=4.12",
 ]
 
 [project.optional-dependencies]
 # Individual solver backends
-fenics = ["fenics-dolfinx>=0.8", "gmsh>=4.12"]
+fenics = ["fenics-dolfinx>=0.8"]     # gmsh is a core dependency, see above
 ngsolve = ["ngsolve>=6.2"]
 skfem = ["scikit-fem>=10.0"]
 kratos = ["KratosMultiphysics>=10.0"]
 dune = ["dune-fem>=2.10", "mpi4py>=3.0"]
+
+# The browser interface. Its dependencies lived only in a README command, so nothing could
+# install it from the package and its own tests could not be collected on a fresh clone
+# (measured on the product cut: "No module named fastapi").
+webui = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9",
+         "websockets>=12.0", "httpx>=0.27"]
 
 # Coupling infrastructure
 precice = ["pyprecice>=3.0"]
@@ -63,7 +74,14 @@ all-solvers = [
     "KratosMultiphysics>=10.0",
 ]
 
+# Running the tests that ship with openPASO: pip install -e ".[test]"
+test = ["pytest>=7.0", "pytest-asyncio>=0.20", "openpaso[webui]"]
 
+
+[tool.pytest.ini_options]
+# `pythonpath` is what lets a test import the server from src/ without installing a path hack.
+pythonpath = ["src"]
+testpaths = ["webui/tests/test_app.py", "tests"]
 
 [build-system]
 requires = ["setuptools>=68.0"]
