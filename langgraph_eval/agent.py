@@ -981,11 +981,19 @@ def web_search(query: str, max_results: int = 5) -> str:
                 last_err = f"{type(e).__name__}: {e}"
                 continue
 
+    if last_err:
+        # every attempt raised: that is a broken connection or a refused
+        # request, not a provider answering "nothing". Saying "could not
+        # search" would be true but would hide which of the two it was, and
+        # holding it against the query for a minute would delay a retry that
+        # might well work.
+        return (f"[the search could not be made: {last_err}. This is a failure to reach the "
+                "search provider, NOT an answer about the web. Do not conclude anything from "
+                "it: try again, or use openPASO's own knowledge and examples tools.]")
     _SEARCH_BLOCKED[key] = time.time()
     if len(_SEARCH_BLOCKED) > _SEARCH_CACHE_MAX:
         _SEARCH_BLOCKED.pop(next(iter(_SEARCH_BLOCKED)))
-    detail = f" (last error: {last_err})" if last_err else ""
-    return _BLOCKED_MESSAGE + detail
+    return _BLOCKED_MESSAGE
 
 
 # ────────────────────────────────────────────────────────────────────

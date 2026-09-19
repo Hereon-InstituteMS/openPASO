@@ -130,3 +130,28 @@ def test_a_query_just_refused_is_not_retried_at_once(monkeypatch):
     monkeypatch.setattr(agent.time, "time", lambda: later)
     _FakeDDGS.answers = [[{"title": "t", "href": "h", "body": "b"}]]
     assert "could not search" not in agent.web_search.invoke({"query": "blocked question", "max_results": 3})
+
+
+def test_a_broken_connection_is_not_reported_as_a_block(monkeypatch):
+    """Every attempt raising is a failure to reach the provider, which is not
+    the provider answering "nothing" — and it must not hold the query back for
+    a minute, because the next attempt may well work."""
+    class _Broken(_FakeDDGS):
+        def text(self, query, max_results=5, backend="auto"):
+            type(self).calls += 1
+            raise OSError("connection reset by peer")
+
+    import types
+    _FakeDDGS.calls = 0
+    monkeypatch.setattr(agent, "_SEARCH_CACHE", {}, raising=False)
+    monkeypatch.setattr(agent, "_SEARCH_BLOCKED", {}, raising=False)
+    for name in ("duckduckgo_search", "ddgs"):
+        module = types.ModuleType(name)
+        module.DDGS = _Broken
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setattr(agent.time, "sleep", lambda s: None)
+
+    out = agent.web_search.invoke({"query": "anything", "max_results": 3})
+    assert "could not be made" in out and "connection reset" in out
+    assert "could not search" not in out, "a broken connection is not a throttle"
+    assert agent._SEARCH_BLOCKED == {}, "and it is not held against the query"
