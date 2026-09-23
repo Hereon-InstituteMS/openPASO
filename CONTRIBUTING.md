@@ -8,6 +8,12 @@ the test suite, the fixtures that back each served claim, and the measurement to
 repository is the released product: what installing and running openPASO needs. Please open issues
 here or there, and pull requests there.
 
+The browser interface's fast tests ship with it and need no key:
+
+```bash
+pytest webui/tests/test_app.py -q
+```
+
 The full guide, in plain language, is on the website: <https://hereon-institutems.github.io/openPASO/contribute/>.
 
 The rules a change has to meet:

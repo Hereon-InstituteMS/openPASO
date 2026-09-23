@@ -74,6 +74,87 @@ def build_model(model_id: str, api_key: str, temperature: float):
     )
 
 
+def _web_search_tool():
+    """The search the critic is told to use, or nothing at all.
+
+    Its package is optional, so this returns None when it is absent rather than handing the model
+    a tool that answers with an install hint. The tool itself distinguishes a blocked search from
+    an empty web (langgraph_eval.agent.web_search) -- measured, a throttled DuckDuckGo returns an
+    EMPTY LIST rather than raising, and five "no results" in one run were read as "the web has
+    nothing", after which a critic quoted benchmark values from memory. Nothing is added on top of
+    that wording here, so the model is told once.
+    """
+    try:
+        import ddgs                                     # noqa: F401
+    except Exception:                                   # noqa: BLE001
+        try:
+            import duckduckgo_search                    # noqa: F401
+        except Exception:                               # noqa: BLE001
+            return None
+    from langgraph_eval.agent import web_search
+    return web_search          # already a tool; passing it through keeps one description
+
+
+def _spawn_subagent_tool(*, model_id: str, api_key: str, tools):
+    """A sub-agent on the SAME model, for the critic and for coupled workers.
+
+    openPASO's served instructions require an independent critic on every major step, and on a
+    coupled problem require each participant script to be written by a worker sub-agent. Without
+    this tool that text asks for something this path cannot do. The sub-agent gets the parent's
+    tools except this one, so it cannot spawn further.
+
+    It is the same model as the parent, so it is a second opinion, not an independent one. That
+    limit is stated to the caller rather than implied away.
+    """
+    from langchain_core.tools import StructuredTool
+
+    ROLES = {
+        "critic": ("You are a ruthlessly critical reviewer. Challenge every parameter choice, "
+                   "check units, look for sign errors, verify boundary conditions, and validate "
+                   "against literature. A finding blocks only if it names a concrete, checkable "
+                   "defect. Answer APPROVED: <why> or REJECTED: <the defect and its fix>."),
+        "worker": ("You are a worker. Carry out exactly the step you were given, using the tools, "
+                   "and report what you produced and where it is."),
+        "verifier": ("You are an independent verifier. Re-derive the requested quantity by "
+                     "another route and compare numerically."),
+        "researcher": ("You are a research assistant. Find authoritative sources and summarise "
+                       "what they say."),
+    }
+
+    async def spawn_subagent(role: str, task: str, context: str = "") -> str:
+        try:
+            from langchain.agents import create_agent as _make
+            kw = "system_prompt"
+        except ImportError:                              # noqa: BLE001
+            from langgraph.prebuilt import create_react_agent as _make
+            kw = "prompt"
+        child_tools = [t for t in tools if getattr(t, "name", "") != "spawn_subagent"]
+        agent = _make(build_model(model_id, api_key, 0.3), tools=child_tools,
+                      **{kw: ROLES.get(role, ROLES["researcher"])})
+        print(f"  ↳ {role} sub-agent working", flush=True)
+        try:
+            out = await agent.ainvoke({"messages": [("user", f"Task: {task}\n\nContext:\n{context}")]},
+                                      {"recursion_limit": 40})
+            report = str(out["messages"][-1].content)
+            # Silence is not assent; see langgraph_eval.agent for the run that proved it.
+            if report.strip():
+                return report
+            # One sentence for a silent sub-agent, in all three places a person can read it:
+            # here, the campaign path and the browser interface.
+            from langgraph_eval.agent import SILENT_SUBAGENT_REPORT   # noqa: PLC0415
+            who = role if role in ("critic", "worker", "verifier", "researcher") else "sub-agent"
+            return SILENT_SUBAGENT_REPORT.format(who=who)
+        except Exception as exc:                         # noqa: BLE001
+            return f"[sub-agent failed: {type(exc).__name__}: {exc}]"
+
+    return StructuredTool.from_function(
+        coroutine=spawn_subagent, name="spawn_subagent",
+        description=("Spawn a sub-agent that runs on the same model as you: role in "
+                     "{critic, worker, verifier, researcher}, task = what it should do, "
+                     "context = the facts it needs. It has your tools but cannot spawn further. "
+                     "Same model as you, so it is a second opinion, not an independent one."))
+
+
 async def run(task: str, *, model_id: str, api_key: str, workdir: Path | None,
               temperature: float, step_limit: int, keep_going: int = 0) -> int:
     # LangGraph 1.0 moved this factory and renamed its prompt argument.
@@ -106,10 +187,13 @@ async def run(task: str, *, model_id: str, api_key: str, workdir: Path | None,
     # file was quietly impossible.
     #
     # The three factories are called directly rather than through
-    # `_host_tools`, which additionally builds `spawn_subagent` against a
-    # hard-coded localhost vLLM (useless here, and a fan-out cost on a paid
-    # API) and `web_search`, whose dependency is not declared in pyproject.
-    # webui/runner.py does the same for the same reason.
+    # `_host_tools`, which builds `spawn_subagent` against a hard-coded
+    # localhost vLLM (useless here) and `web_search` from a dependency that is
+    # declared only in langgraph_eval/requirements-langgraph.txt. Both are
+    # provided below instead: openPASO's own served instructions tell the model
+    # to spawn a critic on every major step and a worker per step of a coupled
+    # problem, so a path that does not carry the tool asks for something the
+    # model cannot do. The browser interface builds its own for the same reason.
     from langgraph_eval.agent import (_bash_tool_for, _read_write_tools_for,
                                       cleanup_sandbox_scratch)
 
@@ -132,6 +216,11 @@ async def run(task: str, *, model_id: str, api_key: str, workdir: Path | None,
                                advice=True),
                 *_read_write_tools_for(workdir, advice=True),
             ]
+            searcher = _web_search_tool()
+            if searcher is not None:
+                tools.append(searcher)
+            tools.append(_spawn_subagent_tool(
+                model_id=model_id, api_key=api_key, tools=tools))
             print(f"  {len(tools)} tools ready\n" + "─" * 72, flush=True)
             agent = create_agent(build_model(model_id, api_key, temperature),
                                  tools=tools, **{prompt_kwarg: INSTRUCTIONS})

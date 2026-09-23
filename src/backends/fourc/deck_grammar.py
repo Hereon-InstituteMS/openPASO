@@ -116,6 +116,54 @@ concluded "4C cannot impose per-node Dirichlet values" and wrote a
 could-not-finish report, while another used point conditions and produced a
 complete three-level study from the same binary.
 
+THE NEUMANN SIDE NEEDS TWO DECK LINES THE DIRICHLET SIDE DOES NOT, and one of
+them fails silently. It APPLIES the partner's flux profile, and it has to ASK
+for the consistent boundary flux or 4C writes none.
+
+APPLYING A SAMPLED FLUX PROFILE needs no fitted function either: pre-integrate
+it into nodal loads, one POINT condition per interface node. For an interior
+interface node i with spacing h, the consistent load is Simpson's
+
+      VAL_i = h/6 * (g_{i-1} + 4*g_i + g_{i+1})       g = the imported flux
+
+  DESIGN POINT NEUMANN CONDITIONS:
+    - E: 1
+      NUMDOF: 1
+      ONOFF: [1]
+      VAL: [0.05]        # <- THIS node's pre-integrated load, from the formula
+      FUNCT: [0]         # no function: the number is already the load
+  DNODE-NODE TOPOLOGY:
+    - "NODE 17 DNODE 1"
+
+READING THE FLUX BACK, which the coupling needs at every iteration, is two
+entries that must BOTH be present:
+
+  SCALAR TRANSPORT DYNAMIC:
+    CALCFLUX_BOUNDARY: "diffusive"
+  SCATRA FLUX CALC LINE CONDITIONS:
+    - E: 2               # the DLINE id of the interface line (SURF in 3-D)
+
+Measured on this install, one 2x2 scatra deck run three times, differing only in
+these lines:
+
+  both present         finished normally; the VTU carries the point array
+                       `flux_boundary_phi_1` and
+                       `<prefix>.boundaryflux_ScaTraFluxCalc_0scatra.txt` holds
+                       the area, the integral and the mean normal flux
+  CALCFLUX_BOUNDARY    finished normally and wrote NO flux array at all -- the
+  omitted              run looks like a success and the side has nothing to
+                       export
+  the condition        stopped in the input reader, with this line:
+  section omitted
+    Flux output requested without corresponding boundary condition specification!
+
+The loud one costs a minute; the silent one is why a side can run 4C to
+`processor 0 finished normally` and still export nothing. `flux_boundary_phi_1`
+is the diffusive flux VECTOR -k*grad(phi) at the boundary nodes, not q.n: dot it
+with YOUR outward normal. On a Neumann-loaded line it is the consistent-residual
+echo of the load you applied, so use it as the exported flux only on a side
+whose interface is DIRICHLET.
+
 WHICH PROBLEM TYPE YOU PICK DECIDES WHETHER YOU CAN READ YOUR OWN ANSWER.
 Measured on this build:
 FOUR MEASURED WAYS THIS DIES, all of them silently:

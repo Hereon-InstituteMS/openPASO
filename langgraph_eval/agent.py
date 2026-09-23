@@ -66,6 +66,18 @@ PORTS = {"7b": 8000, "14b": 8001, "32b": 8002}
 # tests/test_what_openpaso_recommends_is_reachable.py holds the same line from the served-text side.
 # coupled_solve stays off deliberately: the text names it in order to say
 # DEPRECATED, and the test reads that sentence rather than the token.
+# WHAT A SILENT SUB-AGENT HANDS BACK. One sentence, shared word for word with
+# the browser interface's own handler (webui/runner.py), so a person reading a
+# transcript and a person reading a campaign trajectory see the same words.
+# `{who}` is the role that was silent -- critic, verifier or researcher -- or
+# "sub-agent". This branch keeps the old product name until the freeze; the
+# rename script maps it.
+SILENT_SUBAGENT_REPORT = (
+    "[the {who} returned no text. This is NOT approval and NOT a review: it "
+    "produced nothing. Treat the step as not done. Do not write its answer for "
+    "it \u2014 run it again, or say that it produced nothing. openPASO's "
+    "verification gate holds no review for this setup.]")
+
 CAMPAIGN_MCP_TOOL_ALLOWLIST = frozenset({
     "audit_results",
     "check_input",
@@ -1099,6 +1111,26 @@ def _make_spawn_subagent_tool(
                 config={"recursion_limit": 40},
             )
             report = out["messages"][-1].content
+            # SILENCE IS NOT ASSENT, AND IT USED TO BE HANDED BACK AS "".
+            #
+            # MEASURED on a live run: the model spawned a critic, the critic ran
+            # for 2m16s and returned a result of length ZERO, and the model then
+            # composed "CRITIC REVIEW ... VERDICT: APPROVED with minor notes.
+            # Ready to run.", filed it through submit_critic_review, took the
+            # token and ran. An empty string handed to a model is the absence of
+            # a complaint, which is what assent looks like -- and a sub-agent
+            # produces nothing when it runs out of steps or its tool call died
+            # just as readily as when it has nothing to say. The exception path
+            # here was already loud; silence was the half that was not, which is
+            # the worse half, because a crash is visible and a blank is not.
+            #
+            # One sentence, shared word for word with the browser interface's
+            # handler, so a person reading a transcript and a person reading a
+            # campaign trajectory see the same words. (This branch keeps the old
+            # product name until the freeze; the rename script maps it.)
+            if not str(report).strip():
+                who = role if role in ("critic", "verifier", "researcher") else "sub-agent"
+                report = SILENT_SUBAGENT_REPORT.format(who=who)
             # A WORKER THAT WROTE DELIVERABLES TOOK EVERY WRITE-TIME FINDING
             # WITH IT. The body lives in openPASO; this only calls it.
             try:
