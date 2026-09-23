@@ -74,7 +74,8 @@ PORTS = {"7b": 8000, "14b": 8001, "32b": 8002}
 # rename script maps it.
 SILENT_SUBAGENT_REPORT = (
     "[the {who} returned no text. This is NOT approval and NOT a review: it "
-    "produced nothing. Treat the step as not done, and note that openPASO's "
+    "produced nothing. Treat the step as not done. Do not write its answer for "
+    "it \u2014 run it again, or say that it produced nothing. openPASO's "
     "verification gate holds no review for this setup.]")
 
 CAMPAIGN_MCP_TOOL_ALLOWLIST = frozenset({

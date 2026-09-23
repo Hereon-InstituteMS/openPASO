@@ -443,7 +443,8 @@ def build_agent_for_session(*, model: str, mcp_on: bool,
                 # its freeze and the rename maps it to "openPASO" on the way in.
                 who = role if role in ("critic", "verifier", "researcher") else "sub-agent"
                 res = (f"[the {who} returned no text. This is NOT approval and NOT a review: "
-                       "it produced nothing. Treat the step as not done, and note that "
+                       "it produced nothing. Treat the step as not done. Do not write its "
+                       "answer for it — run it again, or say that it produced nothing. "
                        "openPASO's verification gate holds no review for this setup.]")
         except Exception as e:
             res = f"[sub-agent error: {type(e).__name__}: {e}]"
