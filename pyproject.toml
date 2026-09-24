@@ -1,6 +1,6 @@
 [project]
 name = "openpaso"
-version = "1.2.0"
+version = "1.2.1"
 description = "openPASO — open Platform for Agentic Simulation and Optimization. An MCP server that lets an AI model operate nine finite-element and multiphysics codes: simulation, cross-code coupling, verification and solver development."
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -49,6 +49,11 @@ dependencies = [
     # not work, the model wrote its own gmsh script which could not import gmsh either, and the
     # run spent its budget producing nothing. A mesh generator every install has is worth 50 MB.
     "gmsh>=4.12",
+    # scikit-fem is pure Python and small (a 178 KB wheel that runs on the numpy
+    # pinned above), so `pip install openpaso` gives a working solver out of the
+    # box; the other pip-installable solvers stay extras because they are large
+    # (NGSolve, Kratos) or need MPI (DUNE).
+    "scikit-fem>=10.0",
 ]
 
 [project.urls]

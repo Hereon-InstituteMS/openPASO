@@ -18,7 +18,7 @@ _HERE = _os.path.dirname(_os.path.abspath(__file__))
 if _HERE not in _sys.path:
     _sys.path.insert(0, _HERE)
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 
 def main() -> None:
