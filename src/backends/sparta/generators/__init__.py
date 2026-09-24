@@ -35,16 +35,17 @@ from .collision_relaxation import (
 from .conjugate_heat_transfer import GENERATORS as _cht_gen, KNOWLEDGE as _cht_kn
 from .hypersonic_flow import GENERATORS as _hyp_gen, KNOWLEDGE as _hyp_kn
 from .particle_emission import GENERATORS as _emit_gen, KNOWLEDGE as _emit_kn
+from .capability_survey import GENERATORS as _cap_gen, KNOWLEDGE as _cap_kn
 from .rarefied_flow import GENERATORS as _rare_gen, KNOWLEDGE as _rare_kn
 from .surface_interaction import GENERATORS as _surf_gen, KNOWLEDGE as _surf_kn
 
 GENERATORS: dict[str, callable] = {}
-for _g in (_rare_gen, _coll_gen, _hyp_gen, _surf_gen, _chem_gen,
+for _g in (_cap_gen, _rare_gen, _coll_gen, _hyp_gen, _surf_gen, _chem_gen,
            _axi_gen, _emit_gen, _adapt_gen, _ambi_gen, _cht_gen):
     GENERATORS.update(_g)
 
 KNOWLEDGE: dict[str, dict] = {}
-for _k in (_rare_kn, _coll_kn, _hyp_kn, _surf_kn, _chem_kn,
+for _k in (_cap_kn, _rare_kn, _coll_kn, _hyp_kn, _surf_kn, _chem_kn,
            _axi_kn, _emit_kn, _adapt_kn, _ambi_kn, _cht_kn):
     KNOWLEDGE.update(_k)
 

@@ -150,6 +150,52 @@ def _scan_bp_finite(path) -> tuple[list[str], bool]:
         ], False
 
 
+
+def _scan_point_cloud_vtu(p) -> "list[str] | None":
+    """Findings for a zero-cell VTU (a point cloud), or None if the file is not one.
+
+    Reads only the header in-process; the data are read by VTK in a subprocess with a
+    timeout, because a VTK reader can segfault on malformed input and this gate runs
+    inside the server.
+    """
+    import re as _re
+    import subprocess as _sp
+    import sys as _sys
+    try:
+        head = open(p, "rb").read(4096).decode("utf-8", "replace")
+    except OSError:
+        return None
+    m = _re.search(r'NumberOfPoints="(\d+)"\s+NumberOfCells="(\d+)"', head)
+    if not m or int(m.group(2)) != 0 or int(m.group(1)) == 0:
+        return None
+    code = (
+        "import sys, json\n"
+        "try:\n"
+        "    import pyvista as pv, numpy as np\n"
+        "    g = pv.read(sys.argv[1]); bad = []\n"
+        "    for k in g.point_data.keys():\n"
+        "        a = np.asarray(g.point_data[k], dtype=float)\n"
+        "        n = int((~np.isfinite(a)).sum())\n"
+        "        if n: bad.append([k, n, int(a.size)])\n"
+        "    print(json.dumps({'ok': True, 'n_points': int(g.n_points), 'bad': bad}))\n"
+        "except Exception as e:\n"
+        "    print(json.dumps({'ok': False, 'err': type(e).__name__ + ': ' + str(e)[:120]}))\n"
+    )
+    try:
+        r = _sp.run([_sys.executable, "-c", code, str(p)], capture_output=True, text=True, timeout=60)
+        import json as _json
+        line = next((l for l in reversed(r.stdout.splitlines()) if l.startswith("{")), None)
+        res = _json.loads(line) if line else {"ok": False, "err": f"reader exited {r.returncode}"}
+    except Exception as e:  # noqa: BLE001
+        res = {"ok": False, "err": f"{type(e).__name__}: {e}"[:120]}
+    name = getattr(p, "name", str(p))
+    if not res.get("ok"):
+        return [f"finiteness not asserted for {name}: a point-cloud VTU (no cells) that meshio "
+                f"cannot read, and the VTK reader could not scan it ({res.get('err')})"]
+    out = [f"{name}:{k}: {n}/{tot} non-finite (NaN/Inf) values — result is invalid." for k, n, tot in res["bad"]]
+    return out
+
+
 def check_result_files_finite(paths, max_files: int = 25) -> list[str]:
     """Best-effort finiteness scan of a run's OUTPUT files.
 
@@ -181,11 +227,36 @@ def check_result_files_finite(paths, max_files: int = 25) -> list[str]:
             scannable_format_seen = scannable_format_seen or bp_scanned
             continue
         considered += 1
+        if suffix in (".pvtu", ".pvd"):
+            # AN INDEX IS NOT A RESULT FILE. A .pvtu (parallel VTK) or .pvd (time
+            # series) only lists the piece files that hold the data; meshio cannot
+            # read it, and until 2026-09-23 this scan reported every one as
+            # "unreadable/corrupt" -- a hard, verdict-flipping finding -- so every
+            # 4C run with runtime VTK output was stamped NOT VERIFIED by this gate,
+            # however correct the run was. Measured on 47 of 65 served 4C decks.
+            # The pieces are scanned in their own right below; the index is noted.
+            # The run gate reads any finding not prefixed "finiteness not asserted" as
+            # hard, so the note carries that prefix: it is coverage information.
+            w.append(f"finiteness not asserted for {p.name}: an index file that lists "
+                     f"the piece files, which are scanned in their own right")
+            continue
         if suffix not in _FINITE_SCANNABLE:
             continue
         try:
             m = meshio.read(str(p))
         except BaseException:
+            # A POINT CLOUD IS NOT CORRUPT. 4C's particle output (SPH, DEM,
+            # peridynamics, Brownian dynamics, beam-to-particle) is a valid VTU
+            # with NumberOfCells="0"; meshio raises IndexError on it, and until
+            # 2026-09-23 every such run was stamped NOT VERIFIED here as a corrupt
+            # file. The XML header says what it is; a VTK reader in a subprocess
+            # (VTK can segfault the process on bad input) scans the point data.
+            pc = _scan_point_cloud_vtu(p)
+            if pc is not None:
+                w.extend(pc)
+                if not any("not asserted" in x for x in pc):
+                    scannable_format_seen = True          # a scanned point cloud is a scanned file
+                continue
             # A best-effort scan must NEVER take down the run — some meshio
             # readers even raise SystemExit on malformed input. But a file with
             # a SCANNABLE suffix that fails to parse is a CORRUPT result file,

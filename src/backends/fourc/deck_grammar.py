@@ -236,7 +236,7 @@ It never explains a failure.
           - "1 WALL QUAD4 1 2 3 4 MAT 1 KINEM linear EAS none THICK 1.0
              STRESS_STRAIN plane_strain GP 2 2"
 
-  * 2-D THERMO_STRUCTURE_INTERACTION IS NOT AVAILABLE IN THIS BUILD, and the
+  * 2-D `Thermo_Structure_Interaction` IS NOT AVAILABLE IN THIS BUILD, and the
     error does not say so. A 2-D TSI deck fails with
 
         4C_tsi_utils.cpp: Unsupported solid element type!

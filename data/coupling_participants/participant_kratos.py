@@ -49,12 +49,33 @@ if Path("config.json").is_file() or os.environ.get("OPENPASO_CONFIG_JSON"):
 # ─────────────────────────────────────────────────────────────────────────
 
 
+
+def _partner_block(imp):
+    """The partner's block from imports.json, by the name the driver actually used."""
+    if not isinstance(imp, dict) or not imp:
+        return None
+    if PARTNER in imp:
+        return imp[PARTNER] or None
+    others = [k for k in imp if isinstance(imp.get(k), dict)]
+    if len(others) == 1:     # named differently in couple(...) than here: read it, say so
+        import sys as _sys
+        print(f"NOTE: PARTNER is {PARTNER!r} but imports.json is keyed {others[0]!r} "
+              f"-- reading that block; align PARTNER with the name in your "
+              f"couple(...) call.", file=_sys.stderr)
+        return imp[others[0]] or None
+    if others:
+        raise SystemExit(f"imports.json holds blocks named {others} and none is "
+                         f"PARTNER={PARTNER!r}: set PARTNER to the partner's name "
+                         f"in your couple(...) call.")
+    return None
+
+
 def imported_T(y_coords: np.ndarray) -> np.ndarray:
     p = Path("imports.json")
     imp = json.loads(p.read_text() or "{}") if p.is_file() else {}
-    if PARTNER not in imp or "values" not in imp[PARTNER]:
+    d = _partner_block(imp)
+    if not d or "values" not in d:
         return np.full_like(y_coords, float(T_INIT))
-    d = imp[PARTNER]
     src_y = np.asarray(d["coordinates"], float)[:, 1]
     src_v = np.asarray(d["values"], float).ravel()
     o = np.argsort(src_y)

@@ -267,6 +267,20 @@ class DuneBackend(SolverBackend):
     def supported_physics(self) -> list[PhysicsCapability]:
         return [
             PhysicsCapability(
+                name="registry_survey",
+                description=(
+                    "Registry survey: builds every entry this dune-fem install "
+                    "declares across all 8 axes (spaces, schemes, solvers, "
+                    "storages, models, operators, functions, views) and checks "
+                    "each against something independent of the run. Also "
+                    "records the first-use JIT cost, which is 85-200s per new "
+                    "space and 0.1s once cached."
+                ),
+                spatial_dims=[2],
+                element_types=["all"],
+                template_variants=["default"],
+            ),
+            PhysicsCapability(
                 name="poisson",
                 description="Poisson equation -Δu = f (UFL forms, DUNE backend)",
                 spatial_dims=[2, 3],

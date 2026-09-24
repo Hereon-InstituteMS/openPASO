@@ -620,6 +620,14 @@ int main() {{
 
     std::cout << "Cycle " << cycle << ": " << dof_handler.n_dofs() << " DOFs, "
               << sc.last_step() << " CG iters, max(u)=" << solution.linfty_norm() << std::endl;
+    {{
+      DataOut<dim> data_out;
+      data_out.attach_dof_handler(dof_handler);
+      data_out.add_data_vector(solution, "u");
+      data_out.build_patches();
+      std::ofstream out("solution.vtu");
+      data_out.write_vtu(out);
+    }}
 
     // Error estimation and refinement
     Vector<float> error_per_cell(tria.n_active_cells());
@@ -629,15 +637,13 @@ int main() {{
     tria.execute_coarsening_and_refinement();
   }}
 
-  // Final output
-  dof_handler.distribute_dofs(fe);
-  // (re-solve on final mesh if needed)
-  DataOut<dim> data_out;
-  data_out.attach_dof_handler(dof_handler);
-  // Output the mesh structure
-  data_out.build_patches();
-  std::ofstream mesh_output("solution.vtu");
-  data_out.write_vtu(mesh_output);
+  // Final output: the SOLUTION on the last solved mesh. The previous version
+  // refined once more after the last solve and then wrote a DataOut with no
+  // data vector attached -- a mesh-only file called solution.vtu, with no
+  // field in it. The solution is written inside the loop now, right after
+  // each solve, so the file always holds the field of the mesh it was solved
+  // on; this block only names the final mesh.
+  std::cout << "Final mesh: " << tria.n_active_cells() << " cells" << std::endl;
   std::cout << "AMR complete." << std::endl;
   return 0;
 }}

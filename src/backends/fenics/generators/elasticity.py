@@ -74,7 +74,8 @@ KNOWLEDGE = {
         "[Integration] For imported CAD geometry (IGES/STEP): use "
         "gmsh.model.getEntities() and getBoundingBox() to identify "
         "surface tags for physical group assignment. There is no "
-        "automatic surface-to-BC mapping. Signal: dolfinx.io.gmshio "
+        "automatic surface-to-BC mapping. Signal: dolfinx.io.gmsh "
+        "(the module is `gmsh` on dolfinx 0.10, `gmshio` up to 0.9) "
         "reads the mesh but mesh.topology.dim returns 3 with no "
         "tagged facets; subsequent locate_dofs_topological on a "
         "facet tag returns an empty array.",

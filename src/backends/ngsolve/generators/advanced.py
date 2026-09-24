@@ -598,9 +598,12 @@ vtk.Do()
 # SQUARE plate under uniform load q on [0,L]^2 (L=1):
 #   w_max = (16 q / (pi^6 D)) * sum over odd m, n of
 #             sin(m pi/2) sin(n pi/2) / (m n (m^2 + n^2)^2)
-#         = 0.00406235 * q L^4 / D   (textbook 0.00406)
+# It is DERIVED below from this run's own q and D, so it is a
+# self-check and not a stored answer. Sum enough odd terms to
+# converge it, and confirm the value settles as you add more.
 # NOTE: q*L^4/(64*D) is the CLAMPED CIRCULAR plate of radius L
-# — it is 3.85x too large here. See pitfall [Validation].
+# — a different shape and a different boundary condition, and
+# substantially too large here. See pitfall [Validation].
 import math as _math
 w_ref = (16.0 * q / (_math.pi ** 6 * D)) * sum(
     _math.sin(_m * _math.pi / 2) * _math.sin(_n * _math.pi / 2)
@@ -635,7 +638,7 @@ def _nonlinear_elasticity_2d(params: dict) -> str:
     Load stepping ensures convergence for large applied displacements."""
     E = params.get("E", 200.0)
     nu = params.get("nu", 0.3)
-    disp_mag = params.get("applied_displacement", 0.5)
+    disp_mag = params.get("applied_displacement", 0.3)   # 0.5 inverted elements at ~0.35 on this mesh; measured 2026-09-23
     n_steps = params.get("load_steps", 10)
     # maxh=0.05 was too fine for Variation Newton without
     # load stepping to converge from a cold start (UMFPACK
@@ -663,7 +666,10 @@ order = {order}
 # eliminated from FreeDofs; otherwise the rigid mode is
 # unconstrained and UMFPACK aborts with 'Numeric
 # factorization failed' on the first iter.
-fes = VectorH1(mesh, order=order, dirichlet="left|top")
+# Clamp the BOTTOM and pull the TOP. The served version clamped the left edge and
+# pulled the top, which gives their shared corner two incompatible values (0 and
+# disp) and inverts elements there at ~15% stretch. Measured 2026-09-23.
+fes = VectorH1(mesh, order=order, dirichlet="bottom|top")
 u = fes.TrialFunction()
 
 # Deformation gradient and invariants
@@ -695,13 +701,26 @@ for step in range(1, n_load_steps + 1):
     gfu.Set(CoefficientFunction((0.0, disp_now)), definedon=mesh.Boundaries("top"))
 
     try:
-        (iters, conv) = solvers.Newton(a, gfu, maxit=25, dampfactor=1.0,
-                                       printing=False, maxerr=1e-10)
+        # solvers.Newton returns (flag, iterations): flag 0 means converged.
+        # The served version unpacked them the other way round and printed
+        # "Newton iters=0, conv=6.000e+00" for six converged iterations.
+        (newton_flag, iters) = solvers.Newton(a, gfu, maxit=25, dampfactor=1.0,
+                                              printing=False, maxerr=1e-10)
+        if newton_flag != 0:
+            raise RuntimeError(f"Newton did not converge in {{iters}} iterations")
         print(f"  Step {{step}}/{n_steps}: disp={{disp_now:.4f}}, "
-              f"Newton iters={{iters}}, conv={{conv:.3e}}")
+              f"Newton iterations={{iters}}, converged")
     except Exception as e:
+        # A load step that fails is a FAILED run, said loudly and exited on:
+        # the served version printed "Nonlinear elasticity solve complete."
+        # after this branch and wrote the last converged step as the result.
         print(f"  Step {{step}} FAILED: {{e}}")
-        break
+        print(f"NONLINEAR ELASTICITY FAILED at load step {{step}} of {n_steps} (disp={{disp_now:.4f}}); "
+              f"no result written for the requested displacement")
+        import json, sys
+        with open("results_summary.json", "w") as _f:
+            json.dump({{"status": "failed", "failed_at_step": step, "displacement_reached": disp_now - disp_total / {n_steps}}}, _f, indent=2)
+        sys.exit(1)
 
 # Evaluate results — abs() is not defined on
 # ngsolve.la.BaseVector. Reduce via the underlying
@@ -791,7 +810,9 @@ lam_val = {lam}
 # kernel direction and UmfpackInverse aborts with
 #   NgException: UmfpackInverse: Numeric factorization failed.
 # Fix: pin both clamped (left) and loaded (top) faces.
-fes = VectorH1(mesh, order=2, dirichlet="left|top")
+# Clamp the BOTTOM face and pull the TOP: clamping the left face and pulling the
+# top gives their shared edge two incompatible values (measured on the 2d variant).
+fes = VectorH1(mesh, order=2, dirichlet="bottom|top")
 u = fes.TrialFunction()
 
 d = 3
@@ -813,9 +834,17 @@ for step in range(1, n_load_steps + 1):
     alpha = step / n_load_steps
     disp_now = alpha * disp_total
     gfu.Set(CoefficientFunction((0.0, 0.0, disp_now)), definedon=mesh.Boundaries("top"))
-    (iters, conv) = solvers.Newton(a, gfu, maxit=25, dampfactor=1.0,
-                                   printing=False, maxerr=1e-10)
-    print(f"  Step {{step}}/{n_steps}: disp={{disp_now:.4f}}, iters={{iters}}")
+    # solvers.Newton returns (flag, iterations), flag 0 = converged; the served
+    # version unpacked them the other way and printed "iters=0" for every step.
+    (newton_flag, iters) = solvers.Newton(a, gfu, maxit=25, dampfactor=1.0,
+                                          printing=False, maxerr=1e-10)
+    if newton_flag != 0:
+        print(f"3D NONLINEAR ELASTICITY FAILED at load step {{step}} of {n_steps} (disp={{disp_now:.4f}}): "
+              f"Newton did not converge in {{iters}} iterations; no result written")
+        with open("results_summary.json", "w") as _f:
+            json.dump({{"status": "failed", "failed_at_step": step}}, _f, indent=2)
+        raise SystemExit(1)
+    print(f"  Step {{step}}/{n_steps}: disp={{disp_now:.4f}}, Newton iterations={{iters}}, converged")
 
 vtk = VTKOutput(mesh, coefs=[gfu], names=["displacement"], filename="result", subdivision=1)
 vtk.Do()
@@ -967,13 +996,15 @@ def _phase_field_fracture_2d(params: dict) -> str:
     nu = params.get("nu", 0.3)
     Gc = params.get("Gc", 1e-3)     # critical energy release rate
     l0 = params.get("l0", 0.02)     # length scale
-    disp_inc = params.get("disp_increment", 1e-4)
+    # 1e-4 x 5 steps reached d_max = 1e-4: a phase-field FRACTURE template whose default
+    # never fractured. 5e-3 x 10 cracks through; measured 2026-09-23.
+    disp_inc = params.get("disp_increment", 5e-3)
     # Layer F gate runs each template within 60s; the
     # original defaults (50 staggered load steps on a
     # maxh=0.01 mesh ~ 60k DOFs) exceed that easily. Trim
     # to 5 steps on a maxh=0.05 mesh — enough to exercise
     # the alternate-minimisation loop without saturating.
-    n_steps = params.get("load_steps", 5)
+    n_steps = params.get("load_steps", 10)
     maxh = params.get("maxh", 0.05)
     order = params.get("order", 1)
     mu = E / (2 * (1 + nu))
@@ -1039,8 +1070,12 @@ for step in range(1, n_load_steps + 1):
     disp_now = step * disp_inc_val
 
     # Apply split tension: pull top and bottom apart
-    gfu.Set(CoefficientFunction((0.0,  disp_now)), definedon=mesh.Boundaries("top"))
-    gfu.Set(CoefficientFunction((0.0, -disp_now)), definedon=mesh.Boundaries("bottom"))
+    # ONE Set with a boundary-wise coefficient: two consecutive Set(...) calls left
+    # the displacement identically zero on this build (the second re-initialises
+    # the vector before writing its region), so the served template loaded
+    # nothing, damaged nothing and exported a zero field. Measured 2026-09-23.
+    gfu.Set(mesh.BoundaryCF({{"top": (0.0, disp_now), "bottom": (0.0, -disp_now)}}, default=(0.0, 0.0)),
+            definedon=mesh.Boundaries("top|bottom"))
 
     # Staggered iteration
     for alt_iter in range(50):
@@ -1053,7 +1088,14 @@ for step in range(1, n_load_steps + 1):
         a_u.Assemble()
         f_u = LinearForm(Vu)
         f_u.Assemble()
-        gfu.vec.data = a_u.mat.Inverse(Vu.FreeDofs()) * f_u.vec
+        # Solve for the correction on the FREE dofs and keep the prescribed
+        # displacement: `gfu.vec.data = Inverse(FreeDofs) * f` replaced the whole
+        # vector, so the boundary values set above were discarded every step,
+        # the strain was zero, the damage stayed at 0.0000 for every load step,
+        # and the served template exported a zero field. Measured 2026-09-23.
+        _res = f_u.vec.CreateVector()
+        _res.data = f_u.vec - a_u.mat * gfu.vec
+        gfu.vec.data += a_u.mat.Inverse(Vu.FreeDofs()) * _res
 
         # ── Step 2: Phase-field crack problem with fixed u ────────────────────
         # Crack driving force (tensile strain energy)
@@ -1637,10 +1679,11 @@ KNOWLEDGE = {
                 "velocity field shows visible wiggles "
                 "upstream of obstacles or in boundary "
                 "layers; energy spectrum has spurious "
-                "high-frequency content; drag coefficient "
+                "high-frequency content; a drag coefficient "
                 "on a cylinder (via BilinearForm boundary "
-                "Integrate) differs >10% from the Schafer-"
-                "Turek reference. (Audit 2026-06-02.)"
+                "Integrate) more than about 10% away from "
+                "the reference you retrieved for that "
+                "geometry. (Audit 2026-06-02.)"
             ),
             (
                 "[Numerical] Pressure uniqueness for enclosed "
@@ -1703,27 +1746,22 @@ KNOWLEDGE = {
                 "replaced by a computable one.)"
             ),
             (
-                "[Validation] Benchmark: DFG Schafer-Turek "
-                "(Re=20 steady, Re=100 periodic vortex "
-                "shedding) and the lid-driven cavity at "
-                "Re=400, 1000, 5000. Signal: a transient NS "
-                "implementation with VectorH1 + H1 "
-                "BilinearForm should reproduce Schafer-"
-                "Turek drag/lift (post-processed via "
-                "Integrate over the cylinder BND) to within "
-                "published bounds (Cd ~ 5.57 at Re=20) and "
-                "lid-cavity Ghia-streamfunction values "
-                "computed from the GridFunction at the "
-                "chosen Re. Signal: check DRAG AND LIFT "
-                "together, never drag alone. Cd is far less "
+                "[Validation] CHECK DRAG AND LIFT TOGETHER, "
+                "NEVER DRAG ALONE, when you validate a "
+                "transient NS implementation (VectorH1 + H1 "
+                "BilinearForm, forces post-processed via "
+                "Integrate over the cylinder BND) against a "
+                "reference you retrieved. Drag is far less "
                 "sensitive than a rule implies that treats 5% or "
                 "more of deviation as exposing a problem — a mesh "
-                "coarse enough to put Cl "
-                "at nearly three times the published upper bound "
-                "can still land Cd comfortably INSIDE its "
-                "published band, so a drag-only check passes a "
-                "badly wrong mesh. Lift is the discriminating "
-                "quantity. The benchmark does detect what the "
+                "coarse enough to put the lift at nearly three "
+                "times its published upper bound "
+                "can still land the drag comfortably INSIDE its "
+                "own band, so a drag-only check passes a "
+                "badly wrong mesh. Signal: drag inside its band while lift is out by "
+                "a factor -- check both or you will not see it. Lift is "
+                "the discriminating "
+                "quantity. Such a benchmark does detect what the "
                 "claim says it detects: replacing the parabolic "
                 "inlet with a plug of the same MEAN velocity "
                 "pushes Cd outside its band, and dropping the "
@@ -1984,8 +2022,9 @@ KNOWLEDGE = {
                 "recovers the simply-supported answer. Signal: "
                 "with no dirichlet= on HDivDiv the centre "
                 "deflection is several times SMALLER than the "
-                "analytic Navier value 0.00406 q L^4 / D (see the "
-                "[Validation] entry — NOT q*L^4/(64*D)) and the "
+                "Navier series value you derive for your own "
+                "parameters (see the [Validation] entry — the "
+                "reference is Navier, NOT q*L^4/(64*D)) and the "
                 "boundary M_nn integral is O(1) relative rather "
                 "than zero; with the Dirichlet in place the "
                 "boundary M_nn integral drops to round-off, the "
@@ -2066,23 +2105,21 @@ KNOWLEDGE = {
                 "as primary unknowns. (Audit 2026-06-02.)"
             ),
             (
-                "[Validation] The reference value for a "
-                "SIMPLY-SUPPORTED SQUARE plate under uniform "
-                "load q on [0,L]^2 is the Navier series "
-                "w_max = (16q/(pi^6 D)) * sum_{m,n odd} "
-                "sin(m pi/2) sin(n pi/2) / (m n (m^2+n^2)^2) "
-                "= 0.00406235 * q L^4 / D (textbook 0.00406), "
-                "with D = E t^3 / (12 (1-nu^2)). "
-                "q*L^4/(64*D) = 0.015625 * q L^4 / D — the "
-                "formula the prior catalog and the shipped "
-                "template both used — is the CLAMPED CIRCULAR "
-                "plate of radius L and is 3.85x TOO LARGE. "
-                "Signal: for E=1, nu=0.3, t=1, L=1, q=1 "
-                "(D=0.0915751), Navier gives w_max=0.04436089 "
-                "while q L^4/(64 D)=0.170625. An agent that "
-                "'validates' against the old formula will "
-                "reject a correct HHJ solve. Reference corrected "
-                "in the shipped template in the same commit. "
+                "[Validation] CHECK WHICH PLATE YOUR CLOSED-FORM "
+                "REFERENCE IS FOR BEFORE YOU VALIDATE AGAINST IT. "
+                "A SIMPLY-SUPPORTED SQUARE plate under uniform "
+                "load is the Navier double sine series, with the "
+                "flexural rigidity D = E t^3 / (12 (1-nu^2)); "
+                "derive it for your own q, L and D rather than "
+                "copying a constant. The formula q*L^4/(64*D), "
+                "which the prior catalog and the shipped template "
+                "both used, is the CLAMPED CIRCULAR plate of "
+                "radius L — a different shape AND a different "
+                "boundary condition — and it overstates the "
+                "deflection by several times. An agent that "
+                "'validates' against it will REJECT a correct HHJ "
+                "solve. The shipped template was corrected in the "
+                "same commit. "
                 "SEPARATE ISSUE, now diagnosed: even against the "
                 "corrected reference the shipped hdivdiv_2d "
                 "template comes out far low, and the deficit is "

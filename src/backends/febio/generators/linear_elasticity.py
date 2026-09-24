@@ -80,6 +80,11 @@ def _elasticity_3d_cube(params: dict) -> str:
     </load_controller>
   </LoadData>
   <Output>
+    <!-- text node data beside the binary plot file: the .xplt needs FEBio's own reader,
+         while a CSV can be opened, plotted and checked by anything. -->
+    <logfile>
+      <node_data data="ux;uy;uz" delim="," file="node_disp.csv"/>
+    </logfile>
     <plotfile type="febio">
       <var type="displacement"/>
       <var type="stress"/>

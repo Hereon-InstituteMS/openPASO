@@ -159,7 +159,7 @@ KNOWLEDGE = {
             "h refinement is concentrated normal to the front.",
     },
     "mesh_generators": {
-        "hyper_cube": "Canonical transport on unit square; step-9 reference solutions.",
+        "hyper_cube": "Canonical transport on the unit square; deal.II's step-9 tutorial is the worked example of this setup.",
         "subdivided_hyper_rectangle": "Anisotropic refinement for boundary-layer / shock-front resolution.",
         "hyper_rectangle": "Generic channel for inlet/outlet transport tests.",
         "hyper_L": "L-shaped; tests discontinuity propagation around corner.",

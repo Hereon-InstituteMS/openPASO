@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from core.registry import get_backend
-from core.backend import JobHandle
+from core.backend import JobHandle, error_excerpt
 
 # Job tracking (in-memory)
 _jobs: dict[str, JobHandle] = {}
@@ -127,7 +127,7 @@ def register_simulation_tools(mcp: FastMCP):
             "critic_review": "approved" if critic_approved else "SKIPPED — no critic reviewed this setup. Results may be wrong.",
         }
         if job.error:
-            result["error"] = job.error[:500]
+            result["error"] = error_excerpt(job.error)
         if job.status == "completed":
             result_files = backend.get_result_files(job)
             result["output_files"] = [f.name for f in result_files]
@@ -195,7 +195,7 @@ def register_simulation_tools(mcp: FastMCP):
             "critic_review": "approved" if critic_approved else "SKIPPED — no critic reviewed this setup. Results may be wrong.",
         }
         if job.error:
-            result["error"] = job.error[:500]
+            result["error"] = error_excerpt(job.error)
         if job.status == "completed":
             result_files = backend.get_result_files(job)
             result["output_files"] = [f.name for f in result_files]
@@ -325,7 +325,7 @@ def register_simulation_tools(mcp: FastMCP):
             result_files = backend.get_result_files(job)
             result["output_files"] = [f.name for f in result_files]
         if job.error:
-            result["error"] = job.error[:500]
+            result["error"] = error_excerpt(job.error)
 
         return json.dumps(result, indent=2)
 

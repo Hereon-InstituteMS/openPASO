@@ -36,7 +36,14 @@ except ImportError:
 
 
 _REPO = Path(__file__).resolve().parent.parent.parent
-_LOG_DIR = _REPO / "data" / "build_logs"
+try:
+    from core.session_journal import state_dir as _state_dir
+except ImportError:  # standalone `python src/core/source_build.py`
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from core.session_journal import state_dir as _state_dir
+# Build logs are runtime state, not shipped data: a pip install's site-packages is shared and
+# often read-only, so they go to the user's state dir, never beside the code.
+_LOG_DIR = _state_dir("build_logs")
 
 
 @dataclass

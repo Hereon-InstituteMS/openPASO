@@ -82,7 +82,8 @@ def main():
             from pathlib import Path
             journal = get_journal()
             if journal.events:
-                sessions_dir = Path(__file__).parent.parent / "data" / "sessions"
+                from core.session_journal import live_session_dir
+                sessions_dir = live_session_dir()     # the same answer the live writer uses
                 path = journal.save(sessions_dir)
                 logger.info(f"Session journal saved: {path} ({len(journal.events)} events)")
         except Exception as e:

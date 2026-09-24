@@ -28,10 +28,13 @@ from enum import Enum
 from pathlib import Path
 
 from core.user_dirs import desktop_dirs
+from core.session_journal import state_dir as _state_dir
 
 
 _REPO = Path(__file__).resolve().parent.parent.parent
-_CACHE_PATH = _REPO / "data" / "source_discovery_cache.json"
+# The discovery cache is written at runtime; keep it out of the install (site-packages is shared
+# and often read-only) and in the user's state dir instead.
+_CACHE_PATH = _state_dir("cache") / "source_discovery_cache.json"
 
 _load_user_config = None
 try:

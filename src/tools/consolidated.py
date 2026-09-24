@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Context
-from core.backend import detect_template_language
+from core.backend import detect_template_language, error_excerpt
 from core.registry import get_backend, available_backends, all_backends
 from core.fabrication_gate import inspect_result_artefacts
 from core.critic_gate import (CriticRegistry, CriticGateError,
@@ -1161,6 +1161,10 @@ _LOAD_BEARING_KEYS = frozenset({
     "function_space", "function_spaces", "weak_form", "weak_forms",
     "boundary_conditions", "solver", "verification",
     "problem_type", "required_sections", "input_format",
+    # THE MEASURED TRAPS NEVER YIELD. The physics door fits its record to the
+    # reply cap; before this, a 4C elasticity record came back with 1 of its 7
+    # pitfalls and a note saying so (measured 2026-09-23).
+    "pitfalls",
 })
 
 
@@ -2497,6 +2501,19 @@ def _deciding_block(solver: str, physics: str) -> str:
 # knowledge reply leaves the server. The participant parts door is exempt
 # (its chunks are bounded by construction and must arrive whole).
 _KNOWLEDGE_REPLY_LIMIT = 48_000
+_WORD_BOUND_CHARS = 6_000 * 6
+_SIX_THOUSAND_CLAUSE = (" -- beyond roughly 6,000 words of instruction, measured, "
+                        "models stop following instructions altogether")
+
+
+def _true_to_its_length(text):
+    """The closing sentence about six thousand words stays only on a reply that
+    is under that bound. A label describing a cap that is not enforced is a
+    label standing in for a guard: measured on a 109k prepare reply and on the
+    physics door's 48k deal.II reply, both ending with the promise."""
+    if isinstance(text, str) and len(text) > _WORD_BOUND_CHARS and _SIX_THOUSAND_CLAUSE in text:
+        return text.replace(_SIX_THOUSAND_CLAUSE, "")
+    return text
 
 
 def _deciding_block_span(text: str, solver: str) -> tuple:
@@ -2915,6 +2932,14 @@ def _verify_elastic(solution_files: str, source_term: str, coefficient: str,
 def register_consolidated_tools(mcp: FastMCP):
     """Register all consolidated tools — ~12 tools instead of 48."""
     _MUST_READ_STATE["served"] = False
+    # Registration is the start of a session. The prepared-solver set is keyed
+    # by id(mcp), and a test harness that builds one server object per call
+    # gets the same id back once the previous object is collected -- measured
+    # 2026-09-23: a "first" fourc/poisson call arrived wearing the coupled
+    # hand-off of a session that no longer existed, 54k against 41k. A server
+    # registers once, so this costs it nothing.
+    _PREPARED_SOLVERS.pop(id(mcp), None)
+    _PREPARED_SOLVERS.pop((id(mcp), "served"), None)
 
     # Session journal — records events for knowledge capture
     from core.session_journal import get_journal as _get_journal
@@ -3056,28 +3081,35 @@ def register_consolidated_tools(mcp: FastMCP):
                 return (f"No knowledge for '{physics}' in {solver}. "
                         f"Available: {_avail}")
             k = _strip_pitfalls(k)
-            result = json.dumps(k, indent=2, default=str)
-            # Append real test file references
+            # A SECTION BY NAME. The fitter below tells a reader to ask for a
+            # thinned or dropped section by name; this is the door that
+            # answers. Exact key first, then a substring of one.
+            if signal and isinstance(k, dict):
+                _want = signal.strip().lower()
+                _hit = (next((key for key in k if key.lower() == _want), None)
+                        or next((key for key in k if _want in key.lower()), None))
+                if _hit is not None:
+                    return (json.dumps({_hit: k[_hit]}, indent=2, default=str)
+                            + f"\n\n[section '{_hit}' of knowledge(topic='physics', "
+                              f"solver='{solver}', physics='{physics}'), whole]"
+                            + _physics_tail())
             from tools.knowledge import _find_reference_test_files
             ref = _find_reference_test_files(solver, physics)
-            if ref:
-                result += f"\n\n{ref}"
-            # Append post-mortem BREADCRUMBS (ids only) — not full
-            # records — at plan time. Rationale (senior-AI-scientist
-            # critic, 2026-05-31): full post-mortems include
-            # surface_symptom / root_cause / agent_detection_after_fix,
-            # which are diagnostic fields for human review (#46), not
-            # pre-execution guidance. Auto-including them at plan
-            # time produces linear token bloat in N_postmortems and
-            # competes with the catalog for the agent's attention.
-            # The pitfall_db_entries the catalog already exposes ARE
-            # the pre-execution actionable content; the full
-            # post-mortem belongs to the post-execution critic when
-            # it has a Signal: to match. Agent can fetch the full
-            # record explicitly via
+            # Post-mortem BREADCRUMBS (ids only) — not full records — at plan
+            # time. Rationale (senior-AI-scientist critic, 2026-05-31): full
+            # post-mortems include surface_symptom / root_cause /
+            # agent_detection_after_fix, which are diagnostic fields for human
+            # review (#46), not pre-execution guidance. Auto-including them at
+            # plan time produces linear token bloat in N_postmortems and
+            # competes with the catalog for the agent's attention. The
+            # pitfall_db_entries the catalog already exposes ARE the
+            # pre-execution actionable content; the full post-mortem belongs
+            # to the post-execution critic when it has a Signal: to match.
+            # Agent can fetch the full record explicitly via
             # `knowledge(topic="postmortems", solver=..., signal=...)`.
             postmortems = ([] if _ABLATE_PITFALLS
                            else _load_matching_postmortems(solver, physics, ""))
+            crumbs = ""
             if postmortems:
                 breadcrumbs = [
                     {"id": pm.get("id", "?"),
@@ -3085,7 +3117,7 @@ def register_consolidated_tools(mcp: FastMCP):
                      "date": pm.get("date", "")}
                     for pm in postmortems
                 ]
-                result += (
+                crumbs = (
                     f"\n\n## Post-mortem breadcrumbs "
                     f"({len(postmortems)} record"
                     f"{'' if len(postmortems) == 1 else 's'} — "
@@ -3093,7 +3125,30 @@ def register_consolidated_tools(mcp: FastMCP):
                     f"(topic='postmortems', solver=..., signal=...)"
                     f" when a post-execution Signal needs lookup):\n"
                     + json.dumps(breadcrumbs, indent=2))
-            return result + _physics_tail()
+            # THE RECORD IS FITTED, NEVER SLICED. This door is the full record
+            # every other door points at (prepare's own trim note names it),
+            # and the exit cap used to slice its JSON: measured 2026-09-23,
+            # deal.II/poisson at 54,792 characters of JSON came back as
+            # 48,432 -- cut mid-object, unparseable, the pitfalls key (last in
+            # the record) gone, and a closing sentence promising six thousand
+            # words. The JSON is fitted to the room the reply has: pitfalls
+            # and runnable entries are load-bearing and never yield, large
+            # prose entries thin and then drop, each named in a note that
+            # says how to fetch it by name, and the cap downstream leaves the
+            # JSON head alone.
+            _tail = _physics_tail()
+            _room = (_KNOWLEDGE_REPLY_LIMIT - len(_tail)
+                     - (len(ref) + 2 if ref else 0) - len(crumbs) - 400)
+            _hint = (f"knowledge(topic='physics', solver='{solver}', "
+                     f"physics='{physics}', signal='<section name>')")
+            if isinstance(k, dict):
+                result, _note = _fit_json_block(k, max(8000, _room), fetch_hint=_hint)
+                result += _note
+            else:
+                result = json.dumps(k, indent=2, default=str)
+            if ref:
+                result += f"\n\n{ref}"
+            return result + crumbs + _tail
 
         elif topic == "postmortems":
             if _ABLATE_PITFALLS:
@@ -3658,9 +3713,18 @@ def register_consolidated_tools(mcp: FastMCP):
             if 0 <= j < i:
                 i = j                      # the breadcrumbs precede the block: keep both
             body, tail = out[:i], out[i:]
+            # THE JSON HEAD RIDES OUTSIDE THE SLICING CAP. The physics branch
+            # fitted it (parseable, pitfalls kept, or whole when every entry
+            # is load-bearing); only what follows it is capped here.
+            _je = body.find("\n}") + 2 if body.lstrip().startswith("{") else 0
+            if _je > 2:
+                head, rest = body[:_je], body[_je:]
+                rest = _cap_knowledge_reply(rest, topic, solver, physics, signal,
+                                            limit=max(2000, _KNOWLEDGE_REPLY_LIMIT - len(head) - len(tail)))
+                return _true_to_its_length(head + rest + tail)
             body = _cap_knowledge_reply(body, topic, solver, physics, signal,
                                         limit=max(8000, _KNOWLEDGE_REPLY_LIMIT - len(tail)))
-            return body + tail
+            return _true_to_its_length(body + tail)
         if (topic or "").strip().lower() == "postmortems" and out.lstrip().startswith(("[", "{")):
             # a JSON record set that callers parse as JSON: appending prose
             # to it broke every parser (measured: json 'Extra data')
@@ -4370,7 +4434,7 @@ def register_consolidated_tools(mcp: FastMCP):
 
         if job.error:
             _journal.record("tool_error", "run_with_generator", solver=solver,
-                            error_message=job.error[:300],
+                            error_message=error_excerpt(job.error, 300),
                             input_snapshot=_snap_run)
         else:
             _journal.record("tool_success", "run_with_generator", solver=solver,
@@ -4384,7 +4448,7 @@ def register_consolidated_tools(mcp: FastMCP):
         }
         out_files = []
         if job.error:
-            result["error"] = job.error[:500]
+            result["error"] = error_excerpt(job.error)
         nonfinite = []
         _stdout_text = ""
         if job.status == "completed":
@@ -4578,7 +4642,7 @@ def register_consolidated_tools(mcp: FastMCP):
 
         if job.error:
             _journal.record("tool_error", "run_simulation", solver=solver,
-                            error_message=job.error[:300],
+                            error_message=error_excerpt(job.error, 300),
                             input_snapshot=_snap)
         else:
             _journal.record("tool_success", "run_simulation", solver=solver,
@@ -4591,7 +4655,7 @@ def register_consolidated_tools(mcp: FastMCP):
         }
         out_files = []
         if job.error:
-            result["error"] = job.error[:500]
+            result["error"] = error_excerpt(job.error)
         if _input_warnings:
             result["input_validation_warnings"] = _input_warnings
         nonfinite = []
@@ -4675,8 +4739,7 @@ def register_consolidated_tools(mcp: FastMCP):
     # It shutil-copied the COMPLETE participant file — solve included — into
     # the agent's work_dir. Option B elides the solve at SERVING time, so the
     # knowledge payload stopped handing over a solver while this tool went on
-    # handing over the same file whole, by a different door. Measured in the
-    # C9 iteration of 2026-08-29: agents called it 2-4 times per run and 8 to
+    # handing over the same file whole, by a different door. Measured on one batch of runs: agents called it 2-4 times per run and 8 to
     # 10 participant files landed in each workspace, two per run carrying the
     # full solve. Those runs are void.
     #
@@ -6585,7 +6648,7 @@ def register_consolidated_tools(mcp: FastMCP):
             #
             # Asking politely has been measured and does not work. This lead
             # was moved to the FRONT of the converged reply precisely because
-            # 513 graded cells had produced zero calls to the check; over every
+            # hundreds of recorded runs had produced zero calls to the check; over every
             # recorded cell since, the lead was served 14 times in 10 cells and
             # the tool was called twice, in one cell. So after the first
             # unchecked level the sentence stops being an invitation and starts
@@ -6781,7 +6844,7 @@ def register_consolidated_tools(mcp: FastMCP):
                         # The proof above asks whether the run can be shown to
                         # have happened; this asks whether what it produced is
                         # worth building on, and it is the family that decides
-                        # CORRECT against COMPLETED_UNPHYSICAL. Measured on a
+                        # a correct run against a completed but unphysical one. Measured on a
                         # live cell that coupled three levels, wrote every
                         # deliverable and graded unphysical: NEAR-ZERO FIELD
                         # and FLOOR appear ZERO times in its trajectory because
@@ -6810,7 +6873,7 @@ def register_consolidated_tools(mcp: FastMCP):
                     if isinstance(v, dict) and str(v.get("verdict", "")).upper() == "INCONSISTENT"]
             if _bad:
                 # REPORTED WITH ITS ERROR RATE, NOT AS A VERDICT ON THE RUN.
-                # Calibrated against the graded record on the problems this
+                # Calibrated against the recorded runs on the problems this
                 # check accepts: 15 of the wrong cells land here, and so does
                 # 1 of the 14 correct ones. That one cannot be tuned away --
                 # its residual sequence (0.0132, 0.0058, 0.0106) has the same
@@ -6959,6 +7022,44 @@ def register_consolidated_tools(mcp: FastMCP):
                         "responsiveness"):
                 if key in rep:
                     compact[key] = rep[key]
+            # THE VERDICT TRAVELLED NOWHERE. couple() stamps the gate's verdict on
+            # its own reply; this copy list did not carry it, and the aggregate had
+            # none of its own, so a ladder whose every level was verified reached
+            # every consumer with nothing saying so -- and the browser interface
+            # honestly reported "a solver ran, but openPASO did not verify its
+            # result" for work that had been verified level by level.
+            #
+            # The BOOLEAN on every level; the PROSE only where it does work. The
+            # verification text is 700-1500 characters, and three copies of it
+            # would add ~4.5k to a reply the parent reads in full -- the same
+            # budget that has twice cut material this campaign needed.
+            #
+            # THE LEVEL ANSWERS FOR ITS NUMBERS; THE REVIEW IS THE LADDER'S. A
+            # level's own couple() reply can never say `trustworthy_result: true`
+            # inside a ladder, and not because anything is wrong: couple_levels
+            # injects that level's mesh keys into each participant's environment,
+            # so the level's setup digest is no longer the digest the critic
+            # reviewed, and the lookup misses every time. Reading couple()'s
+            # verdict here would therefore publish "not verified" for every level
+            # of every ladder forever, which is worse than publishing nothing.
+            # The review is of the SETUP, and the levels are that same setup at
+            # different meshes, so it is resolved ONCE below for the whole call.
+            # What belongs to the level is its own numerical evidence, read from
+            # its own reply: it converged, it exchanged something, and no
+            # downstream check spoke against it.
+            _numbers_ok = (bool(rep.get("converged"))
+                           and not compact.get("coupled_evidence")
+                           and not (rep.get("validation") or []))
+            compact["trustworthy_result"] = bool(_numbers_ok and _reviewed)
+            if not compact["trustworthy_result"]:
+                if not _numbers_ok and rep.get("verification"):
+                    compact["verification"] = rep["verification"]
+                elif not _reviewed:
+                    compact["verification"] = (
+                        "NOT VERIFIED — this level's numbers passed, but no critic "
+                        "review of this coupling setup is on record (" + _review_note
+                        + "). The review covers the whole ladder, so one "
+                        "submit_critic_review for this setup verifies every level.")
             if rep.get("what_to_fix_next"):
                 # 4000, not 2000: a failed 4C side's lead now carries the deck's defects and
                 # 4C's own stop line, which the old cap cut off mid-list
@@ -7057,8 +7158,59 @@ def register_consolidated_tools(mcp: FastMCP):
                    if "NOT CHECKED" not in f.get("finding", "")]
         except Exception:                                    # noqa: BLE001
             _eq = []
+        # THE LADDER'S OWN VERDICT, under the key names couple() uses so a reader
+        # needs no mapping. It is STRICTLY STRONGER than the conjunction of the
+        # levels: a level answers for one mesh, the ladder answers for the mesh
+        # SEQUENCE, and two of its properties belong to no single level --
+        # whether the mesh actually refined between them (three levels each
+        # verified on the SAME mesh is not a verified ladder, and six three-level
+        # couplings were lost to exactly that shape), and whether the coupling
+        # transmitted anything at all. So the top level decides, and a consumer
+        # must not reconstruct it from the levels.
+        _ladder_faults = []
+        if not _reviewed:
+            _ladder_faults.append(
+                "no critic review of this coupling setup is on record ("
+                + _review_note + "); one submit_critic_review for this setup "
+                "covers every level of the ladder")
+        _unverified = [x["level"] for x in out_levels if not x.get("trustworthy_result")]
+        if _unverified:
+            _first = next(x for x in out_levels if x["level"] == _unverified[0])
+            _why = (str(_first.get("coupled_evidence") or _first.get("verification")
+                        or "it did not pass the verification gate")).strip()
+            _ladder_faults.append(f"level {_unverified[0]} is not verified: {_why}")
+        if len(out_levels) > 1:
+            try:
+                from .result_audit import ndof_ladder_findings as _ndof
+                for _f in _ndof(Path(history_dir)):
+                    _ladder_faults.append(str(_f.get("finding", ""))[:600])
+            except Exception:                                # noqa: BLE001
+                pass
+        _covers = (
+            " The critic review this verdict rests on is a review of the SETUP, and "
+            "couple_levels resolves it once for the whole call because every level "
+            "is that same setup at a different mesh: one review covers the ladder, "
+            "not one review per mesh.")
+        if _ladder_faults:
+            _trust = False
+            _verif = ("THIS LADDER IS NOT VERIFIED. " + " ".join(_ladder_faults)
+                      + " A mesh sequence answers for the sequence: a level that "
+                      "transmitted nothing, or a mesh that did not refine, makes "
+                      "the ladder worthless however good the other levels are."
+                      + _covers)
+        elif all_ok:
+            _trust = True
+            _verif = ("VERIFIED LADDER -- every requested level passed openPASO's "
+                      "verification gate, each level's exchange carried data, and "
+                      "the mesh refined between levels. This is verification, not "
+                      "validation: confirm physical validity yourself." + _covers)
+        else:
+            _trust = False
+            _verif = ("THIS LADDER IS NOT VERIFIED: it did not run every requested "
+                      "level, so there is no mesh sequence to answer for." + _covers)
         out = {"all_levels_converged": all_ok, "levels_run": len(out_levels),
                "levels_requested": len(lv), "history_dir": history_dir,
+               "trustworthy_result": _trust, "verification": _verif,
                "critic_review": {"reviewed": bool(_reviewed), "note": _review_note,
                                  "self_reported_flag": bool(critic_approved)},
                "levels": out_levels, "next_step": nxt}
@@ -7575,82 +7727,43 @@ def register_consolidated_tools(mcp: FastMCP):
         _coupling_head = ""
         if _prepared and backend.name() not in _prepared \
                 and not _PREPARED_SOLVERS.get((id(mcp), "served")):
-            # PUSH THE PARTICIPANT CONTRACTS FOR BOTH PRESCRIBED CODES.
+            # THE MUST-READ ARRIVES WHOLE; THE CONTRACTS ARE THE WORKERS'.
             #
-            # The dominant coupled failure is hand-rolling the handshake and the
-            # flux recovery from scratch, while the served contract sat behind
-            # an opt-in knowledge(topic='coupling', solver=...) call that weak
-            # models never issue. So the contract is handed over here, on the
-            # call that reveals the coupling. It is a CONTRACT, not a solver:
-            # handshake, sign convention, recovery formula, exports schema and
-            # the per-level rule. The mesh, form, material, source and solve are
-            # elided for every code and the agent writes them (Option B).
-            _scripts = []
-            for _c in sorted(_prepared | {backend.name()}):
-                _s = _coupling_participant_script(_c, physics)
-                if not _s:
-                    continue
-                _label = (
-                    f"## {_c}: participant CONTRACT (handshake + flux recovery "
-                    "+ exports schema). The mesh, weak form, material, source "
-                    "and SOLVE are deliberately not here -- YOU write those in "
-                    f"this code, from your task, using prepare_simulation("
-                    f"solver='{_c}', physics=...) for its API and gotchas. What "
-                    "IS here (reading imports.json, the interface sign "
-                    "convention, the consistent flux recovery applied to your "
-                    "own assembled system, the exports.json schema, one field "
-                    "file per mesh level) is the part that is hard to get "
-                    "right: keep it, and write the solve around it. The block "
-                    "states its interface ROLE; if your task gives this code "
-                    "the OTHER role, knowledge(topic='coupling', "
-                    f"solver='{_c}') carries the other-role contract (a "
-                    "separate NEUMANN-SIDE block where one ships, else the "
-                    "SIDE switch inside this one) -- read it before you "
-                    "change the interface application.")
-                # A BINARY CODE'S DECK GRAMMAR TRAVELS WITH ITS CONTRACT. The
-                # deck is the part of a 4C/FEBio/SPARTA participant that the
-                # elision leaves to the agent, and it cannot be guessed:
-                # measured, a run that had its DUNE side working from the
-                # copied contract lost the round on a 4C MATERIALS section
-                # that the grammar appendix (served only on the knowledge
-                # door) spells out.
-                try:
-                    _g = _append_deck_grammar("", _c)
-                except Exception:                            # noqa: BLE001
-                    _g = ""
-                _scripts.append(_label + "\n" + _s + (("\n" + _g) if _g.strip() else ""))
-            _tmpl_block = ""
-            if _scripts:
-                _tmpl_block = (
-                    "# YOUR FIRST ACTION: COPY EACH BLOCK BELOW INTO ITS OWN "
-                    "FILE NOW (write_file side_<x>.py, one per code), before "
-                    "you read anything else. Each is the participant CONTRACT "
-                    "for that code -- the imports/exports handshake, the "
-                    "interface sign convention, the consistent flux recovery, "
-                    "the exports schema and the export self-check -- with ONE "
-                    "hole, the solve, marked for you to fill from your task. "
-                    "Measured: every recent coupled run that wrote this file "
-                    "from scratch instead failed on the handshake or the "
-                    "recovery.\n"
-                    "# Each block states its interface ROLE; if your task "
-                    "assigns the OPPOSITE role, change the interface "
-                    "application yourself (Dirichlet: impose the imported "
-                    "values; Neumann: apply the imported flux as a load) -- "
-                    "the coupled must-read below spells out both.\n\n"
-                    + "\n\n".join(_scripts) + "\n"
-                    + "-" * 70 + "\n\n")
+            # This call used to push BOTH codes' participant contracts (60k
+            # for 4C + Kratos, deck grammar included) in front of the
+            # must-read, 109k in one reply, and dropped the second code's
+            # pitfalls to make room. The coupling door had already settled the
+            # same question the other way, measured 2026-09-11: the parent's
+            # first reply keeps the must-read whole and says where the block
+            # comes from, because under the orchestrator rule the parent never
+            # copies the contract -- its worker's own knowledge(topic=
+            # 'coupling', solver=...) call leads with the complete block, the
+            # deciding facts and the deck grammar (measured 2026-09-23: that
+            # call is 53k with both fences for Kratos). Two doors must not
+            # disagree, and the one that pushed 60k was the one losing
+            # pitfalls. What this call adds is the must-read, once, whole.
             _mr = (_MUST_READ_POINTER if _MUST_READ_STATE["served"]
                    else _COUPLING_MUST_READ)
             _MUST_READ_STATE["served"] = True
+            _codes = sorted(_prepared | {backend.name()})
+            _calls = " and ".join(
+                f"knowledge(topic='coupling', solver='{c}')" for c in _codes)
             _coupling_head = (
                 "# YOU HAVE NOW PREPARED TWO DIFFERENT CODES IN THIS SESSION.\n"
                 "# If your task couples them -- two subdomains exchanging "
-                "interface data --\n# the contracts come first, then the "
-                "coupled must-read, then this code's physics payload. If "
-                "your task uses\n# one code only, skip to the physics "
-                "payload after the second rule.\n\n"
-                + _tmpl_block
+                "interface data --\n# the coupled must-read comes first, then "
+                "where each code's participant contract comes from, then this "
+                "code's physics payload.\n# If your task uses one code only, "
+                "skip to the physics payload after the second rule.\n\n"
                 + _mr
+                + f"\n[THE PARTICIPANT CONTRACTS FOR {' and '.join(_codes)} ARE "
+                  f"NOT REPEATED HERE. {_calls} each lead with that code's "
+                  "complete contract block and its deciding facts (and its deck "
+                  "grammar where the code takes an input deck); add the physics "
+                  "word where the code ships a variant for it. That is the call "
+                  "each WORKER makes for its own code: hand the worker the "
+                  "brief, not this text. If you write the participants "
+                  "yourself, make both calls yourself.]\n"
                 + "\n" + "-" * 70 + "\n\n")
             _PREPARED_SOLVERS[(id(mcp), "served")] = True
         _prepared.add(backend.name())
@@ -7868,29 +7981,145 @@ def register_consolidated_tools(mcp: FastMCP):
         # This is the same defect the comment at the knowledge() call site
         # already records, applied to the door that was missed: a fix landed
         # at one call site when there were two.
-        # UNDER THE COUPLED HAND-OFF, THIS CODE'S PHYSICS CORPUS IS A POINTER.
-        # The reveal (contracts, must-read, deck grammar) already runs to
-        # ~45k characters; with the second code's full corpus behind it the
-        # reply passed 120k, and a small model reads the size of the job
-        # rather than its first step and gives up. Keep what the solve needs
-        # in hand -- the deciding facts and the template -- and point at the
-        # rest, which is one call away.
-        _parts = parts
-        if _coupling_head:
-            _tmpl = [x for x in parts if x.startswith("## Template")]
-            _rest = [x for x in parts if not x.startswith("## Template")]
-            if _tmpl and _rest:
-                _parts = _tmpl + [
-                    f"## The rest of this code's physics corpus ({len(_rest)} "
-                    f"sections: knowledge, pitfalls, API reference, examples) "
-                    f"is not repeated under the coupled hand-off above. Fetch "
-                    f"it with knowledge(topic='physics', solver='{solver}', "
-                    f"physics='{matched_physics}') when a specific step "
-                    f"fails.\n"]
-        return (_coupling_head
-                + _deciding_block(solver, matched_physics)
-                + f"# Preparation for {matched_physics} on {solver}\n\n"
-                + "\n---\n".join(_parts) + _UNIVERSAL_BLOCK)
+        # UNDER THE COUPLED HAND-OFF, THIS CODE'S PHYSICS CORPUS YIELDS.
+        # THE CAP TRIMS THE CORPUS, NEVER THE PITFALLS, THE DECIDING FACTS OR
+        # THE MUST-READ.
+        #
+        # MEASURED 2026-09-23. The first call in a session came back at 21-41k
+        # characters with the pitfalls carved out and served. The SECOND call --
+        # a different code, which reveals a coupling -- came back at 109,223
+        # characters: both codes' contracts with their deck grammar (60k), the
+        # must-read, the template, and 0 of the 7 pitfalls (46 bullets) this
+        # door serves for 4C/heat, because the previous trim kept the template
+        # and pointed at "the rest", and the pitfalls were the rest. On one
+        # development run set the two runs that made this call were the two
+        # that failed on the 4C side, and no run that got it right had made
+        # it -- two of two is a lead, not a rate, which is why the fix names
+        # the rule rather than the run set.
+        #
+        # One cap for the product: _KNOWLEDGE_REPLY_LIMIT, the same number the
+        # knowledge door uses, so the two doors cannot disagree about what a
+        # reply may weigh. The closing sentence about six thousand words is
+        # kept only when the reply is actually under that bound, first calls
+        # included (10 of 27 first replies are over it): a label describing a
+        # cap that is not enforced is a label standing in for a guard, and in
+        # the last line of a 109k reply it was the reply refuting itself.
+        _TOTAL = _KNOWLEDGE_REPLY_LIMIT
+        _SEP = "\n---\n"
+        _NOTE_RESERVE = 700        # the omission note, budgeted before anything yields
+        _deciding = _deciding_block(solver, matched_physics)
+        _header = f"# Preparation for {matched_physics} on {solver}\n\n"
+        _universal = _UNIVERSAL_BLOCK
+
+        def _is_fixed(x: str) -> bool:
+            # THE PITFALLS AND THE TEMPLATE, and every note ABOUT this reply: a
+            # physics-name match, a code that is not available here, a variant
+            # that does not satisfy what was asked. The template is a runnable
+            # worked example a weak model copies -- as load-bearing as the
+            # pitfalls, and more than the knowledge JSON or the API reference --
+            # so the cap trims the corpus, never the pitfalls or the template.
+            # Measured 2026-09-24: the first version yielded the template with
+            # the corpus, and a coupled second call for ngsolve/hdivdiv dropped
+            # its tail past the cap (test_prepare_simulation_template_complete),
+            # the same stateful-second-call truncation as the pitfalls case.
+            # The earlier version also let the "is NOT available on this
+            # install" and "no template variant provides it" warnings yield.
+            head = x.lstrip()[:200]
+            return ("Pitfalls" in x[:80] or head.startswith("## Template")
+                    or head.startswith("*Note") or "\u26a0" in head)
+
+        def _warning_head(x: str) -> str:
+            # a template whose lines before the fence carry a warning keeps
+            # those lines when its body yields
+            head = x.split("```", 1)[0]
+            return head.rstrip() + "\n" if "\u26a0" in head else ""
+
+        def _yield_rank(x: str) -> int:
+            # THE ORDER IN WHICH THE CORPUS YIELDS when it does not fit beside
+            # the must-read: the knowledge JSON and the other-codes list first
+            # (the JSON's pitfalls are already out, and knowledge(topic=
+            # 'physics', ...) serves a superset of it -- cut at the cap for
+            # deal.II, which is why the note below names the repeat prepare
+            # call and not that door), then the reference test files, then the
+            # template, and last the installed-version API reference, which
+            # was measured on this install and cannot be guessed from memory.
+            first = x.lstrip()[:40]
+            if first.startswith(("## Knowledge", "## Also available on")):
+                return 0
+            if first.startswith("## Reference"):
+                return 1
+            return 2                          # the API reference yields last
+
+        _LABELS = (("## Knowledge", "the knowledge JSON"),
+                   ("## Also available on", "the other codes for this physics"),
+                   ("## Installed-version API reference",
+                    "the installed-version API reference"),
+                   ("## Reference", "the reference test files"),
+                   ("## Template", "the template"))
+
+        def _label(x: str) -> str:
+            first = x.lstrip()[:60]
+            for key, lab in _LABELS:
+                if first.startswith(key):
+                    return lab
+            return (x.strip().splitlines() or ["a section"])[0].lstrip("#* ").strip()[:40]
+
+        # THE HEAD IS NEVER CUT, AND THE CORPUS YIELDS ONLY TO IT. The first
+        # version of this cap trimmed the coupled hand-off from its end to make
+        # room, and the end of the must-read is the run-log contract, the
+        # subprocess-capture rule and the per-side naming rule -- the evidence
+        # rules a reader judges a coupled result by first, and the family that
+        # lost the most coupled development runs after the physics itself. So
+        # the must-read, the deciding facts, every pitfall, every warning and
+        # the universal rules are fixed; only the corpus yields, least valuable
+        # first, until the reply fits, and what remains is served in its own
+        # order. When the fixed pieces alone exceed the cap (4C or deal.II as
+        # the second code: 49.7-53.9k) the reply is over the cap by exactly
+        # them and carries no corpus at all; a fixed piece that fell off to
+        # meet a number would be the 2026-09-14 defect again.
+        #
+        # A FIRST call is served whole, as it always was: it was never capped
+        # (measured 2026-09-23 over 9 backends x 3 physics, every first reply is
+        # 14-43k), and the yielding is reserved for the call that carries the
+        # hand-off, so a code whose corpus one day outgrows the cap loses
+        # nothing from its own first reply.
+        _fixed = [x for x in parts if _is_fixed(x)]
+        _corpus = [x for x in parts if not _is_fixed(x)]
+        _budget = (_TOTAL - len(_coupling_head) - len(_deciding) - len(_header)
+                   - len(_universal) - sum(len(x) + len(_SEP) for x in _fixed))
+        _kept = {id(x) for x in _corpus}
+        _heads: dict = {}
+        _over = sum(len(x) + len(_SEP) for x in _corpus) - _budget
+        if _coupling_head and _over > 0:
+            _over += _NOTE_RESERVE
+            for x in sorted(_corpus, key=_yield_rank):
+                if _over <= 0:
+                    break
+                _kept.discard(id(x))
+                _over -= len(x) + len(_SEP)
+                wh = _warning_head(x)
+                if wh:
+                    _heads[id(x)] = wh
+                    _over += len(wh) + len(_SEP)
+        _ordered = []
+        for x in parts:
+            if _is_fixed(x) or id(x) in _kept:
+                _ordered.append(x)
+            elif id(x) in _heads:
+                _ordered.append(_heads[id(x)])
+        _omitted = [x for x in _corpus if id(x) not in _kept]
+        if _omitted:
+            _names = ", ".join(_label(x) + (" (its body)" if id(x) in _heads else "")
+                               for x in _omitted)
+            _ordered.append(
+                f"## {len(_omitted)} section(s) of this code's physics corpus "
+                f"not shown ({_names}), so that the coupled must-read, the "
+                f"measured facts and every pitfall above arrive in full. "
+                f"prepare_simulation(solver='{solver}', "
+                f"physics='{matched_physics}') called again serves this code's "
+                f"preparation whole, without the coupled hand-off.\n")
+        _body = _coupling_head + _deciding + _header + _SEP.join(_ordered)
+        return _true_to_its_length(_body + _universal)
 
     # ═══════════════════════════════════════════════════════════
     # 9. TRANSFER FIELD (keep — needed for coupling)
@@ -8428,7 +8657,9 @@ def _load_community_knowledge(solver: str = "") -> list[dict]:
     Returns list of candidate dicts. Optionally filter by solver.
     """
     from pathlib import Path
-    pending_dir = Path(__file__).parent.parent.parent / "data" / "community_knowledge" / "pending"
+    from core.session_journal import state_dir as _state_dir
+    # staged community knowledge is runtime state -> the user's state dir, never the install
+    pending_dir = _state_dir("community_knowledge") / "pending"
     if not pending_dir.exists():
         return []
     entries = []
@@ -8448,7 +8679,9 @@ def _load_community_knowledge(solver: str = "") -> list[dict]:
 def _save_candidates(candidates: list, session_id: str) -> str:
     """Save approved candidates to community_knowledge/pending/."""
     from pathlib import Path
-    pending_dir = Path(__file__).parent.parent.parent / "data" / "community_knowledge" / "pending"
+    from core.session_journal import state_dir as _state_dir
+    # staged community knowledge is runtime state -> the user's state dir, never the install
+    pending_dir = _state_dir("community_knowledge") / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
 
     entries = []
@@ -9485,11 +9718,15 @@ Two ways that capture silently fails, both measured:
 # orchestrator rule, the couple() recipe, the ladder, the first worker brief)
 # leads, the code's own payload head follows with its contract inside the
 # first 16k, and part B (the rules that decide convergence) closes the reply.
+# THE PER-SIDE NAMING RULE JOINS THE MUST-READ BEFORE THE SPLIT. It was
+# appended after part B had been cut, so the coupling door -- every first
+# reply and signal='must-read' -- never served it (measured 2026-09-23 on
+# kratos, fourc, dune: -1), and only the prepare hand-off did.
+_COUPLING_MUST_READ += "\n" + _PER_SIDE_NAMING
 _COUPLING_LEAD_SPLIT = "DO NOT WRITE THE PARTICIPANT'S HANDSHAKE FROM SCRATCH"
 _COUPLING_LEAD_A = _COUPLING_MUST_READ[:_COUPLING_MUST_READ.index(_COUPLING_LEAD_SPLIT)]
 _COUPLING_LEAD_B = _COUPLING_MUST_READ[_COUPLING_MUST_READ.index(_COUPLING_LEAD_SPLIT):]
 _COUPLING_CONTRACT_HEAD = 11000     # floor for the payload head between the two parts when no contract block is found
-_COUPLING_MUST_READ += "\n" + _PER_SIDE_NAMING
 
 
 

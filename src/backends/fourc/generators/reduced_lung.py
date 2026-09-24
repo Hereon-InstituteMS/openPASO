@@ -13,7 +13,23 @@ class ReducedLungGenerator(BaseGenerator):
 
     module_key = "reduced_lung"
     display_name = "Reduced Lung Model"
-    problem_type = "ReducedLung"
+    # WAS "ReducedLung", which 4C does not declare and refuses. The first
+    # correction made it "Reduced_Lung_1D_Pipe_Flow" -- a name 4C DOES
+    # declare, and the wrong one: 4C maps it to ProblemType::one_d_pipe_flow,
+    # whose own comment reads "new implementation of arterial network", while
+    # this template emits REDUCED DIMENSIONAL AIRWAYS DYNAMIC, which belongs
+    # to ProblemType::red_airways. That swapped a LOUD failure for a SILENT
+    # one: an unregistered name is refused, a valid name pointing at the wrong
+    # solver just runs something else.
+    #
+    # Settled by running this template's own text under all three candidates
+    # on the installed binary rather than by reading the enum:
+    #     Reduced_Lung_1D_Pipe_Flow  -> does not finish
+    #     Reduced_Lung               -> does not finish
+    #     ReducedDimensionalAirWays  -> processor 0 finished normally
+    # Checking that a name is DECLARED is not checking that it is the RIGHT
+    # one, and only the second question needs an execution.
+    problem_type = "ReducedDimensionalAirWays"
 
     def get_knowledge(self) -> dict[str, Any]:
         return {
@@ -96,7 +112,7 @@ class ReducedLungGenerator(BaseGenerator):
             "TITLE:\n"
             "  - \"4C reduced-lung-tree reference stub\"\n"
             "PROBLEM TYPE:\n"
-            "  PROBLEMTYPE: \"ReducedLung\"\n"
+            "  PROBLEMTYPE: \"ReducedDimensionalAirWays\"\n"
             "REDUCED DIMENSIONAL AIRWAYS DYNAMIC:\n"
             "  DYNAMICTYPE: \"OneStepTheta\"\n"
             "  TIMESTEP: 0.01\n"

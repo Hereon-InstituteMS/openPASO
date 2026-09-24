@@ -40,7 +40,10 @@ IO/RUNTIME VTK OUTPUT/STRUCTURE:
 IO/RUNTIME VTK OUTPUT/FLUID:
   OUTPUT_FLUID: true
   VELOCITY: true
-  PRESSURE: true
+  # PRESSURE is deliberately NOT requested for this 2-D ALE fluid. With it, 4C's runtime VTK
+  # writer labelled dof index 3 as pressure, which a 2-D fluid node (ux, uy, p) does not have,
+  # so the pressure array was NaN at every node of every step while the run still ended with
+  # 'processor 0 finished normally'. The pressure is the third component of VELOCITY here.
   DISPLACEMENT: true
 MATERIALS:
   - MAT: 1

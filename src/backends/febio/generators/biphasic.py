@@ -77,6 +77,17 @@ def _biphasic_3d_confined(params: dict) -> str:
       <points><pt>0,0</pt><pt>1,1</pt></points>
     </load_controller>
   </LoadData>
+  <Output>
+    <!-- this deck had NO Output section, so FEBio wrote only its binary .xplt, which
+         needs FEBio's own reader; the CSV can be opened and checked by anything. -->
+    <logfile>
+      <node_data data="ux;uy;uz;p" delim="," file="node_disp_p.csv"/>
+    </logfile>
+    <plotfile type="febio">
+      <var type="displacement"/>
+      <var type="effective fluid pressure"/>
+    </plotfile>
+  </Output>
 </febio_spec>
 '''
 

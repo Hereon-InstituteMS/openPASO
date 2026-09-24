@@ -168,6 +168,14 @@ class FSIGenerator(BaseGenerator):
                 ),
             },
             "pitfalls": [
+            "[Output] In a 2-D FSI (ALE fluid) deck, requesting PRESSURE under IO/RUNTIME VTK OUTPUT/FLUID "
+            "writes NaN at every node and every step. Signal: the 'pressure' array in fluid-*.vtu is all "
+            "NaN while velocity and displacement are finite; the run still ends with 'processor 0 "
+            "finished normally'. The writer sizes its dof context for 3-D (ux, uy, uz, p) and labels "
+            "dof index 3 as pressure; a 2-D fluid node has three dofs (ux, uy, p). Do not request PRESSURE "
+            "in 2-D -- none of 4C's own 2-D FSI test decks do -- and read the pressure as the third "
+            "component of the 'velocity' array, or output it through the legacy IO result writer. "
+            "Measured on 4C 2026-09-23; an upstream defect, not a deck error.",
                 # Every Signal: below was produced by running
                 #   LD_LIBRARY_PATH=/opt/4C-dependencies/lib stdbuf -oL -eL \
                 #     {FOURC_BINARY} <deck>.yaml <out>
@@ -766,7 +774,12 @@ class FSIGenerator(BaseGenerator):
             IO/RUNTIME VTK OUTPUT/FLUID:
               OUTPUT_FLUID: true
               VELOCITY: true
-              PRESSURE: true
+              # PRESSURE is deliberately NOT requested for this 2-D ALE fluid: with it, 4C wrote NaN
+              # at every node and every step while velocity and displacement stayed finite (measured
+              # 2026-09-23). The runtime-VTK pressure writer sizes its dof context for 3-D (ux, uy,
+              # uz, p) and labels dof index 3 as pressure; a 2-D node has three dofs (ux, uy, p).
+              # None of 4C's own 2-D FSI test decks request it. The 2-D pressure is the third
+              # component of the "velocity" array; or output it through the legacy IO writer.
         """)
 
     # ── Validation ────────────────────────────────────────────────────

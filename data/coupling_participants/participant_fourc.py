@@ -78,12 +78,33 @@ OUTER_X = X0 if IFACE_X == X1 else X1
 S = 1.0 if IFACE_X > OUTER_X else -1.0     # outward normal at interface = S*e_x
 
 
+
+def _partner_block(imp):
+    """The partner's block from imports.json, by the name the driver actually used."""
+    if not isinstance(imp, dict) or not imp:
+        return None
+    if PARTNER in imp:
+        return imp[PARTNER] or None
+    others = [k for k in imp if isinstance(imp.get(k), dict)]
+    if len(others) == 1:     # named differently in couple(...) than here: read it, say so
+        import sys as _sys
+        print(f"NOTE: PARTNER is {PARTNER!r} but imports.json is keyed {others[0]!r} "
+              f"-- reading that block; align PARTNER with the name in your "
+              f"couple(...) call.", file=_sys.stderr)
+        return imp[others[0]] or None
+    if others:
+        raise SystemExit(f"imports.json holds blocks named {others} and none is "
+                         f"PARTNER={PARTNER!r}: set PARTNER to the partner's name "
+                         f"in your couple(...) call.")
+    return None
+
+
 def read_imports():
     p = Path("imports.json")
     if not p.is_file():
         return None
     try:
-        return json.loads(p.read_text()).get(PARTNER) or None
+        return _partner_block(json.loads(p.read_text()))
     except json.JSONDecodeError:
         return None
 
@@ -369,7 +390,7 @@ weights[[0, -1]] = 0.5 * hy
 q_consistent = -residual[:, i_if] / weights
 if FULL_OUTER_DIRICHLET:
     # Corner reactions also contain the perpendicular outer-boundary flux and
-    # cannot be separated into one interface contribution. C2 excludes them.
+    # cannot be separated into one interface contribution. Zero it: a corner reaction mixes the perpendicular outer flux and is not a clean interface datum.
     q_consistent[[0, -1]] = 0.0
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
 

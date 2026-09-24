@@ -247,6 +247,10 @@ def _stage_sparta_data_files(deck: str, work_dir: Path, binary: str):
 # backend itself needs: the spatial dims, the upstream example directory that
 # demonstrates the physics, and the generator variant to offer by default.
 _PHYSICS = {
+    # An inventory of what THIS build registers, not a flow regime. Three
+    # decks because the build itself splits explicit from implicit surfaces.
+    "capability_survey": dict(dims=[2], example="",
+                              variants=["box", "surface", "implicit_surface"]),
     "rarefied_flow": dict(dims=[2, 3], example="free",
                           variants=["box_2d", "channel_2d"]),
     "collision_relaxation": dict(dims=[2, 3], example="collide",

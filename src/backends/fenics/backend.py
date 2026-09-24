@@ -297,6 +297,20 @@ _PHYSICS_CAPABILITIES = [
         template_variants=["2d"],
     ),
     PhysicsCapability(
+        name="element_survey",
+        description=(
+            "Element survey: builds every basix element family this FEniCSx "
+            "install declares and checks each one (its quadrature integrates "
+            "the reference cell, its mass matrix is SPD, and the space "
+            "reproduces a constant -- measured on a richer rule than the one "
+            "that built the matrix). Answers 'which families does this install "
+            "actually have, and how does each behave' without guessing."
+        ),
+        spatial_dims=[2],
+        element_types=["all"],
+        template_variants=["default"],
+    ),
+    PhysicsCapability(
         name="matrix_free_poisson",
         description=(
             "Matrix-free conjugate-gradient Poisson solver. "

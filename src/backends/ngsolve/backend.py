@@ -161,6 +161,18 @@ class NgsolveBackend(SolverBackend):
 
     def supported_physics(self) -> list[PhysicsCapability]:
         return [
+            # Added 2026-09-19. NGSolve's capability surface IS its function
+            # spaces and openPASO drove 6 of 31. This assembles a mass form on
+            # every space that can carry one and verifies the matrix is SPD --
+            # which caught three spaces assembling an EMPTY matrix without error.
+            PhysicsCapability(
+                name="space_survey",
+                description=("Assemble a mass form on every NGSolve space "
+                             "and verify it is symmetric positive definite"),
+                spatial_dims=[2],
+                element_types=["H1", "HCurl", "HDiv", "L2", "facet", "surface"],
+                template_variants=["2d"],
+            ),
             PhysicsCapability(
                 name="poisson",
                 description="Poisson equation -Δu = f with arbitrary-order H1 elements",

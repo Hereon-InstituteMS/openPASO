@@ -230,6 +230,15 @@ with VTXWriter(domain.comm, "result.bp", [uh]) as vtx:
     vtx.write(0.0)
 
 u_array = uh.x.array
+# Beside the VTX (.bp) output, which needs an ADIOS2 reader nobody may have,
+# write result.xdmf of a P1 interpolation; the openPASO backend converts it to a
+# standard result.vtu after the run (XDMFFile refuses P>1 functions directly).
+import basix.ufl
+from dolfinx.io import XDMFFile
+_Vvis = fem.functionspace(domain, basix.ufl.element("Lagrange", domain.basix_cell(), 1))
+_o = fem.Function(_Vvis, name="u"); _o.interpolate(uh)
+with XDMFFile(domain.comm, "result.xdmf", "w") as _x:
+    _x.write_mesh(domain); _x.write_function(_o)
 print(f"Biharmonic solved: min(u)={{u_array.min():.6e}}, max(u)={{u_array.max():.6e}}")
 print(f"DOFs: {{V.dofmap.index_map.size_global}}")
 '''

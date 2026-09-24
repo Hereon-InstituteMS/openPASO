@@ -30,7 +30,10 @@ from typing import Any, Optional
 
 logger = logging.getLogger("openpaso.autodiscovery")
 
-CONFIG_PATH = Path(__file__).parent.parent.parent / "data" / "discovered_config.json"
+from core.session_journal import state_dir as _state_dir
+# Discovery results are runtime state AND machine-specific (which backends exist HERE):
+# never write them into the install (site-packages is shared and often read-only).
+CONFIG_PATH = _state_dir("cache") / "discovered_config.json"
 
 
 @dataclass

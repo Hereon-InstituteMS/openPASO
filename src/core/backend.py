@@ -341,3 +341,31 @@ def get_env_with_source_root(env_var: str) -> dict:
             break
 
     return env
+
+
+def error_excerpt(text, limit: int = 1200) -> str:
+    """Excerpt a solver failure so the CAUSE survives the truncation.
+
+    A traceback is written cause-last. Cutting it from the front with
+    ``job.error[:500]`` therefore keeps the stack frames and throws away the one
+    line that says what went wrong. Measured on a real FEniCSx failure (a vector
+    source assembled against a scalar space): the traceback is 765 characters,
+    the first 500 are ``ufl/operators.py`` frames, and
+    ``ValueError: Shapes do not match`` — the whole diagnosis — falls outside
+    them. A model handed that reads the plumbing and not the fault, which is the
+    opposite of what openPASO exists to do.
+
+    So keep both ends: enough of the head to see which line of the input failed,
+    and the whole tail, where the exception is. Short errors are returned
+    untouched.
+    """
+    if not text:
+        return ""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    head = limit // 4
+    tail = limit - head
+    return (text[:head].rstrip() + "\n\n[... " + str(len(text) - limit)
+            + " characters of stack omitted; the cause is below ...]\n\n"
+            + text[-tail:].lstrip())

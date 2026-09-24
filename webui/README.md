@@ -7,11 +7,11 @@ every step visible.
 ## Start it
 
 ```bash
-# the interface's own dependencies, declared in pyproject.toml
-pip install -e ".[webui]"
+# server dependencies live in the LangGraph environment
+.venv-lg/bin/pip install fastapi 'uvicorn[standard]' python-multipart websockets httpx
 
 # run
-uvicorn webui.app:app --port 8080
+.venv-lg/bin/uvicorn webui.app:app --port 8080
 # open http://localhost:8080
 ```
 

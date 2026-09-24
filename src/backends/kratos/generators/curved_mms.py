@@ -136,6 +136,8 @@ RADIAL_P = {pexp}
 KAPPA = {kappa}
 MESH_SIZE = {h}
 MSH_FILE = r"{msh_file}"  # "" -> mesh the annulus in-process with Gmsh
+import os
+MUTATE = os.environ.get("SURVEY_MUTATE", "") == "1"   # planted failure: a source 10% off
 
 
 def u_exact(x, y):
@@ -151,131 +153,165 @@ def f_source(x, y):
     return -KAPPA * COEFF_D * RADIAL_P**2 * r**(RADIAL_P - 2.0)
 
 
-# ---------------- Gmsh mesh (agent-driven) ----------------
-gmsh.initialize()
-gmsh.option.setNumber("General.Terminal", 0)
-if MSH_FILE:
-    gmsh.open(MSH_FILE)
-else:
-    gmsh.model.add("annulus_mms")
-    disk_outer = gmsh.model.occ.addDisk(0.0, 0.0, 0.0, R_OUTER, R_OUTER)
-    disk_inner = gmsh.model.occ.addDisk(0.0, 0.0, 0.0, R_INNER, R_INNER)
-    gmsh.model.occ.cut([(2, disk_outer)], [(2, disk_inner)])
-    gmsh.model.occ.synchronize()
-    surfs = [t for _d, t in gmsh.model.getEntities(2)]
-    gmsh.model.addPhysicalGroup(2, surfs, name="domain")
-    inner_curves, outer_curves = [], []
-    for _d, t in gmsh.model.getEntities(1):
-        xmin, ymin, _z0, xmax, ymax, _z1 = gmsh.model.getBoundingBox(1, t)
-        rad = 0.5 * max(xmax - xmin, ymax - ymin)
-        (outer_curves if abs(rad - R_OUTER) < abs(rad - R_INNER) else inner_curves).append(t)
-    gmsh.model.addPhysicalGroup(1, inner_curves, name="inner")
-    gmsh.model.addPhysicalGroup(1, outer_curves, name="outer")
-    gmsh.option.setNumber("Mesh.MeshSizeMax", MESH_SIZE)
-    gmsh.model.mesh.generate(2)
-    gmsh.write("annulus_mms.msh")
+def solve_at(MESH_SIZE, MSH_FILE):
+    """Mesh the annulus (or open MSH_FILE), solve with Kratos, return
+    (n_nodes, n_elements, l2_error, u, xy, conn). Called twice: the verdict
+    needs an order, and an order needs two meshes."""
+    # ---------------- Gmsh mesh (agent-driven) ----------------
+    gmsh.initialize()
+    gmsh.option.setNumber("General.Terminal", 0)
+    if MSH_FILE:
+        gmsh.open(MSH_FILE)
+    else:
+        gmsh.model.add("annulus_mms")
+        disk_outer = gmsh.model.occ.addDisk(0.0, 0.0, 0.0, R_OUTER, R_OUTER)
+        disk_inner = gmsh.model.occ.addDisk(0.0, 0.0, 0.0, R_INNER, R_INNER)
+        gmsh.model.occ.cut([(2, disk_outer)], [(2, disk_inner)])
+        gmsh.model.occ.synchronize()
+        surfs = [t for _d, t in gmsh.model.getEntities(2)]
+        gmsh.model.addPhysicalGroup(2, surfs, name="domain")
+        inner_curves, outer_curves = [], []
+        for _d, t in gmsh.model.getEntities(1):
+            xmin, ymin, _z0, xmax, ymax, _z1 = gmsh.model.getBoundingBox(1, t)
+            rad = 0.5 * max(xmax - xmin, ymax - ymin)
+            (outer_curves if abs(rad - R_OUTER) < abs(rad - R_INNER) else inner_curves).append(t)
+        gmsh.model.addPhysicalGroup(1, inner_curves, name="inner")
+        gmsh.model.addPhysicalGroup(1, outer_curves, name="outer")
+        gmsh.option.setNumber("Mesh.MeshSizeMax", MESH_SIZE)
+        gmsh.model.mesh.generate(2)
+        gmsh.write("annulus_mms.msh")
 
-node_tags, coords_flat, _pc = gmsh.model.mesh.getNodes()
-coords_flat = np.asarray(coords_flat, dtype=float).reshape(-1, 3)
-tag2row = {{int(t): i for i, t in enumerate(node_tags)}}
-tris = None
-for etype, conn_flat in zip(*gmsh.model.mesh.getElements(2)[::2]):
-    if int(etype) == 2:  # 3-node triangles
-        tris = np.asarray(conn_flat, dtype=int).reshape(-1, 3)
-gmsh.finalize()
-if tris is None:
-    raise RuntimeError("Gmsh mesh contains no 3-node triangles")
+    node_tags, coords_flat, _pc = gmsh.model.mesh.getNodes()
+    coords_flat = np.asarray(coords_flat, dtype=float).reshape(-1, 3)
+    tag2row = {{int(t): i for i, t in enumerate(node_tags)}}
+    tris = None
+    for etype, conn_flat in zip(*gmsh.model.mesh.getElements(2)[::2]):
+        if int(etype) == 2:  # 3-node triangles
+            tris = np.asarray(conn_flat, dtype=int).reshape(-1, 3)
+    gmsh.finalize()
+    if tris is None:
+        raise RuntimeError("Gmsh mesh contains no 3-node triangles")
 
-# Renumber to contiguous 1..N (Gmsh tags are not contiguous) and enforce CCW
-used = sorted({{int(t) for tri in tris for t in tri}})
-gid2kid = {{g: i + 1 for i, g in enumerate(used)}}
-xy = np.array([coords_flat[tag2row[g]][:2] for g in used])
-conn = []
-for tri in tris:
-    n = [gid2kid[int(t)] for t in tri]
-    pts = xy[[i - 1 for i in n]]
-    area2 = ((pts[1, 0] - pts[0, 0]) * (pts[2, 1] - pts[0, 1])
-             - (pts[2, 0] - pts[0, 0]) * (pts[1, 1] - pts[0, 1]))
-    if area2 < 0.0:
-        n = [n[0], n[2], n[1]]
-    conn.append(n)
+    # Renumber to contiguous 1..N (Gmsh tags are not contiguous) and enforce CCW
+    used = sorted({{int(t) for tri in tris for t in tri}})
+    gid2kid = {{g: i + 1 for i, g in enumerate(used)}}
+    xy = np.array([coords_flat[tag2row[g]][:2] for g in used])
+    conn = []
+    for tri in tris:
+        n = [gid2kid[int(t)] for t in tri]
+        pts = xy[[i - 1 for i in n]]
+        area2 = ((pts[1, 0] - pts[0, 0]) * (pts[2, 1] - pts[0, 1])
+                 - (pts[2, 0] - pts[0, 0]) * (pts[1, 1] - pts[0, 1]))
+        if area2 < 0.0:
+            n = [n[0], n[2], n[1]]
+        conn.append(n)
 
-# Tolerance-free boundary detection: edges adjacent to exactly one triangle
-edge_count = Counter()
-for n in conn:
-    for a, b in ((n[0], n[1]), (n[1], n[2]), (n[2], n[0])):
-        edge_count[(min(a, b), max(a, b))] += 1
-boundary_nodes = sorted({{v for e, c in edge_count.items() if c == 1 for v in e}})
+    # Tolerance-free boundary detection: edges adjacent to exactly one triangle
+    edge_count = Counter()
+    for n in conn:
+        for a, b in ((n[0], n[1]), (n[1], n[2]), (n[2], n[0])):
+            edge_count[(min(a, b), max(a, b))] += 1
+    boundary_nodes = sorted({{v for e, c in edge_count.items() if c == 1 for v in e}})
 
-# ---------------- Kratos ModelPart + real CDA solve ----------------
-model = KM.Model()
-mp = model.CreateModelPart("Thermal")
-mp.ProcessInfo[KM.DOMAIN_SIZE] = 2
-mp.AddNodalSolutionStepVariable(KM.TEMPERATURE)   # before CreateNewNode!
-mp.AddNodalSolutionStepVariable(KM.HEAT_FLUX)
-mp.AddNodalSolutionStepVariable(KM.CONDUCTIVITY)
-mp.AddNodalSolutionStepVariable(KM.REACTION_FLUX)
-mp.SetBufferSize(1)
+    # ---------------- Kratos ModelPart + real CDA solve ----------------
+    model = KM.Model()
+    mp = model.CreateModelPart("Thermal")
+    mp.ProcessInfo[KM.DOMAIN_SIZE] = 2
+    mp.AddNodalSolutionStepVariable(KM.TEMPERATURE)   # before CreateNewNode!
+    mp.AddNodalSolutionStepVariable(KM.HEAT_FLUX)
+    mp.AddNodalSolutionStepVariable(KM.CONDUCTIVITY)
+    mp.AddNodalSolutionStepVariable(KM.REACTION_FLUX)
+    mp.SetBufferSize(1)
 
-settings = KM.ConvectionDiffusionSettings()
-settings.SetUnknownVariable(KM.TEMPERATURE)
-settings.SetDiffusionVariable(KM.CONDUCTIVITY)
-settings.SetVolumeSourceVariable(KM.HEAT_FLUX)
-settings.SetReactionVariable(KM.REACTION_FLUX)
-mp.ProcessInfo.SetValue(KM.CONVECTION_DIFFUSION_SETTINGS, settings)
+    settings = KM.ConvectionDiffusionSettings()
+    settings.SetUnknownVariable(KM.TEMPERATURE)
+    settings.SetDiffusionVariable(KM.CONDUCTIVITY)
+    settings.SetVolumeSourceVariable(KM.HEAT_FLUX)
+    settings.SetReactionVariable(KM.REACTION_FLUX)
+    mp.ProcessInfo.SetValue(KM.CONVECTION_DIFFUSION_SETTINGS, settings)
 
-props = mp.CreateNewProperties(1)
-props.SetValue(KM.CONDUCTIVITY, KAPPA)  # LaplacianElement reads the NODAL value; kept for tooling
+    props = mp.CreateNewProperties(1)
+    props.SetValue(KM.CONDUCTIVITY, KAPPA)  # LaplacianElement reads the NODAL value; kept for tooling
 
-for i, (x, y) in enumerate(xy, start=1):
-    mp.CreateNewNode(i, float(x), float(y), 0.0)
-for eid, n in enumerate(conn, start=1):
-    mp.CreateNewElement("LaplacianElement2D3N", eid, n, props)  # string factory only
+    for i, (x, y) in enumerate(xy, start=1):
+        mp.CreateNewNode(i, float(x), float(y), 0.0)
+    for eid, n in enumerate(conn, start=1):
+        mp.CreateNewElement("LaplacianElement2D3N", eid, n, props)  # string factory only
 
-KM.VariableUtils().AddDof(KM.TEMPERATURE, KM.REACTION_FLUX, mp)
+    KM.VariableUtils().AddDof(KM.TEMPERATURE, KM.REACTION_FLUX, mp)
 
-for node in mp.Nodes:
-    node.SetSolutionStepValue(KM.CONDUCTIVITY, KAPPA)  # element reads diffusivity nodally
-    node.SetSolutionStepValue(KM.HEAT_FLUX, f_source(node.X, node.Y))
-for i in boundary_nodes:
-    node = mp.GetNode(i)
-    node.SetSolutionStepValue(KM.TEMPERATURE, u_exact(node.X, node.Y))
-    node.Fix(KM.TEMPERATURE)
+    for node in mp.Nodes:
+        node.SetSolutionStepValue(KM.CONDUCTIVITY, KAPPA)  # element reads diffusivity nodally
+        node.SetSolutionStepValue(KM.HEAT_FLUX, f_source(node.X, node.Y) * (1.10 if MUTATE else 1.0))
+    for i in boundary_nodes:
+        node = mp.GetNode(i)
+        node.SetSolutionStepValue(KM.TEMPERATURE, u_exact(node.X, node.Y))
+        node.Fix(KM.TEMPERATURE)
 
-from KratosMultiphysics import python_linear_solver_factory
-try:
-    lin_solver = python_linear_solver_factory.ConstructSolver(
-        KM.Parameters('{{"solver_type": "sparse_lu"}}'))          # LinearSolversApplication
-except Exception:
-    lin_solver = python_linear_solver_factory.ConstructSolver(
-        KM.Parameters('{{"solver_type": "skyline_lu_factorization"}}'))  # core fallback
-scheme = KM.ResidualBasedIncrementalUpdateStaticScheme()
-strategy = KM.ResidualBasedLinearStrategy(mp, scheme, lin_solver, False, False, False, False)
-strategy.SetEchoLevel(0)
-strategy.Initialize()
-strategy.Solve()
+    from KratosMultiphysics import python_linear_solver_factory
+    try:
+        lin_solver = python_linear_solver_factory.ConstructSolver(
+            KM.Parameters('{{"solver_type": "sparse_lu"}}'))          # LinearSolversApplication
+    except Exception as _e:
+        # Both are direct LU solves, so the ANSWER should not change -- but say
+        # that the substitution happened. A fallback the reader cannot see is
+        # indistinguishable from the thing it replaced, and a silent swap of a
+        # solver, a mesh or a domain is how a different problem gets reported as
+        # this one. If this line prints, LinearSolversApplication is not
+        # available on your install.
+        print(f"NOTE: sparse_lu unavailable ({{type(_e).__name__}}); "
+              f"falling back to the core skyline_lu_factorization. "
+              f"Both are direct solves; the result should be unaffected.")
+        lin_solver = python_linear_solver_factory.ConstructSolver(
+            KM.Parameters('{{"solver_type": "skyline_lu_factorization"}}'))  # core fallback
+    scheme = KM.ResidualBasedIncrementalUpdateStaticScheme()
+    strategy = KM.ResidualBasedLinearStrategy(mp, scheme, lin_solver, False, False, False, False)
+    strategy.SetEchoLevel(0)
+    strategy.Initialize()
+    strategy.Solve()
 
-n_nodes = len(used)
-u = np.array([mp.GetNode(i).GetSolutionStepValue(KM.TEMPERATURE)
-              for i in range(1, n_nodes + 1)])
+    n_nodes = len(used)
+    u = np.array([mp.GetNode(i).GetSolutionStepValue(KM.TEMPERATURE)
+                  for i in range(1, n_nodes + 1)])
 
-# ---------------- L2 error (mid-edge quadrature, exact for quadratics) ----------------
-err2 = 0.0
-for n in conn:
-    pts = xy[[i - 1 for i in n]]
-    uh = u[[i - 1 for i in n]]
-    area = 0.5 * abs((pts[1, 0] - pts[0, 0]) * (pts[2, 1] - pts[0, 1])
-                     - (pts[2, 0] - pts[0, 0]) * (pts[1, 1] - pts[0, 1]))
-    for a, b in ((0, 1), (1, 2), (2, 0)):
-        mx, my = 0.5 * (pts[a] + pts[b])
-        uh_mid = 0.5 * (uh[a] + uh[b])
-        err2 += area / 3.0 * (uh_mid - u_exact(mx, my))**2
-l2_error = math.sqrt(err2)
+    # ---------------- L2 error (mid-edge quadrature, exact for quadratics) ----------------
+    err2 = 0.0
+    for n in conn:
+        pts = xy[[i - 1 for i in n]]
+        uh = u[[i - 1 for i in n]]
+        area = 0.5 * abs((pts[1, 0] - pts[0, 0]) * (pts[2, 1] - pts[0, 1])
+                         - (pts[2, 0] - pts[0, 0]) * (pts[1, 1] - pts[0, 1]))
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            mx, my = 0.5 * (pts[a] + pts[b])
+            uh_mid = 0.5 * (uh[a] + uh[b])
+            err2 += area / 3.0 * (uh_mid - u_exact(mx, my))**2
+    l2_error = math.sqrt(err2)
+    return len(used), len(conn), l2_error, u, xy, conn
 
+
+
+n_nodes, n_elements, l2_error, u, xy, conn = solve_at(MESH_SIZE, MSH_FILE)
 print(f"MESH_SIZE = {{MESH_SIZE}}")
 print(f"N_NODES = {{n_nodes}}")
-print(f"N_ELEMENTS = {{len(conn)}}")
+print(f"N_ELEMENTS = {{n_elements}}")
 print(f"L2_ERROR = {{l2_error:.12e}}")
+# ---------------- the ladder: the same annulus at half the mesh size ----------------
+# The L2 order between the two levels is judged against the P1 prediction, 2, as a
+# VERDICT line in the coverage harness's grammar (scripts/coverage_harness/definitions.py).
+# An agent-supplied MSH_FILE has no in-process half-size sibling, so it gets no verdict.
+if MSH_FILE:
+    order = float("nan")
+    print("ORDER = nan  (an agent-supplied mesh has no half-size sibling here; no verdict)")
+else:
+    _, _, l2_error_half, _, _, _ = solve_at(0.5 * MESH_SIZE, "")
+    order = (math.log(l2_error / l2_error_half) / math.log(2.0)
+             if l2_error > 0 and l2_error_half > 0 else float("nan"))
+    print(f"L2_ERROR_HALF = {{l2_error_half:.12e}}")
+    print(f"ORDER = {{order:.4f}}  (P1 triangles: 2 expected)")
+    print(f"VERDICT kratos curved_mms mms_order ref=2 got={{order:.6e}} tol=1.500000e-01 "
+          + ("PASS" if abs(order - 2.0) <= 0.15 else "FAIL"))
+if MUTATE:
+    print("[MUTATED: the source term is 10% off -- FAIL on the order verdict is the control working]")
 
 import meshio
 pts3 = np.hstack([xy, np.zeros((n_nodes, 1))])
@@ -286,7 +322,8 @@ meshio.Mesh(pts3, [("triangle", cells)],
             ).write("result.vtu")
 
 summary = {{"l2_error": float(l2_error), "mesh_size": float(MESH_SIZE),
-            "n_nodes": int(n_nodes), "n_elements": int(len(conn)),
+            "measured_l2_order": float(order),
+            "n_nodes": int(n_nodes), "n_elements": int(n_elements),
             "expected_l2_order": 2.0, "element_type": "LaplacianElement2D3N (P1 tri)",
             "r_inner": float(R_INNER), "r_outer": float(R_OUTER)}}
 with open("results_summary.json", "w") as _f:

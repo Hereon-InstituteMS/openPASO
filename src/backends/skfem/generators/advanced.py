@@ -389,7 +389,6 @@ m = MeshQuad.init_tensor(
 e = ElementDG(ElementTriP1())
 ib  = Basis(m, e)
 ibf = FacetBasis(m, e)           # boundary facets
-ifi = InteriorFacetBasis(m, e)   # interior facets (for upwind flux)
 
 # --- Advection volume term: b . grad(u) * v ---
 @BilinearForm
@@ -403,30 +402,29 @@ def diffusion_volume(u, v, w):
 
 # --- Interior upwind flux ---
 # Jump penalty: b.n * {{u}} (upwind: from upwind side)
-@BilinearForm
-def upwind_flux_interior(u, v, w):
-    # Normal points from "-" to "+" element
-    # Upwind: if b.n > 0, flux is from "-" side; else from "+" side
-    bn = b[0] * w.n[0] + b[1] * w.n[1]
-    # Upwind: use "+" side when bn>0 (out of "-"), "-" side when bn<0
-    # Standard upwind: flux = bn * u_upwind
-    # u.value has shape (n_quad,) for scalar DG on each side
-    flux = 0.5 * bn * (u + u.grad[0]*0) - 0.5 * abs(bn) * (u - u)
-    # Simplified: use average + upwind stabilization
-    # flux(u)*[v] = bn * {{u}} * [v] + |bn|/2 * [u] * [v]
-    return bn * u * (v - v) + 0.5 * abs(bn) * u * v
+# --- Interior facets: a TWO-SIDED upwind flux --------------------------------
+# The previous form assembled `bn * u * v` on a single InteriorFacetBasis, which
+# is not a flux at all: it never couples the two elements sharing a facet, so
+# the DG system was singular and spsolve returned NaN everywhere -- and the
+# template printed "solve complete" over it. The standard DG upwind term is
+#     sum over interior facets of  (b.n) u_upwind [v]
+# assembled over BOTH sides with `jump` from skfem.helpers (w.idx says which
+# side each of u, v comes from). Verified by reproducing the exact solution of
+# the default problem to round-off; see the check after the solve.
+ifb = [InteriorFacetBasis(m, e, side=0), InteriorFacetBasis(m, e, side=1)]
 
-# Standard upwind DG bilinear form on interior facets:
 @BilinearForm
 def upwind_interior(u, v, w):
-    # b.n * u_upwind * [v]  where [v] = v^+ - v^-
-    bn = b[0] * w.n[0] + b[1] * w.n[1]
-    # For scalar u: u^+ is on "+" side, u^- on "-" side (InteriorFacetBasis gives both)
-    # scikit-fem interior facet basis: u = u on the current side, accessed by w fields
-    # Standard: flux = b.n * (0.5*(u^+ + u^-) + |b.n|/(2*b.n) * (u^+ - u^-)) * v
-    return bn * u * v
+    from skfem.helpers import jump
+    bn = b[0] * w.n[0] + b[1] * w.n[1]          # normal of side 0
+    ju, jv = jump(w, u, v)
+    # u is the upwind value when it comes from the side the flow LEAVES:
+    # side 0 when b.n > 0, side 1 otherwise
+    u_up = u * np.where((bn > 0) == (w.idx[0] == 0), 1.0, 0.0)
+    return bn * u_up * jv
 
-# Boundary flux (inflow: b.n < 0 -> Dirichlet BC)
+# Boundary flux: outflow (b.n > 0) is an upwind term in u; inflow (b.n < 0)
+# carries the prescribed value g into the right-hand side.
 @LinearForm
 def inflow_rhs(v, w):
     bn = b[0] * w.n[0] + b[1] * w.n[1]
@@ -438,21 +436,43 @@ def outflow_flux(u, v, w):
     bn = b[0] * w.n[0] + b[1] * w.n[1]
     return np.where(bn > 0, bn, 0.0) * u * v
 
-# --- Source term ---
 @LinearForm
 def source(v, w):
     return 1.0 * v
 
 # --- Assembly ---
-A = asm(advection_volume, ib)
+# Volume term integrated by parts: -(u, b.grad v); the facet terms above carry the flux.
+@BilinearForm
+def advection_volume_ibp(u, v, w):
+    return -u * (b[0] * v.grad[0] + b[1] * v.grad[1])
+
+A = asm(advection_volume_ibp, ib)
 if eps > 0:
     A = A + asm(diffusion_volume, ib)
 A = A + asm(outflow_flux, ibf)
-A = A + asm(upwind_interior, ifi)
+A = A + asm(upwind_interior, ifb, ifb)
 f = asm(source, ib) + asm(inflow_rhs, ibf)
 
 # --- Solve (DG system is not symmetric; use direct solve) ---
 u = spsolve(A.tocsr(), f)
+
+# --- Exact check, when the default problem admits one ----------------------
+# Pure advection (eps = 0) with axis-aligned b, unit source and u = 0 at inflow
+# has the exact solution u = (b . x) / |b|^2, which DG-P1 represents exactly.
+if eps == 0 and np.all(np.isfinite(u)) and b[0] >= 0 and b[1] >= 0 and (b[0] > 0 or b[1] > 0):
+    xy = ib.doflocs
+    if b[0] == 0 or b[1] == 0:
+        # axis-aligned flow: u = (b . x) / |b|^2 lies in P1 and DG-P1 reproduces it to round-off
+        u_exact = (b[0] * xy[0] + b[1] * xy[1]) / float(b @ b)
+        err_exact = float(np.max(np.abs(u - u_exact)))
+        _v = "PASS" if err_exact < 1e-10 else "FAIL"
+        print(f"VERDICT skfem dg_methods exact_identity ref=0.000000e+00 got={{err_exact:.6e}} tol=1.000000e-10 {{_v}}")
+    else:
+        # oblique flow: u = min(x/bx, y/by) has a kink along y = (by/bx) x that P1 cannot
+        # represent inside the elements it crosses, so this is information, not a verdict
+        u_exact = np.minimum(xy[0] / b[0], xy[1] / b[1])
+        err_exact = float(np.max(np.abs(u - u_exact)))
+        print(f"max|u - min(x/bx, y/by)| = {{err_exact:.3e}}  (exact solution has a kink; O(h) there, no verdict)")
 
 max_val = u.max()
 min_val = u.min()
@@ -469,9 +489,7 @@ trng = [("triangle", m.t.T)]
 # Basis.project (will be removed in the next release).') on
 # skfem 12.0.1). The supported spelling is the Basis.project
 # INSTANCE method fed by Basis.interpolator. The two agree to
-# ~2e-15 on a FINITE DG vector; they cannot be compared on THIS
-# template's own output, because u here is NaN everywhere (see
-# the [Validation] pitfall) and legacy - new is NaN.
+# ~2e-15 on a finite DG vector.
 e_p1 = ElementTriP1()
 ib_p1 = Basis(m, e_p1)
 u_proj = ib_p1.project(ib.interpolator(u))

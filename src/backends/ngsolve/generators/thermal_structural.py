@@ -30,8 +30,14 @@ aT = BilinearForm(grad(uT)*grad(vT)*dx).Assemble()
 # directly — matches the fix shipped for ngsolve::heat.
 fT = LinearForm(V_T); fT.Assemble()
 gfT = GridFunction(V_T)
-gfT.Set(CoefficientFunction({T_hot}), definedon=mesh.Boundaries("left"))
-gfT.Set(CoefficientFunction({T_cold}), definedon=mesh.Boundaries("right"))
+# ONE Set with a boundary-wise coefficient. Two consecutive Set(...) calls, one
+# per boundary, left the field IDENTICALLY ZERO on this NGSolve build -- the
+# second Set re-initialises the vector before writing its own region -- so the
+# served template solved a problem with no drive and printed
+# "Temperature: [0.00, 0.00]" followed by zero displacement and "analysis
+# complete". Measured 2026-09-23 by running the served text.
+gfT.Set(mesh.BoundaryCF({{"left": {T_hot}, "right": {T_cold}}}, default=0),
+        definedon=mesh.Boundaries("left|right"))
 fT.vec.data -= aT.mat * gfT.vec
 gfT.vec.data += aT.mat.Inverse(V_T.FreeDofs()) * fT.vec
 # gfT.name is read-only in this NGSolve build (property

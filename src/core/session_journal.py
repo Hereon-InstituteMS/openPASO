@@ -60,6 +60,62 @@ class JournalEvent:
             self.input_snapshot = {}
 
 
+def state_dir(name: str) -> Path:
+    """A writable directory for openPASO's runtime state, NEVER the install tree.
+
+    A pip-installed package lives in site-packages, which is shared and often read-only, so
+    anything openPASO writes while it runs -- build logs, the source-discovery cache, staged
+    community knowledge -- must go to the user's state area, not beside the code. This is the one
+    answer to "where does runtime state go", the same resolution the journal uses:
+
+      OPENPASO_STATE_HOME override  ->  $XDG_STATE_HOME/openpaso/<name>  ->  ~/.local/state/openpaso/<name>
+
+    Writing into the install also makes the code directory stateful (version control is for not
+    doing that) and invalidates anything that hashes an installation by the act of using it -- the
+    same defect the journal had (see live_session_dir)."""
+    import os as _os
+    override = _os.environ.get("OPENPASO_STATE_HOME")
+    if override:
+        return Path(override) / name
+    xdg = _os.environ.get("XDG_STATE_HOME")
+    root = Path(xdg) if xdg else Path.home() / ".local" / "state"
+    return root / "openpaso" / name
+
+
+def live_session_dir() -> Path:
+    """Where a running session's journal is written. NEVER the install tree.
+
+    IT USED TO BE `<install>/data/sessions`, so the FIRST RECORDED EVENT -- in
+    practice the first tool call -- wrote into the directory openPASO was
+    imported from. Measured on 2026-09-19: importing alone changes nothing, and
+    one `record()` adds a file. Three consequences, and the first is the one
+    that cost a round:
+
+      * anything that hashes an installation is invalidated by the act of
+        using it. A five-cell coupled round was stamped invalid because a
+        reply-size measurement, run from inside the frozen source snapshot
+        those cells ran against, journalled four knowledge lookups into it. Not
+        one byte of code differed; the tree hash moved anyway, and the guard
+        was right to say so.
+      * a read-only install -- a container layer, /opt, a system package, a tree
+        `pip install`ed as root and run as a user -- cannot write it, and the
+        writer is best-effort and swallows the exception, so nobody learns.
+      * two checkouts of openPASO share nothing, but a journal written beside
+        the code makes the code directory stateful, which is the thing version
+        control is for not doing.
+
+    Order: the explicit override, then XDG's state directory, then its default
+    location. A campaign sets the override to each cell's own directory, so a
+    run's journal stays with the run. The server's shutdown save uses the same
+    function, so there is exactly one answer to "where does the journal go".
+    """
+    import os as _os
+    base = _os.environ.get("OPENPASO_JOURNAL_LIVE_DIR")
+    if base:                       # a campaign points this directly at each cell's own dir
+        return Path(base)
+    return state_dir("sessions")   # otherwise the shared state resolution
+
+
 @dataclass
 class SessionJournal:
     """Collects events for one user session."""
@@ -128,10 +184,7 @@ class SessionJournal:
     # Best-effort and silent on failure: it must never break the tool it records.
     def _persist_live(self, evt: JournalEvent) -> None:
         try:
-            import os as _os
-            base = _os.environ.get("OPENPASO_JOURNAL_LIVE_DIR")
-            directory = (Path(base) if base
-                         else Path(__file__).resolve().parents[2] / "data" / "sessions")
+            directory = live_session_dir()
             directory.mkdir(parents=True, exist_ok=True)
             with open(directory / f"session_{self.session_id}.jsonl", "a") as fh:
                 fh.write(json.dumps(_event_to_dict(evt), default=str) + "\n")

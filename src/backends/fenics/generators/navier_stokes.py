@@ -304,11 +304,43 @@ print(f"DOFs: {{W.dofmap.index_map.size_global}}")
 def _navier_stokes_channel_cylinder(params: dict) -> str:
     """FORMAT TEMPLATE: generates a runnable FEniCSx script. Requires Gmsh.
 
-    All parameter defaults are placeholders. The user/agent must set values
-    appropriate to the specific problem being solved.
+    Every problem dimension is a parameter. The defaults describe the widely
+    used confined-cylinder geometry because it is a convenient starting shape,
+    NOT because this template is for that benchmark -- set them to your own
+    channel, cylinder and inlet speed and the script is unchanged otherwise.
+
+    The docstring used to say "all parameter defaults are placeholders" while
+    the channel, the cylinder and the inlet speed were literals inside the
+    emitted source with no parameter at all. A label is not a guard.
+
+    REYNOLDS NUMBER, AND THE BUG THIS FIXES: for a parabolic inlet the MEAN
+    speed is 2/3 of the PEAK, and the confined-cylinder Reynolds number is
+    defined on the mean. This template used to set nu from the PEAK, so a run
+    asked for Re=20 was silently solved at Re=13.3 -- every line of the setup
+    looking correct, at the wrong Reynolds number, which is precisely the trap
+    the served knowledge for this physics warns about. nu is now derived from
+    the mean, and the script prints both speeds and the realised Re so the
+    reader can see which convention was used.
     """
     Re = params.get("Re", 20)
-    mesh_size = params.get("mesh_size", 0.02)
+    L = params.get("length", 2.2)
+    H = params.get("height", 0.41)
+    cx = params.get("cyl_x", 0.2)
+    cy = params.get("cyl_y", 0.2)
+    radius = params.get("cyl_radius", 0.05)
+    u_peak = params.get("u_peak", 0.3)
+    # RELATIVE TO THE CYLINDER, NOT ABSOLUTE. A characteristic length of
+    # 0.02 means "resolve the boundary layer" only on a 0.41-high channel
+    # with a 0.1 cylinder; scale the geometry and the same number silently
+    # becomes either a wasteful mesh or an unresolved one. Expressed as a
+    # fraction of the cylinder DIAMETER it keeps its meaning at any size.
+    # An explicit mesh_size still wins, for anyone who wants an absolute one.
+    # 5 per diameter reproduces the previous absolute default of 0.02 on the
+    # standard 0.1 cylinder EXACTLY, so making this relative changes no
+    # existing run's cost. A ratio chosen for elegance rather than continuity
+    # would have silently halved the mesh size and doubled every run.
+    cells_per_diameter = params.get("cells_per_diameter", 5.0)
+    mesh_size = params.get("mesh_size", 2.0 * radius / cells_per_diameter)
     return f'''\
 """Navier-Stokes: channel flow around cylinder — FEniCSx + Gmsh
 Parabolic inlet, no-slip walls, cylinder obstacle.
@@ -325,8 +357,8 @@ import gmsh
 gmsh.initialize()
 gmsh.option.setNumber("General.Terminal", 0)
 gmsh.model.add("channel-cyl")
-L, H = 2.2, 0.41
-cx, cy, r = 0.2, 0.2, 0.05
+L, H = {L}, {H}
+cx, cy, r = {cx}, {cy}, {radius}
 rect = gmsh.model.occ.addRectangle(0, 0, 0, L, H)
 cyl = gmsh.model.occ.addDisk(cx, cy, 0, r, r)
 gmsh.model.occ.cut([(2, rect)], [(2, cyl)])
@@ -383,7 +415,8 @@ cyl_dofs = fem.locate_dofs_topological((W.sub(0), V), fdim, cyl_facets)
 bc_cyl = fem.dirichletbc(noslip, cyl_dofs, W.sub(0))
 
 # Parabolic inlet: u_x = 4*U_m*y*(H-y)/H^2, u_y = 0
-U_m = 0.3  # max inlet velocity
+# U_m is the PEAK speed (the profile's maximum, at mid-height).
+U_m = {u_peak}
 inlet_vel = fem.Function(V)
 inlet_vel.interpolate(lambda x: (4 * U_m * x[1] * (H - x[1]) / H**2, np.zeros_like(x[0])))
 inlet_facets = mesh.locate_entities_boundary(domain, fdim, inlet)
@@ -404,7 +437,31 @@ bcs = [bc_walls, bc_cyl, bc_inlet, bc_p]
 w = fem.Function(W)
 (u, p) = ufl.split(w)
 (v, q) = ufl.TestFunctions(W)
-nu = fem.Constant(domain, default_scalar_type(U_m * 2 * r / {Re}))  # nu = U_m * D / Re
+# The Reynolds number of a confined cylinder is defined on the MEAN inlet
+# speed and the cylinder DIAMETER. For a parabolic profile the mean is 2/3 of
+# the peak, so deriving nu from U_m directly would put the run at 2/3 of the
+# Re you asked for while every line above still looked right.
+U_bar = 2.0 * U_m / 3.0          # mean inlet speed
+D = 2 * r                        # cylinder diameter
+nu_value = U_bar * D / {Re}
+nu = fem.Constant(domain, default_scalar_type(nu_value))
+# THE CHECK THAT CAN ACTUALLY FAIL. Recomputing Re from a viscosity that was
+# DEFINED as U_bar*D/Re returns the requested Re whatever happens -- that is
+# arithmetic, not verification, and an earlier version of this template
+# printed exactly that. What can genuinely disagree is the ANALYTIC mean
+# above versus the mean of the profile this script actually imposes, so
+# integrate the imposed profile numerically and compare the two.
+_ys = np.linspace(0.0, H, 2001)
+_ubar_numeric = np.trapezoid(4 * U_m * _ys * (H - _ys) / H**2, _ys) / H
+if domain.comm.rank == 0:
+    print(f"inlet peak U_m = {{U_m:.6g}}, analytic mean U_bar = {{U_bar:.6g}}, "
+          f"D = {{D:.6g}}, nu = {{nu_value:.6e}}")
+    print(f"mean of the imposed profile, integrated = {{_ubar_numeric:.6g}}")
+    _rel = abs(_ubar_numeric - U_bar) / U_bar
+    print(f"analytic vs imposed mean differ by {{_rel:.2e}} "
+          f"({{'OK' if _rel < 1e-6 else 'MISMATCH — the profile and the '
+              'non-dimensionalisation disagree, so Re is not what you asked for'}})")
+    print(f"requested Re = {Re}")
 f = fem.Constant(domain, default_scalar_type((0.0, 0.0)))
 F = (nu * ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx
      + ufl.inner(ufl.grad(u) * u, v) * ufl.dx

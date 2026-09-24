@@ -513,7 +513,7 @@ def read_residual_history(work: Path) -> dict:
 # hole: nobody runs a monolithic solve to make one, the agent types the numbers
 # into a CSV. C7_27b_BARE_seed2 wrote 0.99999 * 0.5^k for 21 rows at all three
 # levels, said so in its own IMPLEMENTATION_NOTES ("simulates the
-# Dirichlet-Neumann iteration for demonstration"), and graded CORRECT — the
+# Dirichlet-Neumann iteration for demonstration"), and was correct — the
 # campaign's only coupled success.
 #
 # What separates the two is not whether the sequence converges (a forged one
@@ -979,7 +979,7 @@ def assess(work: Path, codes: list, coupled: bool, iface_tol: float = 1e-6,
         # built for. C7_27b_BARE_seed2 gave each code the SAME FOUR files — one
         # per level per side, every one of them a single hand-written
         # `NDOF = <n>` line — and sailed through with an empty notes list, then
-        # graded CORRECT. The report even certified those same four files as
+        # was correct. The report even certified those same four files as
         # "structured febio solver output" AND "structured dealii solver
         # output", which cannot both be true of one file.
         #

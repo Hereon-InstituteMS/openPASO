@@ -1,5 +1,6 @@
 """DUNE-fem generator registry — maps physics_variant -> generator function."""
 
+from .registry_survey import GENERATORS as _regsurv_gen, KNOWLEDGE as _regsurv_kn
 from .poisson import GENERATORS as _poisson_gen, KNOWLEDGE as _poisson_kn
 from .poisson_mms3d import GENERATORS as _poisson3d_gen, KNOWLEDGE as _poisson3d_kn
 from .heat import GENERATORS as _heat_gen, KNOWLEDGE as _heat_kn
@@ -17,7 +18,7 @@ from .verified_api import EXECUTED_API as _executed_api
 # Merged generator registry: physics_variant -> callable(params) -> str
 GENERATORS: dict[str, callable] = {}
 for _g in [
-    _poisson_gen, _poisson3d_gen, _heat_gen, _elast_gen, _stokes_gen,
+    _regsurv_gen, _poisson_gen, _poisson3d_gen, _heat_gen, _elast_gen, _stokes_gen,
     _rxn_gen, _nonlinear_gen, _dg_gen, _dg_diffusion_gen, _adaptive_gen,
     _advanced_gen,
 ]:
@@ -26,7 +27,7 @@ for _g in [
 # Merged knowledge registry: physics_name -> dict
 KNOWLEDGE: dict[str, dict] = {}
 for _k in [
-    _poisson_kn, _poisson3d_kn, _heat_kn, _elast_kn, _stokes_kn,
+    _regsurv_kn, _poisson_kn, _poisson3d_kn, _heat_kn, _elast_kn, _stokes_kn,
     _rxn_kn, _nonlinear_kn, _dg_kn, _dg_diffusion_kn, _adaptive_kn,
     _advanced_kn,
 ]:

@@ -849,8 +849,8 @@ def missing_export_selfcheck(content: str) -> str:
 # downstream reports agreement. One recorded cell converged to 1.8e-15 that
 # way and graded on a field its partner never influenced.
 #
-# The separation is exact on the 516 graded cells: this fires on 32 of them,
-# none CORRECT, and is silent on all 32 that are. It is silent on all 32
+# The separation is exact on the recorded runs: this fires on thirty-two of
+# them, no correct one among them, and is silent on every correct one. It is silent on all 32
 # served contracts, including the two volume-coupled ones whose import
 # legitimately enters through the load vector rather than through essential
 # entries -- which is why the check identifies the solution vector from the
@@ -966,7 +966,7 @@ def imported_values_not_held(content: str) -> str:
 # contract builds the same elements and recovers finite fluxes.
 #
 # MEASURED: 48 recorded scripts build 3D4N elements by hand and 29 of them
-# check no sign at all. Of the graded cells among those 29, every one is
+# check no sign at all. Every one of those that was evaluated is
 # incomplete. Silent on the served set.
 #
 # It names the defect, not the mesh: which decomposition to use stays the

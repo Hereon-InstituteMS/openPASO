@@ -62,9 +62,9 @@ KNOWLEDGE = {
                         '[Numerical] For nonlinear dynamics: tangent must be re-assembled at each Newton iteration (not just each time step). Caching the initial tangent gives modified-Newton with slow convergence. '
                         "Signal: ResidualBasedNewtonRaphsonStrategy iteration log shows the ResidualCriteria ratio decreasing by < 0.5 per iter (should be O(0.01) for full Newton); the strategy saturates at max_iteration without ResidualBasedBlockBuilderAndSolver reaching tolerance.",
                         '[Numerical] ELEMENT SELECTION: Linear hex8 (SmallDisplacementElement3D8N) shear-locks in bending-dominated problems — use quadratic hex20 or hex27. Same applies to linear quad4 in 2D — use quad8/quad9. '
-                        'Signal: measured on this install (Kratos 10.4.0, plane-stress cantilever L=10, h=1, E=2e11, nu=0, tip shear 1000 N, LinearElasticPlaneStress2DLaw, sparse_lu): '
-                        'SmallDisplacementElement2D4N on a 10x1 grid gives tip uy = -1.340e-5 = 66.6% of the Timoshenko value -2.012e-5 (33% too stiff, i.e. inside the claimed 20-40% band); '
-                        'SmallDisplacementElement2D8N on the SAME 10x1 element grid gives -2.010e-5 = 99.9%. Refining quad4 recovers it only slowly: 20x2 -> 88.8%, 40x4 -> 96.9%, 80x8 -> 99.2%. '
+                        'Signal: measured on this install (Kratos 10.4.0) on a slender plane-stress cantilever, as a FRACTION of the Timoshenko value, which is what characterises the element rather than the case: '
+                        'SmallDisplacementElement2D4N on a one-element-deep grid recovers about two thirds of it -- roughly a third too stiff; '
+                        'SmallDisplacementElement2D8N on the SAME element grid recovers essentially all of it. Refining quad4 instead recovers it only slowly: doubling the mesh twice still leaves a few per cent short, and it takes three doublings to get within one per cent. Compute the Timoshenko value for your own beam and compare fractions. '
                         '(Verified by execution 2026-08-03.)',
                         '[API] For POINT_LOAD application: use AssignVectorVariableProcess with constrained: [false, false, false]. '
                         'The directional process (KratosMultiphysics.assign_vector_by_direction_process, a CORE module — StructuralMechanicsApplication does NOT export a class of that name) tries to fix/free the DOF and therefore cannot be used for load variables. '

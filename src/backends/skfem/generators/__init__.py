@@ -1,6 +1,10 @@
 """scikit-fem generator registry — maps physics_variant -> generator function."""
 
 from .poisson import GENERATORS as _poisson_gen, KNOWLEDGE as _poisson_kn
+from .element_survey import (GENERATORS as _esurv_gen,
+                             KNOWLEDGE as _esurv_kn)
+from .mixed_elements import (GENERATORS as _mixel_gen,
+                             KNOWLEDGE as _mixel_kn)
 from .heat import GENERATORS as _heat_gen, KNOWLEDGE as _heat_kn
 from .linear_elasticity import GENERATORS as _elast_gen, KNOWLEDGE as _elast_kn
 from .stokes import GENERATORS as _stokes_gen, KNOWLEDGE as _stokes_kn
@@ -20,7 +24,7 @@ from .advanced import GENERATORS as _advanced_gen, KNOWLEDGE as _advanced_kn
 # Merged generator registry: physics_variant -> callable(params) -> str
 GENERATORS: dict[str, callable] = {}
 for _g in [
-    _poisson_gen, _heat_gen, _elast_gen, _stokes_gen,
+    _poisson_gen, _esurv_gen, _mixel_gen, _heat_gen, _elast_gen, _stokes_gen,
     _eigen_gen, _mixed_gen, _convdiff_gen, _biharmonic_gen,
     _nonlinear_gen, _wave_gen, _adapt_gen, _ps_gen, _sch_gen,
     _ct_gen, _hr_gen, _advanced_gen,
@@ -30,7 +34,7 @@ for _g in [
 # Merged knowledge registry: physics_name -> dict
 KNOWLEDGE: dict[str, dict] = {}
 for _k in [
-    _poisson_kn, _heat_kn, _elast_kn, _stokes_kn,
+    _poisson_kn, _esurv_kn, _mixel_kn, _heat_kn, _elast_kn, _stokes_kn,
     _eigen_kn, _mixed_kn, _convdiff_kn, _biharmonic_kn,
     _nonlinear_kn, _wave_kn, _adapt_kn, _ps_kn, _sch_kn,
     _ct_kn, _hr_kn, _advanced_kn,

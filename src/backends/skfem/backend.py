@@ -61,6 +61,27 @@ class SkfemBackend(SolverBackend):
 
     def supported_physics(self) -> list[PhysicsCapability]:
         return [
+            # Added 2026-09-19. scikit-fem's headline capability IS its element
+            # library, and openPASO drove 8 of 60 classes. This survey solves one
+            # manufactured Poisson problem with every element that can carry it and
+            # MEASURES each one's convergence order -- the element-selection
+            # question answered by running rather than by recall.
+            PhysicsCapability(
+                name="mixed_elements",
+                description=("Survey the H(div), H(curl) and L2/DG element "
+                             "families, each through its own formulation"),
+                spatial_dims=[1, 2, 3],
+                element_types=["Raviart-Thomas", "Nedelec", "DG", "L2"],
+                template_variants=["survey"],
+            ),
+            PhysicsCapability(
+                name="element_survey",
+                description=("Measure the L2 convergence order of every "
+                             "scikit-fem element that can carry Poisson"),
+                spatial_dims=[1, 2, 3],
+                element_types=["Lagrange", "Crouzeix-Raviart", "C1/plate"],
+                template_variants=["poisson"],
+            ),
             PhysicsCapability(
                 name="poisson",
                 description="Poisson equation -Δu = f (assembly-level)",

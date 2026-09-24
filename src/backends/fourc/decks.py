@@ -180,9 +180,9 @@ DECKS: tuple[Deck, ...] = (
         summary="Beam-to-solid volume meshtying: a Simo-Reissner beam embedded "
                 "in a solid column, tied to it by a Gauss-point-to-segment "
                 "penalty constraint, is pulled at its overhanging tip.",
-        evidence="32 meshtying pairs monitored every step, and a solid corner "
-                 "node on the far side of the column is dragged 0.117 — load "
-                 "really crosses the tie.",
+        evidence="Meshtying pairs are monitored every step, and a solid node on the "
+                 "FAR side of the column moves with the beam -- load really crosses "
+                 "the tie rather than the two meshes sitting independently.",
         pitfalls=(
             "Both condition sections (…VOLUME MESHTYING VOLUME and …LINE) and "
             "both topology sections are mandatory. Drop either and beam and "
@@ -198,10 +198,9 @@ DECKS: tuple[Deck, ...] = (
         summary="Brownian dynamics of semiflexible filaments: crosslinked "
                 "beams in a periodic box under thermal forcing, integrated "
                 "with overdamped backward Euler.",
-        evidence="An otherwise identical KT: 0.0 control differs at t = 0.01 "
-                 "by max|du| = 6.6e-2 and max|d(curvature)| = 0.36 at the "
-                 "Gauss points, 22% of the deterministic curvature — the "
-                 "stochastic forcing drives the result.",
+        evidence="Re-run with KT: 0.0 as a control: the stochastic case must differ "
+                 "from it by a substantial fraction of the deterministic curvature. "
+                 "If the two agree, the thermal forcing is parsed and not applied.",
         pitfalls=(
             "KT defaults to 0. BROWNDYNPROB: true with KT unset is a "
             "deterministic run wearing a Brownian label — the upstream deck "
@@ -223,9 +222,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Cardiac monodomain: the reaction-diffusion equation for the "
                 "transmembrane potential coupled to the Bueno-Orovio minimal "
                 "ventricular ionic model, stimulated twice.",
-        evidence="phi at node 1 reads 0.7136 at t = 400 ms, i.e. mid-"
-                 "repolarisation of the second action potential — the AP "
-                 "actually fires rather than the field sitting at rest.",
+        evidence="Read phi at a node through the time loop: it must rise and fall "
+                 "through an action potential rather than sitting at its resting "
+                 "value. A field that never leaves rest means the stimulus is not "
+                 "reaching the tissue.",
         pitfalls=(
             "The element line needs TYPE CardMono and a FIBER1 direction; "
             "DIFF1/DIFF2/DIFF3 are along fibre and the two cross-fibre "
@@ -241,12 +241,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Mortar penalty contact between two separate bodies: a stiff "
                 "punch descends across an initial gap onto a clamped soft "
                 "foundation and indents it.",
-        evidence="4C's per-step 'Total ACTIVE nodes' reads 0 for the first "
-                 "nine steps and 5 then 9 from step 10 — exactly where the "
-                 "prescribed descent closes the 0.05 gap. The foundation node "
-                 "under the punch moves -4.19e-02 while a corner outside the "
-                 "patch reaches only -1.46e-02, so this is local indentation "
-                 "and not rigid translation.",
+        evidence="4C prints 'Total ACTIVE nodes' per step: it must read 0 while the "
+                 "gap is open and jump to a non-zero count on the step where the "
+                 "prescribed descent closes it. A node under the punch then moves "
+                 "while one outside it does not.",
         pitfalls=(
             "LM_SHAPEFCN: Dual needs LM_DUAL_CONSISTENT: none, or "
             "contact_strategy_factory.cpp:263 throws 'Consistent dual shape "
@@ -282,9 +280,9 @@ DECKS: tuple[Deck, ...] = (
         summary="Fluid-beam interaction: a slender beam immersed in a 3-D "
                 "flow, tied to the fluid by a penalty-regularised mortar "
                 "constraint, on a fluid mesh that does not conform to it.",
-        evidence="Beam displacement grows monotonically 1.8e-5 -> 2.8e-3 over "
-                 "five steps as the free stream ramps up — the fluid-to-beam "
-                 "force transfer is live.",
+        evidence="Beam displacement must grow MONOTONICALLY as the free stream ramps "
+                 "up, by orders of magnitude over the ramp -- that is the fluid-to- "
+                 "beam force transfer being live rather than a one-off transient.",
         pitfalls=(
             "SEARCH_RADIUS must cover a fluid element diagonal; too small and "
             "the beam couples to nothing, with no error — a beam lying "
@@ -364,9 +362,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Discrete element method: 48 rigid spheres of two sizes fall "
                 "under gravity, collide with each other and the six walls of "
                 "the bounding box, and settle into a static pack.",
-        evidence="Potential energy falls 0.1911 -> 0.0599, kinetic energy "
-                 "decays to 5.6e-6 and contact energy stays small but "
-                 "non-zero — the pack lands and comes to rest.",
+        evidence="Potential energy must fall, kinetic energy decay towards zero, and "
+                 "contact energy stay small but NON-zero -- the pack lands and comes "
+                 "to rest. Zero contact energy means the particles are passing "
+                 "through each other.",
         pitfalls=(
             "PARTICLE_WALL_SOURCE: BoundingBox turns the six faces of "
             "DOMAINBOUNDINGBOX into rigid walls, so a container needs no mesh "
@@ -384,9 +383,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Weakly compressible SPH: a fluid column on three boundary "
                 "layers settles under gravity to the hydrostatic density and "
                 "pressure profile.",
-        evidence="At the final time max|v| = 1.7e-12 and the pressure profile "
-                 "matches rho0*g*(H-x) to under 1% in the bulk — it really "
-                 "converges to the hydrostatic solution.",
+        evidence="At the final time the velocity must have decayed to numerical zero "
+                 "and the pressure must follow rho0*g*(H-x) through the bulk. Derive "
+                 "that profile from your own rho0, g and H and compare; it is the "
+                 "point of the case.",
         pitfalls=(
             "There is no SOUNDSPEED key. The artificial speed of sound is "
             "sqrt(BULK_MODULUS/rho0) from MAT_ParticleSPHFluid.",
@@ -405,9 +405,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Two-dimensional dam break: a water column released onto a dry "
                 "bed inside a closed tank, the standard free-surface SPH "
                 "benchmark.",
-        evidence="Surge front runs 0.375 -> 1.041 and column height drops "
-                 "0.375 -> 0.241 while density stays within 0.3% of rho0 — "
-                 "the collapse is resolved and nothing is blowing up.",
+        evidence="The surge front must advance and the column height drop while the "
+                 "density stays within a fraction of a per cent of rho0. A drifting "
+                 "density means the equation of state or the time step is wrong, not "
+                 "that the dam broke.",
         pitfalls=(
             "TIMESTEP must stay below roughly 0.2*spacing/c with "
             "c = sqrt(BULK_MODULUS/rho0).",
@@ -424,10 +425,10 @@ DECKS: tuple[Deck, ...] = (
                 "sphere presses into an elastic plate, the plate deflects, and "
                 "the deformed wall is fed back to the particle solver each "
                 "coupling iteration.",
-        evidence="The outer loop converges in all 150 steps without hitting "
-                 "ITEMAX; the particle sinks 0.500000 -> 0.498574 while the "
-                 "plate centre deflects uz = -1.0e-3 — force goes one way and "
-                 "displacement the other.",
+        evidence="The outer loop must converge in every step without hitting ITEMAX, "
+                 "and the particle must sink while the plate centre deflects the "
+                 "OTHER way -- force goes one way and displacement the other, which "
+                 "is the coupling.",
         pitfalls=(
             "PARTICLE_WALL_MOVING and PARTICLE_WALL_LOADED are what make the "
             "coupling two-way; with them false the structure is a rigid "
@@ -444,9 +445,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Small-strain J2 (von Mises) elastoplasticity with linear "
                 "isotropic hardening, plane strain, displacement controlled "
                 "past yield.",
-        evidence="Reaction force 591 N against 4360 N for an identical deck "
-                 "with the yield stress raised out of reach — a factor 7.4, "
-                 "so the specimen is genuinely flowing plastically.",
+        evidence="Re-run with the yield stress raised out of reach as a control: the "
+                 "reaction force must be several times LOWER in the yielding case. "
+                 "Identical forces mean the specimen is still elastic and the "
+                 "plasticity is not engaging.",
         pitfalls=(
             "There is no 2-D plasticity element on this build. WALL QUAD4 with "
             "a plasticity material aborts in 4C_w1_mat.cpp:179 ('Invalid type "
@@ -464,10 +466,11 @@ DECKS: tuple[Deck, ...] = (
         summary="Finite-strain J2 elastoplasticity: the classic necking "
                 "tensile bar, one eighth modelled with symmetry planes and a "
                 "2% taper so localisation picks a plane deterministically.",
-        evidence="Reaction force 5.417 against 221.8 for the raised-yield "
-                 "control (factor 41); the load passes a maximum at step 18 "
-                 "and the section contracts 12.8% against 7.7% elastic — "
-                 "necking and isochoric plastic flow.",
+        evidence="Against a raised-yield control the reaction force must be lower by "
+                 "more than an order of magnitude, the load must pass a MAXIMUM "
+                 "part-way through, and the section must contract substantially more "
+                 "than the elastic control -- that trio is necking with isochoric "
+                 "plastic flow.",
         pitfalls=(
             "TECH eas_mild and TECH fbar abort with SIGFPE inside "
             "evaluate_eas_kinematics for this material (the same EAS with "
@@ -479,6 +482,139 @@ DECKS: tuple[Deck, ...] = (
         ),
     ),
     Deck(
+        physics="poroelast_scatra", variant="homogeneous_3d",
+        filename="poroelast_scatra_3d.4C.yaml", np=1,
+        upstream="poro_3D_scatra_homogeneous_coupling_reacstart.4C.yaml",
+        summary="Poroelasticity with scalar transport through the pore fluid "
+                "and a reaction source: the Biot problem of a deforming "
+                "saturated solid, carrying a reacting species in the fluid "
+                "phase.",
+        evidence="The species field must respond to the FLOW, not merely "
+                 "diffuse: start the reaction and watch the scalar "
+                 "distribution change where the pore fluid is moving. A "
+                 "scalar that evolves identically whether the solid deforms "
+                 "or not is transport that never received a velocity, and "
+                 "the run reports nothing wrong.",
+        pitfalls=(
+            "[setup] Poroelastic_scalar_transport is a DIFFERENT problem type from "
+            "porofluid_pressure_based_elasticity_scatra. Both couple a "
+            "deforming porous solid to a transported species; they are "
+            "different formulations with different section names, and "
+            "picking the wrong one gives section errors that read as a "
+            "malformed deck."
+            "Signal: measured, BOTH formulations bring up the SAME three discretisations (structure, porofluid, scatra), each with its own fill_complete() line at setup -- so the setup output cannot tell them apart and only the PROBLEMTYPE line can. Check that line before blaming a section name.",
+            "[input] RETRACTED AND REPLACED, 2026-09-20. This entry used to "
+            "say that the two SMALLEST upstream Poroelastic_scalar_transport "
+            "decks (poro_2D_scatra_quad4_partint, poro_2D_scatra_quad9) abort "
+            "with std::runtime_error while the larger 3-D ones run clean. That "
+            "is FALSE: re-run on the installed binary, both finish with "
+            "'processor 0 finished normally' and exit 0. The abort was mine, "
+            "not the deck's -- I had invoked 4C with only the input file. "
+            "THE REAL FACT, which is worth more: 4C takes BOTH an input and an "
+            "output argument, and omitting the output one aborts after the "
+            "banner with 'terminate called after throwing an instance of "
+            "'FourC::Core::Exception'' and exit 134, core dumped. It does say "
+            "what is wrong: 4C_global_full_main.cpp line 457 prints "
+            "\"Please provide both\" followed by the two argument names. But "
+            "that line sits ABOVE a long MPI backtrace, so a driver that reads "
+            "only the tail sees a crash and blames the deck. Signal: exit 134 "
+            "with a FourC::Core::Exception and no solver output at all. Invoke "
+            "4C with TWO arguments, the input file and an output prefix, and "
+            "read the HEAD of the output rather than the tail."        ),
+    ),
+    Deck(
+        physics="fluid_ale", variant="hdg_2d",
+        filename="fluid_ale_hdg_2d.4C.yaml", np=1,
+        upstream="hdg_weakly_compressible_etienne_cfd.4C.yaml",
+        summary="Weakly compressible flow on a DEFORMING domain: the fluid is "
+                "solved on a mesh that moves, which is the Arbitrary "
+                "Lagrangian-Eulerian setting every moving-boundary and FSI "
+                "problem needs. Discretised with 4C's hybridisable "
+                "discontinuous Galerkin fluid.",
+        evidence="Check that the ALE displacement field is NON-ZERO and "
+                 "changes over the run: PROBLEMTYPE Fluid_Ale parses and "
+                 "solves perfectly well with a mesh that never moves, which "
+                 "is an ordinary fixed-grid fluid run wearing an ALE label. "
+                 "The moving mesh is the thing being tested, so look at it.",
+        pitfalls=(
+            "[setup] Fluid_Ale is a DISTINCT problem type from Fluid. Choosing Fluid "
+            "and then adding a mesh-motion section does not give you ALE; 4C "
+            "reads the sections its problem type declares and silently "
+            "ignores the rest."
+            "Signal: measured, Fluid_Ale brings up TWO discretisations, ale and fluid, each with its own fill_complete() line at setup. Plain Fluid brings up no ale discretisation at all, so counting those lines tells you which problem type you actually got.",
+            "[setup] An ALE run needs BOTH a fluid and an ALE discretisation, and the "
+            "two must cover the same region. A missing ALE domain is not a "
+            "parse error -- the mesh simply does not move."
+            "Signal: the setup must bring up an ALE discretisation of its own -- look for its fill_complete() line beside the fluid one. A run that lists only the fluid has no mesh motion, whatever the mesh-motion section says.",
+        ),
+    ),
+    Deck(
+        physics="porofluid_elasticity_scatra", variant="monolithic_3d",
+        filename="porofluid_elasticity_scatra_monolithic_3d.4C.yaml", np=1,
+        upstream="porofluid_pressure_based_elast_scatra_3D_hex8_mono_FD.4C.yaml",
+        summary="Multiphase flow through a deformable porous medium WITH "
+                "scalar transport on top: three fields -- porofluid, solid "
+                "skeleton and one or more transported species -- solved as a "
+                "single monolithic Newton system.",
+        evidence="Watch all THREE fields, not two: the scalar must move "
+                 "BECAUSE the porofluid moves. A scatra field that stays at "
+                 "its initial value while the pressure and displacement "
+                 "evolve means the transport is riding on a velocity it never "
+                 "received, and the run reports nothing wrong. The upstream "
+                 "deck this derives from also enables 4C's finite-difference "
+                 "check of the monolithic matrix, which is worth keeping on "
+                 "while you develop: it compares the assembled Jacobian "
+                 "against a numerical one and reports the largest relative "
+                 "error.",
+        pitfalls=(
+            "[setup] porofluid_pressure_based_elasticity_scatra is a THIRD problem "
+            "type, distinct from porofluid_pressure_based_elasticity and from "
+            "Poroelastic_scalar_transport. All three exist, all three couple "
+            "flow to a solid, and they take different section names."
+            "Signal: measured, this deck brings up exactly two discretisations, porofluid and structure. A run that brings up a third, or names something else, is not in the formulation you think it is.",
+            "[performance] 4C's finite-difference check of the monolithic system matrix is "
+            "a development tool that costs a full extra assembly per step. It "
+            "is what tells you an off-diagonal coupling block is wrong, which "
+            "is otherwise invisible -- the run converges to a plausible "
+            "answer with a Jacobian that is merely approximate."
+            "Signal: it multiplies the cost of every Newton step, so compare the wall time of a single step with it on and off before leaving it enabled anywhere but a debugging run.",
+        ),
+    ),
+    Deck(
+        physics="porofluid_elasticity", variant="monolithic_3d",
+        filename="porofluid_elasticity_monolithic_3d.4C.yaml", np=1,
+        upstream="porofluid_pressure_based_elast_3D_hex27.4C.yaml",
+        summary="Pressure-based porous-media flow coupled monolithically to "
+                "an elastic solid skeleton: one fluid phase in a deforming "
+                "porous solid, solved as a single Newton system rather than "
+                "by staggering the two fields.",
+        evidence="Run it and watch the porosity and the solid displacement "
+                 "TOGETHER over the time history: a monolithic poro-elastic "
+                 "solve must show the porosity changing BECAUSE the skeleton "
+                 "deforms. Porosity that stays at its initial value while the "
+                 "solid moves means the two fields are not actually coupled -- "
+                 "the deck parses and runs either way.",
+        pitfalls=(
+            "[setup] PROBLEMTYPE is 'porofluid_pressure_based_elasticity', which is a "
+            "DIFFERENT problem type from 'Poroelasticity' and from "
+            "'porofluid_pressure_based'. All three exist in 4C and they take "
+            "different section names; picking the wrong one gives section "
+            "errors that read as though your deck is malformed."
+            "Signal: measured, this brings up three discretisations -- porofluid, scatra and structure. Poroelastic_scalar_transport brings up the same three, so this list separates it from the two-discretisation formulations but NOT from that one.",
+            "[setup] The coupling is selected by coupling_scheme: twoway_monolithic "
+            "under porofluid_elasticity_dynamic. The staggered alternative is "
+            "a different scheme keyword, and switching it changes which "
+            "nonlinear solver block 4C reads."
+            "Signal: a monolithic run solves ONE linear system per Newton step and a staggered one alternates two, so the per-step solver output tells you which you actually got.",
+            "[validation] 4C's RESULT DESCRIPTION block is its regression self-check, not "
+            "part of running a simulation. This deck ships without one on "
+            "purpose. If you add one, every VALUE you write is an assertion "
+            "4C will enforce to the TOLERANCE you give -- a wrong value fails "
+            "the run rather than being ignored."
+            "Signal: removing the block changes nothing else in the run -- measured here by running the deck with and without it and comparing the fields. If a number moves when you remove it, the deck was leaning on the self-check, which it must never do.",
+        ),
+    ),
+    Deck(
         physics="porous_media", variant="terzaghi_2d",
         filename="porous_media_terzaghi_2d.4C.yaml", np=1,
         upstream="poro_2D_quad4_br_stsplit_nbc.4C.yaml + "
@@ -487,11 +623,12 @@ DECKS: tuple[Deck, ...] = (
                 "column loaded at the drained top surface, with the pore "
                 "pressure carrying the load initially and dissipating over "
                 "time as the skeleton takes it up.",
-        evidence="Base pore pressure 9.903e-01 at the end of the load ramp "
-                 "(99.0% of the applied q, the undrained Terzaghi limit) "
-                 "falling monotonically to 6.322e-03; settlement -1.836e-04 -> "
-                 "-8.957e-04, converging on the drained oedometric value "
-                 "q*H/E_oed = 9.0e-04.",
+        evidence="The base pore pressure must start near the applied load q (the "
+                 "undrained limit, where the fluid carries everything) and fall "
+                 "MONOTONICALLY towards zero as the skeleton takes it up, with the "
+                 "settlement growing towards the drained oedometric value q*H/E_oed "
+                 "that you evaluate for your own parameters. Pressure that does not "
+                 "dissipate means the top is not draining.",
         pitfalls=(
             "Poroelasticity requires the SAME THETA in STRUCTURAL "
             "DYNAMIC/ONESTEPTHETA and in FLUID DYNAMIC, or "
@@ -512,10 +649,10 @@ DECKS: tuple[Deck, ...] = (
         upstream="poro_3D_hex8_stat.4C.yaml + poro_2D_quad4_linporo.4C.yaml",
         summary="Three-dimensional consolidation under a surface load, the "
                 "HEX8 counterpart of the Terzaghi column.",
-        evidence="Base pressure 9.910e-01 -> 6.278e-03 and settlement "
-                 "-1.833e-04 -> -8.957e-04, agreeing with the independent 2-D "
-                 "deck to three digits — the right cross-check for a problem "
-                 "that is one-dimensional in the physics.",
+        evidence="Same signals as the 2-D deck, and the two must AGREE: the physics "
+                 "here is one-dimensional, so a 3-D column and a 2-D one should give "
+                 "the same base pressure history and the same settlement. That "
+                 "agreement is the cross-check.",
         pitfalls=(
             "There is no SOLIDH8PORO element. It appears in zero files of the "
             "4C source, zero upstream decks and is absent from the grammar "
@@ -600,10 +737,12 @@ DECKS: tuple[Deck, ...] = (
                 "(lithium concentration plus potential) and temperature solved "
                 "in one Newton system, coupled by Butler-Volmer-Peltier "
                 "kinetics across non-conforming mortar interfaces.",
-        evidence="Cell voltage 3.888 -> 3.728 V over 20 s at C rate 10, SOC "
-                 "100% -> 94.4/95.8%, interface current density exactly the "
-                 "applied -2.4586e-05, and non-zero Peltier and Joule heat "
-                 "fluxes across both interfaces.",
+        evidence="Cell voltage must fall and state of charge decrease over the "
+                 "discharge, the interface current density must come back EXACTLY as "
+                 "the value you applied, and the Peltier and Joule heat fluxes must "
+                 "both be non-zero across the interfaces. A current density that "
+                 "does not match what you imposed is the clearest sign the "
+                 "electrochemistry is not coupled to the thermal field.",
         pitfalls=(
             "Without ELCH CONTROL the run stops with 'Invalid type of closing "
             "equation for electric potential'.",
@@ -661,9 +800,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Fluid-structure-scalar interaction: a scalar transported in "
                 "the fluid and in the solid, exchanging mass across the FSI "
                 "interface through a permeability condition.",
-        evidence="Fluid scalar 1.000 -> 0.934/0.983 and solid scalar 0.000 -> "
-                 "0.054/0.089 over 10 steps, measured from the scatra1/scatra2 "
-                 "VTU output; ALE displacement reaches 1.0.",
+        evidence="The fluid scalar must fall and the solid scalar rise from zero "
+                 "over the run, read from the scatra1/scatra2 VTU output, while the "
+                 "ALE displacement reaches its prescribed value. A solid scalar that "
+                 "stays at zero means the interface transfer is not happening.",
         requires_fourc_root=True,
         pitfalls=(
             "FS3I rejects direct solvers. 4C_fs3i_partitioned.cpp:604 throws "
@@ -687,9 +827,10 @@ DECKS: tuple[Deck, ...] = (
         summary="Partitioned (Dirichlet-Neumann) 2-D fluid-structure "
                 "interaction: an elastic block pushed on its far edge drives "
                 "an incompressible channel flow on a deforming ALE mesh.",
-        evidence="10 coupled steps, FSI outer loop converging with a non-zero "
-                 "interface increment (dx 7.7e-05); structure, fluid and ALE "
-                 "result files all written.",
+        evidence="The FSI outer loop must converge with a NON-ZERO interface "
+                 "increment, and structure, fluid and ALE result files must all be "
+                 "written. A zero increment is the classic sign of a coupling that "
+                 "is running but exchanging nothing.",
         pitfalls=(
             "A Dirichlet FUNCT must be a SYMBOLIC_FUNCTION_OF_SPACE_TIME. "
             "Giving it a SYMBOLIC_FUNCTION_OF_TIME aborts in "
@@ -709,9 +850,10 @@ DECKS: tuple[Deck, ...] = (
                  "grammar dump and 4C's own PD generator script",
         summary="Bond-based peridynamics: a pre-cracked plate pulled in "
                 "tension until the crack runs from the notch tip.",
-        evidence="pd_damage_phi mean 0.1203 at step 0 (the pre-crack alone) "
-                 "rising to 0.2102 at step 200 over 144 particles — bonds "
-                 "break beyond the notch.",
+        evidence="The mean damage must start at whatever the pre-crack alone "
+                 "accounts for and RISE through the run -- bonds breaking beyond the "
+                 "notch. Damage that never moves means the loading is not reaching "
+                 "the bonds.",
         pitfalls=(
             "PD is not a separate interaction mode. INTERACTION must be SPH "
             "and PD_BODY_INTERACTION true; the PD parameters then live in "
@@ -731,8 +873,10 @@ DECKS: tuple[Deck, ...] = (
         upstream="none — see plate_2d",
         summary="Kalthoff-Winkler edge impact: a rigid impactor strikes a "
                 "doubly-notched plate between the notches.",
-        evidence="Two peridynamic bodies present; damage mean 0.0825 -> 0.2070 "
-                 "over 300 steps and particle speeds reaching 4.6e4 mm/s.",
+        evidence="Both peridynamic bodies must be present, the mean damage must rise "
+                 "over the run, and particle speeds must reach the order of the "
+                 "impactor velocity you imposed. A second body that is absent is the "
+                 "usual failure here.",
         pitfalls=(
             "The impactor is a second PDBODYID whose particles carry PDFIXED 2; "
             "contact between bodies is the NORMALCONTACTLAW / NORMAL_STIFF "
@@ -761,8 +905,16 @@ def render(physics: str, variant: str) -> str | None:
         f"# 4C {d.physics} / {d.variant} — runnable template",
         f"# {d.summary}",
         f"# Verified: executed on the installed 4C binary with "
-        f"{d.np} MPI rank{'s' if d.np > 1 else ''}, exit 0.",
-        f"# Evidence the physics is live: {d.evidence}",
+        f"{d.np} MPI rank{'s' if d.np > 1 else ''}, exit 0 — on the 4C build "
+        f"this catalog was last verified against, which is not necessarily "
+        f"yours. Re-run it before trusting it on a different build.",
+        # The deck teaches 4C's INPUT GRAMMAR, which cannot be guessed and is
+        # the reason these exist. It is not a worked answer: what the run
+        # produces is for the run to produce. This header used to read
+        # "Evidence the physics is live: <the measured result>", which handed
+        # the agent the number before it had run anything.
+        f"# What to check yourself, to confirm the physics is live rather "
+        f"than merely parsing: {d.evidence}",
         f"# Derived from upstream deck(s): {d.upstream}",
     ]
     if d.requires_fourc_root:
@@ -776,6 +928,37 @@ def render(physics: str, variant: str) -> str | None:
 
 def variants_for(physics: str) -> list[str]:
     return [d.variant for d in DECKS if d.physics == physics]
+
+
+def knowledge_for(physics: str) -> dict:
+    """The deck catalog's own description and pitfalls for one physics.
+
+    Four physics rows (poroelast_scatra, fluid_ale, porofluid_elasticity and
+    porofluid_elasticity_scatra) are served ENTIRELY from this catalog: they
+    have no generator class, so get_knowledge() found neither a data-file
+    entry nor a generator entry and returned {"error": ...} while the
+    templates ran fine. The summaries and pitfalls were already here, measured
+    by running each deck on the installed binary; they were simply not wired
+    to the knowledge path.
+    """
+    decks = [d for d in DECKS if d.physics == physics]
+    if not decks:
+        return {}
+    pitfalls: list[str] = []
+    seen: set[str] = set()
+    for d in decks:
+        for p in (d.pitfalls or ()):
+            if p not in seen:
+                pitfalls.append(p)
+                seen.add(p)
+    out: dict = {"description": decks[0].summary,
+                 "variants": [d.variant for d in decks]}
+    if pitfalls:
+        out["pitfalls"] = pitfalls
+    checks = [d.evidence for d in decks if getattr(d, "evidence", None)]
+    if checks:
+        out["what_to_check"] = checks
+    return out
 
 
 def physics_covered() -> list[str]:

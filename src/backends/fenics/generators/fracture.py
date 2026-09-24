@@ -253,6 +253,18 @@ u_norm = np.sqrt(domain.comm.allreduce(
         ufl.inner(u_h, u_h) * ufl.dx))))
 d_norm = np.sqrt(domain.comm.allreduce(
     fem.assemble_scalar(fem.form(d_h * d_h * ufl.dx))))
+# --- Write the result where a reader can open it ------------------------------
+# This template printed a norm and wrote nothing, so a model that ran it had
+# no field to look at, plot or verify. XDMFFile writes P1 functions; the
+# openPASO backend converts result.xdmf/.h5 into a standard result.vtu after
+# the run (the same route the Poisson template uses). Higher-order or
+# non-Lagrange functions are interpolated into P1 for output first.
+import json
+from dolfinx.io import XDMFFile
+with XDMFFile(domain.comm, "result.xdmf", "w") as _x:
+    _x.write_mesh(domain); _x.write_function(u_h); _x.write_function(d_h)
+with open("results_summary.json", "w") as _f:
+    json.dump({{"l2_norm_u": float(u_norm), "l2_norm_d": float(d_norm), "max_d": float(d_h.x.array.max())}}, _f, indent=2)
 print(f"||u||_L2 = {{u_norm}}")
 print(f"||d||_L2 = {{d_norm}}, max(d) = {{d_h.x.array.max()}}")
 '''
