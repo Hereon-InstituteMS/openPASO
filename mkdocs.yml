@@ -2,8 +2,8 @@ site_name: openPASO
 site_description: >-
   Describe a physics problem in plain words. An AI model picks a finite-element solver,
   writes its input, runs it, and checks the answer.
-site_url: https://hereon-institutems.github.io/openPASO/
-repo_url: https://github.com/Hereon-InstituteMS/openPASO
+site_url: https://open-paso.github.io/openPASO/
+repo_url: https://github.com/open-PASO/openPASO
 repo_name: openPASO
 edit_uri: edit/main/docs/
 copyright: MIT licence · Helmholtz-Zentrum Hereon · Hamburg University of Technology

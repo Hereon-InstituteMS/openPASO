@@ -2,6 +2,11 @@
 
 The app brings the AI model. openPASO brings the solvers. You only connect the two once.
 
+**Installed with `pip install openpaso`?** Then the server is the `openpaso` command and the
+setup is one line -- Claude Code: `claude mcp add openpaso -s user -e PYVISTA_OFF_SCREEN=true -- openpaso`;
+Claude Desktop or Cursor: `"command": "openpaso"` (and `"args": []`) in the configuration below,
+no `PYTHONPATH` or `VIRTUAL_ENV` needed. The instructions that follow are for a checkout.
+
 === "Claude Code"
 
     Run this once, from the openPASO folder:

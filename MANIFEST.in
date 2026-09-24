@@ -1,0 +1,5 @@
+# Data the installed package reads. Python files are collected by setup.py.
+recursive-include src *.yaml *.yml *.json *.md *.txt *.cc *.hpp *.h *.i *.dat *.feb *.msh
+recursive-include data *.py *.json *.cc *.hpp *.txt *.md *.yaml *.gitkeep CMakeLists.txt
+include README.md LICENSE CITATION.cff
+global-exclude __pycache__ *.pyc *.pyo

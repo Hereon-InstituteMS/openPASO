@@ -11,11 +11,11 @@
 <p align="center"><b>open Platform for Agentic Simulation and Optimization</b></p>
 
 <p align="center">
-  <a href="https://hereon-institutems.github.io/openPASO/"><img src="https://img.shields.io/badge/docs-website-FF6B4A?style=flat-square" alt="Documentation"></a>
+  <a href="https://open-paso.github.io/openPASO/"><img src="https://img.shields.io/badge/docs-website-FF6B4A?style=flat-square" alt="Documentation"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748B?style=flat-square" alt="MIT licence"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10--3.13-64748B?style=flat-square" alt="Python 3.10 to 3.13"></a>
   <a href="https://doi.org/10.5281/zenodo.20543501"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.20543501-64748B?style=flat-square" alt="DOI"></a>
-  <a href="https://hereon-institutems.github.io/openPASO/solvers/"><img src="https://img.shields.io/badge/solvers-9-FF6B4A?style=flat-square" alt="9 solvers"></a>
+  <a href="https://open-paso.github.io/openPASO/solvers/"><img src="https://img.shields.io/badge/solvers-9-FF6B4A?style=flat-square" alt="9 solvers"></a>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <a href="https://hereon-institutems.github.io/openPASO/">
+  <a href="https://open-paso.github.io/openPASO/">
     <img src="docs/assets/openPASO_film.gif" alt="openPASO in 29 seconds: describe the physics, openPASO picks the solver, runs it, and checks the result against the literature" width="800">
   </a>
   <br><sub>Click the film to watch it in full quality on the documentation website.</sub>
@@ -34,7 +34,7 @@
 > **openPASO is under active development, and we invite you to help.** It works and is used for
 > real simulations, but it is young: things change quickly and you will find rough edges. Try it,
 > tell us what broke, and share what you know about a solver.
-> See [Contribute](https://hereon-institutems.github.io/openPASO/contribute/).
+> See [Contribute](https://open-paso.github.io/openPASO/contribute/).
 
 ## What it does
 
@@ -49,31 +49,40 @@ runs it, and checks that the answer is computed correctly.
 You need Python 3.10–3.13 and about ten minutes. One solver is enough to begin.
 
 ```bash
-git clone https://github.com/Hereon-InstituteMS/openPASO.git
+pip install "openpaso[skfem]"    # the server plus the easiest solver to start with
+openpaso                         # starts the MCP server on stdio; Ctrl-C to stop
+```
+
+`openpaso` is the command your AI app's MCP configuration points at. Working from a checkout
+instead (to change the code, or to run `check_install.py`, which lists the solvers openPASO can
+use on your machine without a key or network):
+
+```bash
+git clone https://github.com/open-PASO/openPASO.git
 cd openPASO
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e . scikit-fem
-python check_install.py          # no key, no network: shows which solvers openPASO can use
+python check_install.py
 ```
 
 Then connect an AI model, one of two ways:
 
 - **Option A — an AI app you already have** (Claude Code, Claude Desktop, Cursor): no extra cost.
-  [Set it up →](https://hereon-institutems.github.io/openPASO/use/ai-app/)
+  [Set it up →](https://open-paso.github.io/openPASO/use/ai-app/)
 - **Option B — your own OpenRouter key**: one command per simulation, any model.
-  [Set it up →](https://hereon-institutems.github.io/openPASO/use/api-key/)
+  [Set it up →](https://open-paso.github.io/openPASO/use/api-key/)
 
 ## Solvers
 
 | | | |
 |---|---|---|
-| [scikit-fem](https://hereon-institutems.github.io/openPASO/solvers/skfem/) | [NGSolve](https://hereon-institutems.github.io/openPASO/solvers/ngsolve/) | [Kratos Multiphysics](https://hereon-institutems.github.io/openPASO/solvers/kratos/) |
-| [DUNE-fem](https://hereon-institutems.github.io/openPASO/solvers/dune/) | [FEniCSx](https://hereon-institutems.github.io/openPASO/solvers/fenics/) | [deal.II](https://hereon-institutems.github.io/openPASO/solvers/dealii/) |
-| [FEBio](https://hereon-institutems.github.io/openPASO/solvers/febio/) | [4C Multiphysics](https://hereon-institutems.github.io/openPASO/solvers/fourc/) | [SPARTA](https://hereon-institutems.github.io/openPASO/solvers/sparta/) |
+| [scikit-fem](https://open-paso.github.io/openPASO/solvers/skfem/) | [NGSolve](https://open-paso.github.io/openPASO/solvers/ngsolve/) | [Kratos Multiphysics](https://open-paso.github.io/openPASO/solvers/kratos/) |
+| [DUNE-fem](https://open-paso.github.io/openPASO/solvers/dune/) | [FEniCSx](https://open-paso.github.io/openPASO/solvers/fenics/) | [deal.II](https://open-paso.github.io/openPASO/solvers/dealii/) |
+| [FEBio](https://open-paso.github.io/openPASO/solvers/febio/) | [4C Multiphysics](https://open-paso.github.io/openPASO/solvers/fourc/) | [SPARTA](https://open-paso.github.io/openPASO/solvers/sparta/) |
 
 ## Documentation
 
-Everything else is on the **[documentation website](https://hereon-institutems.github.io/openPASO/)**:
+Everything else is on the **[documentation website](https://open-paso.github.io/openPASO/)**:
 installing each solver, both ways of use step by step, all 24 tools the model gets, how openPASO
 checks an answer, coupling two solvers on one problem, troubleshooting, and a glossary for every word.
 
@@ -82,7 +91,7 @@ checks an answer, coupling two solvers on one problem, troubleshooting, and a gl
 Reports of what did not work, solver traps you know, and plain-language fixes to the documentation
 are all very welcome. One rule stands above the rest: **every improvement must help all simulations,
 not one example.** See [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[Contribute page](https://hereon-institutems.github.io/openPASO/contribute/).
+[Contribute page](https://open-paso.github.io/openPASO/contribute/).
 
 ## Licence and citation
 
@@ -96,7 +105,7 @@ name. If you use openPASO in research, please cite:
   author = {Hermann, Alexander and Shojaei, Arman and Scheider, Ingo and Cyron, Christian},
   year   = {2026},
   doi    = {10.5281/zenodo.20543501},
-  url    = {https://github.com/Hereon-InstituteMS/openPASO}
+  url    = {https://github.com/open-PASO/openPASO}
 }
 ```
 

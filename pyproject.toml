@@ -1,9 +1,10 @@
 [project]
 name = "openpaso"
-version = "1.1.0"
+version = "1.2.0"
 description = "openPASO — open Platform for Agentic Simulation and Optimization. An MCP server that lets an AI model operate nine finite-element and multiphysics codes: simulation, cross-code coupling, verification and solver development."
 requires-python = ">=3.10"
 license = {text = "MIT"}
+readme = "README.md"
 authors = [
     {name = "openPASO Contributors"},
 ]
@@ -49,6 +50,18 @@ dependencies = [
     # run spent its budget producing nothing. A mesh generator every install has is worth 50 MB.
     "gmsh>=4.12",
 ]
+
+[project.urls]
+Homepage = "https://github.com/open-PASO/openPASO"
+Repository = "https://github.com/open-PASO/openPASO"
+Documentation = "https://open-paso.github.io/openPASO/"
+Issues = "https://github.com/open-PASO/openPASO/issues"
+
+[project.scripts]
+# `openpaso` starts the MCP server on stdio: the command an AI tool's MCP
+# configuration points at. It does the same thing `python src/server.py`
+# does in a checkout.
+openpaso = "openpaso:main"
 
 [project.optional-dependencies]
 # Individual solver backends

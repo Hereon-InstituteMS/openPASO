@@ -2103,7 +2103,8 @@ def _load_matching_postmortems(solver: str = "", physics: str = "",
     (the openPASO design paper §3.2 autonomous-growth path) — promotion to a
     formal post-mortem is a deliberate review step (#46).
     """
-    pm_dir = Path(__file__).resolve().parents[2] / "data" / "postmortems"
+    from core.paths import data_dir as _data_dir
+    pm_dir = _data_dir() / "postmortems"
     if not pm_dir.is_dir():
         return []
     solver_l = solver.lower().strip()

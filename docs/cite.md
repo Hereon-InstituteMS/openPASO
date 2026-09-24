@@ -14,7 +14,7 @@ If openPASO helps your research, please cite the archived release:
   author = {Hermann, Alexander and Shojaei, Arman and Scheider, Ingo and Cyron, Christian},
   year   = {2026},
   doi    = {10.5281/zenodo.20543501},
-  url    = {https://github.com/Hereon-InstituteMS/openPASO}
+  url    = {https://github.com/open-PASO/openPASO}
 }
 ```
 
