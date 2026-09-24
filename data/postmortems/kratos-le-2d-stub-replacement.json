@@ -13,7 +13,7 @@
   ],
   "agent_detection_after_fix": "Pre-execution critic gate retrieves the three new pitfalls when the agent's plan references SmallDisplacementElement2D*N. The post-execution critic matches the explicit Signal: clauses against actual error text (`Check failed for DISPLACEMENT_Z`, singular-matrix warnings, missing-component errors), so a regression that introduces any of (1)–(3) into a new template surfaces as a named pitfall hit rather than as an opaque crash. Both critic gates are exercised by tests/test_pitfall_categories.py (strict gate) plus the held-out 17-task regression on the Kratos cantilever (#44).",
   "source_refs": [
-    "PR #24 (Hereon-InstituteMS/openPASO, then named Open-FEM-agent) — Kratos LE real-template + .vtk acceptance",
+    "PR #24 (open-PASO/openPASO, then named Open-FEM-agent) — Kratos LE real-template + .vtk acceptance",
     "openPASO design paper Section 3.2 — silent no-op pitfalls (FSI velocity-30x example)",
     "openPASO design paper Table 1 — Syntax / API categories",
     "task #46 — pitfall-DB-first merge discipline"

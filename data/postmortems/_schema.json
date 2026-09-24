@@ -1,7 +1,7 @@
 {
   "_comment": "Canonical schema for data/postmortems/<id>.json. the openPASO design paper §3.2 / Table 1 + task #46 pitfall-DB-first discipline. The retrieval tool in src/tools/consolidated.py (_load_matching_postmortems) and tests/test_postmortem_retrieval.py both enforce this shape; the canonical schema lives here so future authors do not have to read code to know the contract.",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/Hereon-InstituteMS/openPASO/blob/main/data/postmortems/_schema.json",
+  "$id": "https://github.com/open-PASO/openPASO/blob/main/data/postmortems/_schema.json",
   "type": "object",
   "required": ["id", "date", "backend", "physics", "surface_symptom",
                "root_cause", "categories", "pitfall_db_entries",
