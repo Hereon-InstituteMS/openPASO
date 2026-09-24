@@ -28,7 +28,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_PARTICIPANT_DIR = Path(__file__).resolve().parents[2] / "data" / "coupling_participants"
+from core.paths import data_dir as _data_dir
+
+_PARTICIPANT_DIR = _data_dir() / "coupling_participants"
 
 
 _SOLVE_BEGIN = "# ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ begin"

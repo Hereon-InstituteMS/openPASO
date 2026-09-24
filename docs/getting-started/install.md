@@ -47,7 +47,7 @@ python3 --version    # 3.10, 3.11 or 3.12: go straight on. 3.13: read the box be
 ## Install openPASO
 
 ```bash
-git clone https://github.com/Hereon-InstituteMS/openPASO.git
+git clone https://github.com/open-PASO/openPASO.git
 cd openPASO
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .

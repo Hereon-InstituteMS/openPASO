@@ -14,7 +14,7 @@ The browser interface's fast tests ship with it and need no key:
 pytest webui/tests/test_app.py -q
 ```
 
-The full guide, in plain language, is on the website: <https://hereon-institutems.github.io/openPASO/contribute/>.
+The full guide, in plain language, is on the website: <https://open-paso.github.io/openPASO/contribute/>.
 
 The rules a change has to meet:
 

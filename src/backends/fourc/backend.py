@@ -641,7 +641,8 @@ class FourcBackend(SolverBackend):
         data_entry: dict = {}
         try:
             import sys
-            data_dir = str(Path(__file__).resolve().parents[3] / "data")
+            from core.paths import data_dir as _data_dir
+            data_dir = str(_data_dir())
             if data_dir not in sys.path:
                 sys.path.insert(0, data_dir)
             from fourc_knowledge import FOURC_KNOWLEDGE

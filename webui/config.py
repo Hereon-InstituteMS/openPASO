@@ -158,7 +158,7 @@ MODE_INFO = {
                           "You can still send corrections, end a step or stop the run.")},
 }
 
-DOCS_URL = "https://hereon-institutems.github.io/openPASO/"
+DOCS_URL = "https://open-paso.github.io/openPASO/"
 def default_model() -> str | None:
     """A backend that can run without further set-up, or None.
 

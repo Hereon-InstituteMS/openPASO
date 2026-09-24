@@ -24,8 +24,8 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.20543501
     description: "Zenodo archive of v1.1.0"
-repository-code: "https://github.com/Hereon-InstituteMS/openPASO"
-url: "https://github.com/Hereon-InstituteMS/openPASO"
+repository-code: "https://github.com/open-PASO/openPASO"
+url: "https://github.com/open-PASO/openPASO"
 doi: 10.5281/zenodo.20543501
 abstract: >-
   openPASO is an open-source Model Context Protocol (MCP) server
