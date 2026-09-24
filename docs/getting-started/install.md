@@ -46,15 +46,33 @@ python3 --version    # 3.10, 3.11 or 3.12: go straight on. 3.13: read the box be
 
 ## Install openPASO
 
+From PyPI, into a fresh virtual environment:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install openpaso              # the server, with scikit-fem as a first solver
+openpaso                          # starts the MCP server on stdio; Ctrl-C stops it
+```
+
+`openpaso` is the command your AI app's MCP configuration points at
+([Option A](../use/ai-app.md)). scikit-fem comes with it; the other solvers that pip can
+install are extras -- `pip install "openpaso[ngsolve]"`, `[kratos]`, `[dune]`, or `[all-solvers]`
+-- and the rest (4C, deal.II, FEniCSx, FEBio, SPARTA) are found on your machine, see
+[More solvers](#more-solvers).
+
+From a checkout instead -- to change the code, or to run `check_install.py`, which lists the solvers
+openPASO can use on your machine without a key or network:
+
 ```bash
 git clone https://github.com/open-PASO/openPASO.git
 cd openPASO
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 pip install scikit-fem            # the easiest solver to start with
+python check_install.py
 ```
 
-Then install the agent packages. Only Option B uses them, but installing them now costs nothing:
+Then install the agent packages. Only Option B uses them, and they need the checkout:
 
 ```bash
 pip install -r langgraph_eval/requirements-langgraph.txt

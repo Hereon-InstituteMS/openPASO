@@ -11,6 +11,7 @@
 <p align="center"><b>open Platform for Agentic Simulation and Optimization</b></p>
 
 <p align="center">
+  <a href="https://pypi.org/project/openpaso/"><img src="https://img.shields.io/pypi/v/openpaso?style=flat-square&color=FF6B4A&label=PyPI" alt="openpaso on PyPI"></a>
   <a href="https://open-paso.github.io/openPASO/"><img src="https://img.shields.io/badge/docs-website-FF6B4A?style=flat-square" alt="Documentation"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-64748B?style=flat-square" alt="MIT licence"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10--3.13-64748B?style=flat-square" alt="Python 3.10 to 3.13"></a>
@@ -49,7 +50,7 @@ runs it, and checks that the answer is computed correctly.
 You need Python 3.10–3.13 and about ten minutes. One solver is enough to begin.
 
 ```bash
-pip install "openpaso[skfem]"    # the server plus the easiest solver to start with
+pip install openpaso             # the server, with scikit-fem as a first solver
 openpaso                         # starts the MCP server on stdio; Ctrl-C to stop
 ```
 
