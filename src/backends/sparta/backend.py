@@ -162,7 +162,23 @@ def _deck_data_refs(deck: str) -> set[str]:
             wanted.add(toks[1])
         elif toks[0] == "react" and len(toks) >= 3:
             wanted.add(toks[2])
+        elif toks[0] == "surf_react" and len(toks) >= 4 and toks[2] in ("prob", "adsorb"):
+            # `surf_react ID prob <file>` / `surf_react ID adsorb ... <file>`: the surface
+            # reaction file. Measured 2026-09-24: a served deck's `surf_react srprob prob air.surf`
+            # aborted with "Cannot open reaction file air.surf" because only species/collide/
+            # read_surf/react references were staged.
+            wanted.update(t for t in toks[3:] if _looks_like_data_file(t))
+        # any other token that carries a SPARTA data-file extension (a user's deck can reference
+        # one from a command not listed above); explicit rules above still win for bare names
+        wanted.update(t for t in toks[1:] if _looks_like_data_file(t))
     return wanted
+
+
+_DATA_FILE_SUFFIXES = (".species", ".vss", ".surf", ".react", ".tce", ".bird", ".qk", ".grid", ".isurf")
+
+
+def _looks_like_data_file(tok: str) -> bool:
+    return tok.lower().endswith(_DATA_FILE_SUFFIXES) and not tok.startswith(("v_", "c_", "f_", "${"))
 
 
 def stage_deck_data_files(deck: str, work_dir: Path,

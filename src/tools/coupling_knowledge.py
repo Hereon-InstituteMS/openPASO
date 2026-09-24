@@ -296,8 +296,47 @@ def _reconstruction_contract(served: str, original: str) -> list:
     if not cut:
         return []
     defined = _names("\n".join(cut), ast.Store)
-    needed = _names(served, ast.Load)
+    needed = _free_loads(served)
+    if needed is None:
+        needed = _names(served, ast.Load)
     return sorted(n for n in defined & needed if not n.startswith("_"))
+
+
+def _free_loads(src: str):
+    """Names the code READS without binding them first in an enclosing loop.
+
+    `for k, vtx in enumerate(iface_v)` below the hole reads k and vtx inside
+    that loop, which binds them, so they are not the hole's to define --
+    listing them told the agent a loop counter was part of the contract. The
+    same letter read OUTSIDE any loop that binds it (the bilinear form `a`
+    beside a `for a in ...` elsewhere) still counts. None when it cannot parse.
+    """
+    import ast
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    parent = {}
+    for node in ast.walk(tree):
+        for ch in ast.iter_child_nodes(node):
+            parent[ch] = node
+
+    def _bound(name_node):
+        nm, cur = name_node.id, name_node
+        while cur in parent:
+            up = parent[cur]
+            if isinstance(up, (ast.For, ast.AsyncFor)) and cur is not up.iter and cur is not up.target:
+                if any(isinstance(t, ast.Name) and t.id == nm for t in ast.walk(up.target)):
+                    return True
+            if isinstance(up, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)):
+                if any(isinstance(t, ast.Name) and t.id == nm
+                       for g in up.generators for t in ast.walk(g.target)):
+                    return True
+            cur = up
+        return False
+
+    return {n.id for n in ast.walk(tree)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and not _bound(n)}
 
 
 def _append_reconstruction_contract(served: str, original: str) -> str:
@@ -344,7 +383,7 @@ that most often sink a coupled result set:
 
 It costs one call. Measured, 3% of coupled runs used it,
 and the defects above account for most of the result sets that were read as
-malformed or fabricated rather than wrong.
+incomplete or invented rather than wrong.
 
 """
 
@@ -549,14 +588,20 @@ written is the converged one. The `history` array in the return is the
 coupling residual history and is the only place it exists — copy it out if you
 need it.
 
-A CONVERGED RUN WITH A FAILED CONSERVATION CHECK IS STILL A RESULT.
-Order of operations the moment `converged: true` arrives: (1) write every
-deliverable from the state you have, now; (2) then investigate the finding;
-(3) re-run and overwrite if you fix it. "Interface flux NOT balanced" is a
-statement about the SIGN of the normal_fluxes you exported. It does not change
-the fields your participants computed, and it is not a reason to discard the
-run or to declare you could not complete it. NOT VERIFIED and NOT A RESULT are
-different verdicts, and only one of them is worth zero.
+A CONVERGED RUN WITH A FAILED CONSERVATION CHECK IS STILL A RESULT -- AND NOT
+YET A RIGHT ONE. Order of operations the moment `converged: true` arrives:
+(1) write every deliverable from the state you have, now; (2) then read the
+finding and test it against the NEXT level; (3) re-run and overwrite if you
+fix it. "Interface flux NOT balanced" at one level is one number, and what it
+means is decided by refinement: discretisation error shrinks by about 4x per
+mesh halving (2x for a first-order recovery); a wrong sign, scaling or
+missing term in what one side exports stays or grows, and then every field
+that depends on that exchange is wrong at every level however cleanly the
+iteration converged. Neither reading is a reason to discard the run or to
+declare you could not complete it; the second is a reason not to call the
+result mesh-independent. NOT VERIFIED and NOT A RESULT are different
+statements: a result handed in with its named caveat is a result, a claim of
+convergence over a caveat that did not shrink is not.
 
 THE POINTS YOU EXCHANGE ARE NOT THE POINTS YOU REPORT.
 Each side exports its own interface nodes. The two sides having different
@@ -2365,9 +2410,11 @@ def _payload(title: str, sides: str, script_name: str, launch: str,
             f"{_thermo_notice(script_name)}\n"
             f"## Sides this backend can take\n\n{sides}\n\n"
             f"{_RECAP}\n"
-            f"## PARTICIPANT CONTRACT — COPY THIS INTO ITS OWN FILE NOW "
-            f"(write_file side_<x>.py), then edit the marked block and write "
-            f"the solve where the banner sits. It is the handshake, the "
+            f"## PARTICIPANT CONTRACT — PUT THIS IN ITS OWN FILE NOW with "
+            f"write_participant_contract(solver=<code>, path=<side dir>/participant_<x>.py, "
+            f"variant=<the physics word>): it writes this same text, byte for "
+            f"byte, so nothing is re-typed. Then edit the marked block IN PLACE "
+            f"and write the solve where the banner sits. It is the handshake, the "
             f"interface sign convention, the consistent flux recovery, the "
             f"exports schema and the export self-check, thinned of its "
             f"explanations so it is cheap to copy; the annotated version is "
@@ -2446,9 +2493,9 @@ submit_critic_review(solver="couple",
 ```
 couple(participants='[
   {{"name":"left","command":["<interpreter>","participant_left.py"],
-   "work_dir":"/abs/run/left","imports_from":["right"],"timeout":900}},
+   "work_dir":"left","imports_from":["right"],"timeout":900}},
   {{"name":"right","command":["<interpreter>","participant_right.py"],
-   "work_dir":"/abs/run/right","imports_from":["left"],"timeout":900}}]',
+   "work_dir":"right","imports_from":["left"],"timeout":900}}]',
   max_iter=60, tol=1e-8, accelerator="auto", theta=0.5, critic_approved=True)
 ```
 '''.replace("{RIGHT}", _RIGHT_BLOCK)
@@ -2744,7 +2791,19 @@ what the deck imposes at the interface and what is exported as values.
 
 Reads ./config.json {"level":k,"nx":..,"ny":..,"x0":..,"x1":..,"y0":..,"y1":..,
 "k":diffusivity,"iface":"left|right|bottom|top","source_expr":"<f(x,y) or 0.0>",
-"fourc_bin":..,"fourc_ld":..}.
+"outer":<the value prescribed on this subdomain's NON-interface boundary, if
+your problem prescribes one>,"fourc_bin":..,"fourc_ld":..}.
+WRITE "outer" WHEN YOUR PROBLEM PRESCRIBES ONE. It is the same kind of
+transcription as source_expr, and it buys the same kind of check: openPASO
+compares your delivered field against the value on the edges you say are held.
+The equation check CANNOT do this -- its test function is built so every
+boundary term vanishes, which is what lets it judge a coupled side at all -- so
+a field that solves the right equation with the wrong boundary condition passes
+it cleanly, converges cleanly, and comes out as a refinement study that did not
+converge. Measured: one coupled side left two outer edges natural instead of
+held, its field on those edges was as large as anywhere in its interior while
+the sides that held them sat exactly on the prescribed value, and nothing in
+this tool could see it.
 Contract: reads ./imports.json (the partner's interface samples at its points),
 maps them onto THIS side's interface nodes -- as the Neumann load (side
 "neumann", opposite normals) or as the imposed Dirichlet trace (side
@@ -3111,13 +3170,32 @@ if SIDE == "neumann" and q_own:
     _q_applied = [partner_flux(float(nodes[n - 1][_ax])) for n in interior]
     _scale = max(abs(x) for x in _q_applied) if _q_applied else 0.0
     if _scale > 0:
-        _mis = max(abs(a + b) for a, b in zip(q_own, _q_applied)) / _scale
+        _per_node = [abs(a + b) / _scale for a, b in zip(q_own, _q_applied)]
+        _mis = max(_per_node)
+        _worst = _per_node.index(_mis)
         if _mis > 0.3:
-            raise SystemExit(f"EXPORT SELF-CHECK: the recovered interface flux does not match the load you "
-                             f"applied: max|q_own + q_imported| / max|q_imported| = {_mis:.2f}, while a correct "
-                             f"Neumann side reproduces its load to a few percent. The imported flux entered the "
-                             f"deck wrongly scaled or at the wrong nodes -- check the point-load formula "
-                             f"VAL = (h/6)*(q(y-h) + 4q(y) + q(y+h)) and the node coordinates. Nothing was exported")
+            # IT REPORTS, IT DOES NOT EXIT. This check cannot run during the
+            # standalone smoke test the served text prescribes -- that test
+            # writes an imports.json of zeros, which makes _scale 0 and skips
+            # it -- so it first speaks when the driver hands it real data, on
+            # iteration 1, after the solve has already succeeded. Exiting there
+            # threw the level away: measured on one run, three identical dead
+            # couple() calls and about fourteen minutes, and the agent
+            # eventually commented this block out and inverted the sign
+            # convention while doing it. The defect it names is real and worth
+            # saying loudly; it is not worth a finished solve.
+            print(f"EXPORT SELF-CHECK WARNING: the recovered interface flux does not match the load you "
+                  f"applied -- check the point-load formula and the node coordinates. Ratio "
+                  f"max|q_own + q_imported| / max|q_imported| = {_mis:.2f}, worst at interior node "
+                  f"{_worst} ({co[_worst] if _worst < len(co) else '?'}), while a correct Neumann side "
+                  f"reproduces its load to a few percent. The imported flux may have entered the deck wrongly "
+                  f"scaled or at the wrong nodes -- check the point-load formula "
+                  f"VAL = (h/6)*(q(y-h) + 4q(y) + q(y+h)) and the node coordinates. NOTE the two END nodes of "
+                  f"the interior list: their outer neighbour is the excluded corner and is never imported, so "
+                  f"the three-point rule is undefined there -- use VAL = (h/2)*q at those two, and expect "
+                  f"flux_boundary there to carry the corner reaction as well. The export CONTINUES so this "
+                  f"level is not lost; the coupling's own residual history is the evidence that decides it.",
+                  file=sys.stderr)
 json.dump({"field_name": "u", "coordinates": co, "values": (vals if SIDE == "neumann" else []),
            "normal_fluxes": q_own, "n_points": len(co)},
           open("exports.json", "w"))
@@ -3142,8 +3220,8 @@ with open(f"interface_level{_LVL}.csv", "w") as _f:
     for (_px, _py), _n, _q in zip(co, interior, q_own):
         _f.write(f"{_px:.11e},{_py:.11e},{float(u[_n - 1]):.11e},{float(_q):.11e}\\n")
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its own -- the
-# audit and the hand-in read that exact shape (measured: three coupled
-# rounds lost their best cells to logs whose only NDOF sat inside a prose
+# audit reads that exact shape (measured: three otherwise complete coupled
+# runs lost their evidence to logs whose only NDOF sat inside a prose
 # line). The descriptive line follows it.
 print(f"NDOF = {len(nodes)}")
 print(f"4C Neumann participant: NDOF = {len(nodes)}  "
@@ -3429,6 +3507,62 @@ def _participant_chunks(text: str, limit: int = 9000) -> list[str]:
   return chunks
 
 
+_PARTICIPANT_LABELS = {
+  "thermoelastic": "thermo-elastic",     # before "elastic": it contains that word
+  "neumann": "Neumann-side",
+  "elastic": "vector elasticity",
+  "transient": "transient",
+  "3d": "3-D",
+}
+
+
+def resolve_participant(solver: str, request: str = "") -> tuple:
+  """(path, label, error) for the participant contract a request names.
+
+  One resolver for every door that hands out a participant, so the file the
+  knowledge reply serves in parts and the file the writer puts on disk can
+  never be two different files. `error` is the served refusal text when there
+  is no such contract; then `path` is None."""
+  key = _ALIAS_CANON.get((solver or "").strip().lower())
+  if not key or key not in _BACKEND_ORDER:
+    return None, "", (f"# No coupling participant for solver={solver!r}\n\n"
+                      f"Choose one of: {', '.join(_BACKEND_ORDER)}.")
+  requested = (request or "").strip().lower().replace("_", "-")
+  suffix = ""
+  for candidate in _PARTICIPANT_LABELS:
+    if candidate in requested:
+      suffix = f"_{candidate}"
+      break
+  path = _PARTICIPANT_DIR / f"participant_{key}{suffix}.py"
+  if not path.is_file():
+    available = [
+      p.stem.removeprefix(f"participant_{key}").lstrip("_") or "base"
+      for p in sorted(_PARTICIPANT_DIR.glob(f"participant_{key}*.py"))
+    ]
+    return None, "", (f"# No {_PARTICIPANT_LABELS.get(suffix.lstrip('_'), suffix or 'base')} "
+                      f"participant for solver={solver!r}\n\n"
+                      f"Available variants: {', '.join(available) or 'none'}.")
+  return path, _PARTICIPANT_LABELS.get(suffix.lstrip("_"), "base"), ""
+
+
+def _participant_key_suffix(solver: str, request: str = "") -> tuple:
+  """(canonical solver key, file suffix) the resolver used; ('', '') when unknown."""
+  key = _ALIAS_CANON.get((solver or "").strip().lower()) or ""
+  requested = (request or "").strip().lower().replace("_", "-")
+  suffix = next((f"_{c}" for c in _PARTICIPANT_LABELS if c in requested), "")
+  return key, suffix
+
+
+def participant_contract_text(solver: str, request: str = "") -> tuple:
+  """(text, error): the WHOLE served contract for one participant, solve
+  elided, exactly the concatenation of the parts the knowledge door serves --
+  it is produced by the same `_serve_participant` call, which fails closed."""
+  path, _label, err = resolve_participant(solver, request)
+  if path is None:
+    return "", err
+  return _serve_participant(path), ""
+
+
 def coupling_participant(solver: str, request: str = "") -> str:
   """Return one bounded chunk of a participant CONTRACT (solve elided).
 
@@ -3438,36 +3572,11 @@ def coupling_participant(solver: str, request: str = "") -> str:
   import hashlib
   import re
 
-  key = _ALIAS_CANON.get((solver or "").strip().lower())
-  if not key or key not in _BACKEND_ORDER:
-    return (f"# No coupling participant for solver={solver!r}\n\n"
-            f"Choose one of: {', '.join(_BACKEND_ORDER)}.")
-
+  path, label, err = resolve_participant(solver, request)
+  if path is None:
+    return err
+  key, suffix = _participant_key_suffix(solver, request)
   requested = (request or "").strip().lower().replace("_", "-")
-  suffix = ""
-  labels = {
-    "thermoelastic": "thermo-elastic",     # before "elastic": it contains that word
-    "neumann": "Neumann-side",
-    "elastic": "vector elasticity",
-    "transient": "transient",
-    "3d": "3-D",
-  }
-  for candidate in labels:
-    if candidate in requested:
-      suffix = f"_{candidate}"
-      break
-
-  path = _PARTICIPANT_DIR / f"participant_{key}{suffix}.py"
-  if not path.is_file():
-    available = [
-      p.stem.removeprefix(f"participant_{key}").lstrip("_") or "base"
-      for p in sorted(_PARTICIPANT_DIR.glob(f"participant_{key}*.py"))
-    ]
-    return (f"# No {labels.get(suffix.lstrip('_'), suffix or 'base')} "
-            f"participant for solver={solver!r}\n\n"
-            f"Available variants: {', '.join(available) or 'none'}.")
-
-  label = labels.get(suffix.lstrip("_"), "base")
   source = _serve_participant(path)
   chunks = _participant_chunks(source)
   match = re.search(r"(?:^|:)part(\d+)(?:$|:)", requested)
@@ -3860,7 +3969,9 @@ avoided in the participant that fixture couples:
     `a.mat * gfu.vec - f.vec` and sum it over the boundary DOFs.
   * Applying an incoming flux is a `LinearForm` term `g * v * ds("interface")`,
     with `g` a `CoefficientFunction`; build it by fitting or interpolating the
-    incoming samples, since preCICE hands you values at YOUR vertices.''',
+    incoming samples, since preCICE hands you values at YOUR vertices.
+    "interface" must be a boundary name your mesh carries: a `ds()` over a
+    name it does not carry integrates over nothing, with no error.''',
     },
     "skfem": {
         "title": "scikit-fem",
@@ -4356,7 +4467,10 @@ def _dune() -> str:
 """DUNE-fem as the DIRICHLET side of a partitioned coupling (CG P1).
 
 Reads ./config.json {"level":..,"nx":..,"ny":..,"x0":..,"x1":..,"y0":..,"y1":..,
-"k":..,"reaction":..,"source_expr":"<f(x, y) as a Python expression, e.g.
+"k":..,"reaction":..,"outer":<value on the NON-interface boundary, when your
+problem prescribes one -- openPASO checks the delivered field against it, and
+the equation check cannot: its test function makes every boundary term vanish>,
+"source_expr":"<f(x, y) as a Python expression, e.g.
 '-10*x**3*y**3/3 + 16*x**2*y/5 - 2'; '0.0' when there is none>","iface":"left|right|bottom|top"}
 ("source_const": <number> is still accepted for a constant source).
 Contract: reads ./imports.json (partner's interface FIELD values at its points),
@@ -4372,6 +4486,7 @@ physics='<your physics>').
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -4566,11 +4681,22 @@ _r_in = max((abs(float(resid[_n])) for _n in _free), default=0.0)
 _scale_in = max(max((abs(float(_ku_part[_n])) for _n in _free), default=0.0),
                 max((abs(float(_bv_part[_n])) for _n in _free), default=0.0))
 if _scale_in > 0 and _r_in > 0.25 * _scale_in:
-    raise SystemExit(f"EXPORT SELF-CHECK: on the interior vertices your solution's operator side K u + c M u and the "
-                     f"served consistent load M f differ by {_r_in:.3e}, {_r_in / _scale_in:.2f} of their size (a form "
-                     f"that integrates the same f, k and c leaves a few percent): your form and config disagree on "
-                     f"k ({KV}), the reaction ({CV}) or the source (source_expr={SRC_EXPR!r}) -- the load of your form "
-                     f"must integrate the same source with the same numbers. Nothing was exported")
+    # IT REPORTS, IT DOES NOT EXIT. The ratio below is a function of the
+    # COUPLING ITERATE, not of the form: the same file, untouched, passed this
+    # check on 79 consecutive solves and converged two levels to ~9e-7, then
+    # tripped it at level 3 iteration 13 -- and the message named the form.
+    # Exiting discarded a field that was already written to disk. The defect it
+    # is built for is real (a source in the config but not in the form leaves an
+    # O(1) interior residual), so it still speaks, on stderr, in the console the
+    # driver keeps.
+    print(f"EXPORT SELF-CHECK WARNING: on the interior vertices your solution's operator side K u + c M u and the "
+          f"served consistent load M f differ by {_r_in:.3e}, {_r_in / _scale_in:.2f} of their size (a form "
+          f"that integrates the same f, k and c leaves a few percent). IF THIS FIRES ON EVERY ITERATION "
+          f"your form and config disagree on k ({KV}), the reaction ({CV}) or source_expr ({SRC_EXPR!r}), "
+          f"and the load of your form must integrate the same source with the same numbers. If it fires only "
+          f"at some iterates, it is measuring the partner's current trace and not your form -- read the "
+          f"coupling's residual history instead. The export CONTINUES so this level is not lost.",
+          file=sys.stderr)
 q_own = [float(-resid[n] / h_if) for n in interior]    # interior = interface ids[1:-1]
 co_out = [[float(node_coords[n][0]), float(node_coords[n][1])] for n in interior]
 # exports.json LAST (the driver takes its existence as proof of success).
@@ -4624,7 +4750,7 @@ with open(f"interface_level{_LVL}.csv", "w") as _f:
     for (_px, _py), _q in zip(co_out, q_own):
         _f.write(f"{_px:.11e},{_py:.11e},{_uv.get((round(float(_px), 10), round(float(_py), 10)), float('nan')):.11e},{float(_q):.11e}\\n")
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its own (the
-# audit and the hand-in read that exact shape); the descriptive line follows.
+# audit reads that exact shape); the descriptive line follows.
 print(f"NDOF = {len(u_vert)}")
 print(f"DUNE Dirichlet participant: NDOF = {len(u_vert)}  "
       f"max|u| = {float(np.abs(u_vert).max()) if len(u_vert) else 0:.6e}")
@@ -4706,6 +4832,30 @@ def _dealii() -> str:
                   "   an executable that does not exist until you have built it, and\n"
                   "   `DEALII_EXE` is the path to YOUR build, not to a deal.II install.")),
         '''\
+* A deal.II INTERFACE INTEGRAL CAN EVALUATE TO EXACTLY 0.0 ON A NON-HYPERCUBE
+  MESH, with nothing raised and the solve reporting success. Two independent
+  causes, both measured on 9.8.0-pre Release.
+  (a) `ReferenceCell::get_gauss_type_quadrature` returns an EMPTY rule above the
+  order its underlying formula implements: QGaussSimplex and QGaussWedge stop at
+  n_points_1D = 4, QGaussPyramid at 2. The only guard is a debug-only Assert, so
+  a Release build accepts a rule with zero points, `FEValues::reinit` succeeds,
+  and every integral over that cell is exactly zero -- a transmitted flux of 0.0
+  that reads as a legitimately quiet boundary.
+  (b) `MappingQ1` is correct ONLY on hypercubes; on simplex, wedge or pyramid
+  cells its Jacobians are silently wrong, measured as the reference triangle
+  integrating to 1/6 instead of 1/2, the wedge to 0.052778 instead of 1/2, and
+  the pyramid to 4.0 instead of 4/3 -- so the flux is off by a constant factor
+  while the coupling still converges. Use `MappingFE<dim>(FE_SimplexP<dim>(1))`,
+  `MappingFE<dim>(FE_WedgeP<dim>(1))` or `MappingFE<dim>(FE_PyramidP<dim>(1))`
+  to match the cell.
+  Signal: assert `quadrature.size() > 0` before assembling, and compare the sum
+  of `FEValues::JxW` over a cell against `cell->measure()` or
+  `reference_cell().volume()` -- they agree to roundoff when the rule and the
+  mapping are both right, and disagree by a constant factor, or give exactly
+  0.0, when either is wrong. Neither bites a hypercube mesh built with
+  `subdivided_hyper_rectangle` and plain `QGauss`, which is what the contracts
+  here use; both become live the moment a participant is written on simplices.
+
 * THE PARTICIPANT IS TWO FILES: a compiled C++ solver and a thin Python
   wrapper. The wrapper converts imports.json into the solver's plain-text input
   file, runs the executable, and converts its output into exports.json. NEITHER

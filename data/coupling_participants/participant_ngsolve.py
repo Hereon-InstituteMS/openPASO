@@ -14,7 +14,7 @@ import ngsolve                # the MODULE, so ngsolve.ngsglobals.msg_level = 3 
                               # and `from ngsolve import ...` alone leaves `ngsolve` undefined
 import numpy as np
 from netgen.geom2d import SplineGeometry
-from ngsolve import (VERTEX, BilinearForm, GridFunction, H1, LinearForm, Mesh,
+from ngsolve import (BND, VERTEX, BilinearForm, GridFunction, H1, LinearForm, Mesh,
                      NodeId, TaskManager, ds, dx, grad)
 
 
@@ -208,6 +208,30 @@ for d in outer_dofs:
     gfu.vec[int(d)] = T_OUTER
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
 
+# ── WHAT THE SERVED LINES BELOW RELY ON, CHECKED (served) ─ keep this block.
+#    y_if is the coordinate ALONG the interface: x on a horizontal one (the
+#    name is the vertical case's). And the two served lines that integrate over
+#    ds("interface") need a boundary of exactly that name on the interface line:
+#    NGSolve integrates a ds() over a name the mesh does not carry over NOTHING,
+#    with no error, so the Neumann load and the flux weights come out zero.
+y_if = np.asarray(y_if, float)
+if (y_if.size != len(iface_v) or y_if.size < 2 or np.any(np.diff(y_if) <= 0)
+        or abs(y_if[0] - ALO) > TOL or abs(y_if[-1] - AHI) > TOL):
+    raise SystemExit(f"INTERFACE NODES: y_if must hold the coordinate ALONG the interface ({'xy'[AL]}), "
+                     f"one per node of iface_v in the same order, strictly increasing from {ALO:g} to "
+                     f"{AHI:g}; it holds {y_if.size} value(s) for {len(iface_v)} node(s)"
+                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else ""))
+_if_pts = np.array([mesh[_n].point for _el in mesh.Elements(BND) if _el.mat == "interface"
+                    for _n in _el.vertices], float).reshape(-1, 2)
+if (not len(_if_pts) or np.abs(_if_pts[:, AX] - IFACE_X).max() > TOL
+        or _if_pts[:, AL].min() > ALO + TOL or _if_pts[:, AL].max() < AHI - TOL):
+    raise SystemExit("BOUNDARY NAME: two served lines integrate over ds(\"interface\"), and on this mesh "
+                     + ("no boundary carries that name" if not len(_if_pts) else
+                        "that name is not exactly the whole interface line")
+                     + f" (the mesh's boundary names: {sorted(set(mesh.GetBoundaries()))}). Name the edge "
+                     f"on the line {'xy'[AX]} = {IFACE_X:g}, and only that edge, \"interface\": the bcs of "
+                     f"AddRectangle are YOUR names, given in the edge order bottom, right, top, left.")
+
 if SIDE == "dirichlet":
     T_if = sample(imp, "values", T_INIT, y_if)
     for d, t in zip(iface_dofs, T_if):
@@ -339,8 +363,8 @@ if SIDE == "dirichlet" and _chk_qin.shape == _chk_flux.shape and _chk_flux.size 
                      "this side's own assembled system")
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-# The audit and the hand-in read that exact shape, and they read it PER
-# LEVEL: it is how a grader tells a refined mesh from the same mesh run
+# The audit reads that exact shape, and they read it PER
+# LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
 # three times. The LEADING NEWLINE is deliberate -- a program that writes
 # without a trailing newline glues its text onto the front of the next
 # line, and an X11 warning has done exactly that here, turning a correct

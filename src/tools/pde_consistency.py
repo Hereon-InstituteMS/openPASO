@@ -314,7 +314,8 @@ def check_levels(levels: dict, source_expr: str, coefficient,
         # probe sits h/2 inside the face, so a field that IS zero on the
         # boundary still reads |grad u| h/2 there -- percent-level, the same
         # order as a face genuinely carrying a partner's data. The two cases
-        # are not separable by magnitude. Measured on a coupled run that was correct: has a layer of 0.067 of its own scale, went to the sines,
+        # are not separable by magnitude. Measured on a coupled run that was
+        # CORRECT, has a layer of 0.067 of its own scale, went to the sines,
         # and was called INCONSISTENT -- 1.32e-02 -> 5.79e-03 -> 1.06e-02, flat
         # and non-monotone. The same three files under the v below fall
         # 1.25e-02 -> 3.76e-03 -> 1.59e-03, monotone, and read CONSISTENT. The
@@ -393,6 +394,24 @@ def _decide(res: ConsistencyResult) -> ConsistencyResult:
             f"your field satisfies the equation you were given. Note that this "
             f"is what an ANALYTIC or interpolated exact field also gives — it "
             f"says the operator and source match, not that a solver ran.")
+    elif last > 1.0:
+        # A FALL FROM 64 TO 4.7 IS NOT A FIELD SATISFYING ITS EQUATION. The
+        # decay test alone read a uniform field of 7.5e12 (a scalar-transport
+        # deck with no Dirichlet condition) as CONSISTENT because its relative
+        # residual fell 64 -> 34 -> 4.7. A residual above the field's own
+        # scale at the finest level means the field is not a solution at any
+        # level, whatever the trend.
+        res.verdict = "INCONSISTENT"
+        res.explanation = (
+            f"the weak residual is still {last:.3e} at the finest level -- "
+            f"larger than the field's own scale -- after {first:.3e} -> "
+            f"{last:.3e}. A field that solves the stated equation has a "
+            f"residual well below one there however coarse the mesh; a number "
+            f"above one at every level is a field that is not a solution, and "
+            f"the fall does not change that. Look first at the field itself (a "
+            f"uniform or astronomical column is no solution), then at the "
+            f"source term, then the coefficient, then an element-local "
+            f"assembly defect (quadrature, a wrong map).")
     elif last < first / 3.0:
         res.verdict = "CONSISTENT"
         res.explanation = (
@@ -477,6 +496,97 @@ def _adjoint_elastic_flat(lam: float, mu: float, pts, box, direction: int):
     Lvx = -((mu + lam) * Wxy)                # v = (0, W)
     Lvy = -(mu * lap + (mu + lam) * Wyy)
     return (np.zeros_like(W), W), (Lvx, Lvy)
+
+
+def _flat_test_function(pts, box):
+    """W = prod sin^2 on the box and its two first derivatives.
+
+    Value AND normal slope vanish on every face, so both boundary terms of the
+    weak identity go for any field -- the same v `_adjoint_elastic_flat` builds,
+    returned with its gradient because the thermal term below needs div v.
+    """
+    import numpy as np
+    xs = [np.asarray([p[d] for p in pts], dtype=float) for d in range(2)]
+    Ls = [float(hi - lo) for lo, hi in box]
+    a, b = math.pi / Ls[0], math.pi / Ls[1]
+    ax = a * (xs[0] - box[0][0])
+    by = b * (xs[1] - box[1][0])
+    S, T = np.sin(ax) ** 2, np.sin(by) ** 2
+    Sp, Tp = a * np.sin(2 * ax), b * np.sin(2 * by)
+    return S * T, Sp * T, S * Tp
+
+
+def check_levels_thermoelastic(levels: dict, source_x: str, source_y: str,
+                               lam: float, mu: float, beta: float,
+                               box: list) -> ConsistencyResult:
+    """Does a DISPLACEMENT field satisfy -div(sigma_mech(u)) = f - beta grad T?
+
+    `levels` maps a level number to rows of (x, y, T, ux, uy): the delivered
+    temperature rides along because the momentum equation of a thermo-elastic
+    problem carries it. With sigma = 2 mu eps(u) + lambda tr(eps) I - beta T I,
+    equilibrium div(sigma) + f = 0 reads -div(sigma_mech(u)) = f - beta grad T,
+    and against a v whose value and slope vanish on every face
+
+        integral u . (L* v)  =  integral f . v  +  beta * integral T div v ,
+
+    the thermal term integrated by parts once (v = 0 on the boundary). Both
+    momentum directions are tested and the WORST decides the level, as in the
+    isothermal check; beta = 0 reproduces it bit for bit.
+
+    WHY THIS EXISTS. The temperature of a thermo-elastic side was judged
+    against its own heat equation while the displacement of the same side
+    was judged against nothing: a run whose config stated NO body force
+    (source_ux = source_uy = 0) solved a different problem, its displacement
+    came out 400 times too small on both sides and converged cleanly, its
+    temperature was right, and every self-consistency check passed. This is
+    the check that separates a displacement solving the STATED momentum
+    equation from one solving another -- a dropped body force in the deck, a
+    missing thermal term, a wrong lambda or mu -- from the agent's own files
+    and its own config, with no reference.
+    """
+    import numpy as np
+
+    res = ConsistencyResult()
+    for lvl in sorted(levels):
+        rows = levels[lvl]
+        if not rows:
+            res.levels.append(LevelResult(lvl, 0, float("nan"), "no rows"))
+            continue
+        pts = [r[:2] for r in rows]
+        Tf = np.asarray([r[2] for r in rows], dtype=float)
+        ux = np.asarray([r[3] for r in rows], dtype=float)
+        uy = np.asarray([r[4] for r in rows], dtype=float)
+        if not (np.all(np.isfinite(ux)) and np.all(np.isfinite(uy)) and np.all(np.isfinite(Tf))):
+            res.levels.append(LevelResult(
+                lvl, len(rows), float("nan"),
+                "the delivered field carries a non-finite value"))
+            continue
+        weight, why = _detect_midpoint_grid(pts, box)
+        if weight is None:
+            res.levels.append(LevelResult(lvl, len(rows), float("nan"), why))
+            continue
+        fx = _eval_source(source_x, pts, 2)
+        fy = _eval_source(source_y, pts, 2)
+        W, Wx, Wy = _flat_test_function(pts, box)
+        worst, detail = -1.0, ""
+        for direction, f_here, dW in ((0, fx, Wx), (1, fy, Wy)):
+            (_vx, _vy), (Lvx, Lvy) = _adjoint_elastic_flat(lam, mu, pts, box,
+                                                           direction)
+            lhs = float(np.sum(ux * Lvx + uy * Lvy) * weight)
+            rhs = float((np.sum(f_here * W) + float(beta) * np.sum(Tf * dW))
+                        * weight)
+            # RELATIVE TO THE LARGER SIDE, not to the stated load alone: a
+            # config that states no body force under a loaded field makes the
+            # stated side tiny, and a ratio against it was refused as "not
+            # comparable" instead of read as the order-one residual it is.
+            rel = abs(lhs - rhs) / max(abs(lhs), abs(rhs), 1e-300)
+            if rel > worst:
+                worst, detail = rel, (f"worst component is the "
+                                      f"{'x' if direction == 0 else 'y'} "
+                                      f"momentum equation: "
+                                      f"lhs={lhs:.6e} rhs={rhs:.6e}")
+        res.levels.append(LevelResult(lvl, len(rows), worst, detail))
+    return _decide(res)
 
 
 def check_levels_elastic(levels: dict, source_x: str, source_y: str,

@@ -452,7 +452,10 @@ nu = fem.Constant(domain, default_scalar_type(nu_value))
 # above versus the mean of the profile this script actually imposes, so
 # integrate the imposed profile numerically and compare the two.
 _ys = np.linspace(0.0, H, 2001)
-_ubar_numeric = np.trapezoid(4 * U_m * _ys * (H - _ys) / H**2, _ys) / H
+# numpy 2.0 renamed trapz to trapezoid; the FEniCSx environment may still ship numpy 1.x
+# (1.26.4 here), where trapezoid does not exist and the template stopped before it solved
+_trapz = getattr(np, "trapezoid", None) or np.trapz
+_ubar_numeric = _trapz(4 * U_m * _ys * (H - _ys) / H**2, _ys) / H
 if domain.comm.rank == 0:
     print(f"inlet peak U_m = {{U_m:.6g}}, analytic mean U_bar = {{U_bar:.6g}}, "
           f"D = {{D:.6g}}, nu = {{nu_value:.6e}}")

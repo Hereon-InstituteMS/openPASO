@@ -691,6 +691,7 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                      f"work directories of {', '.join(warm_seeded)} (a previous run's interface state, "
                      f"typically the previous mesh level's); the relaxation starts fresh at iteration 1")
 
+    stalled_at = None
     for it in range(1, max_iter + 1):
         new_exports: dict[str, InterfaceData] = {}
         for p in participants:
@@ -875,6 +876,19 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
             return _finish(converged=True, iterations=it, residual=res,
                            exports={n: e.to_dict() for n, e in exports.items()},
                            history=history, sensitivity=sens)
+        # A RESIDUAL THAT HAS STOPPED FALLING STOPS THE LOOP. Measured: a
+        # coupling whose outer boundary condition was never applied iterated 150
+        # times at a residual of 3e-2 -- about twelve minutes of a forty-five
+        # minute run -- and ended where it stood after twenty. A deterministic
+        # fixed-point iteration whose residual no longer falls does not converge
+        # by iterating on. Not with a noise floor in play: a sampled participant
+        # plateaus by design, and that route re-measures its floor instead.
+        if (floor is None and not noise_replicates and it >= _STALL_MIN_ITERS
+                and it < max_iter):
+            plateau = _plateaued(history)
+            if plateau is not None:
+                stalled_at = (it, plateau)
+                break
 
     if nonfinite_hits > _MAX_NONFINITE_WARNINGS:
         warnings.append(f"... {nonfinite_hits - _MAX_NONFINITE_WARNINGS} further "
@@ -921,8 +935,17 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                     exports={n: e.to_dict() for n, e in exports.items()},
                     history=history, sensitivity=sens)
 
-    err_msg = (f"did not converge to tol={tol_eff:g} in {max_iter} iters "
-               f"(last residual {last:.2e}) — result is NOT trustworthy")
+    if stalled_at is not None:
+        _it, (_early, _late) = stalled_at
+        err_msg = (f"did not converge to tol={tol_eff:g}: STOPPED at iteration {_it} of "
+                   f"{max_iter}, because the residual stopped falling (median "
+                   f"{_late:.2e} over the last {_STALL_WINDOW} iterations against "
+                   f"{_early:.2e} over the {_STALL_WINDOW} before; last residual "
+                   f"{last:.2e}). A fixed-point iteration whose residual no longer "
+                   f"falls does not converge by iterating on — result is NOT trustworthy")
+    else:
+        err_msg = (f"did not converge to tol={tol_eff:g} in {max_iter} iters "
+                   f"(last residual {last:.2e}) — result is NOT trustworthy")
     if floor is None and _stalled(history):
         # The residual stopped falling rather than never having fallen. That is
         # what a sampling floor looks like from outside, and it is also what a
@@ -933,7 +956,9 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                     "estimator, re-run with noise_replicates>=2 so the driver "
                     "can measure its residual floor and judge against it "
                     "instead of against an unreachable tol")
-    return _finish(converged=False, iterations=max_iter, residual=last,
+    return _finish(converged=False,
+                   iterations=(stalled_at[0] if stalled_at is not None else max_iter),
+                   residual=last,
                    exports={n: e.to_dict() for n, e in exports.items()},
                    history=history, error=err_msg)
 
@@ -1182,6 +1207,29 @@ def _stat(history: list[float], block: int) -> float:
         # Not enough post-NaN history yet to fill the block; refuse to stop.
         return float("inf")
     return float(sum(vals) / len(vals))
+
+
+# A RESIDUAL THAT HAS STOPPED FALLING STOPS THE LOOP (see run_coupling). Not before
+# this many iterations, over two windows of this many, and "stopped" means the
+# later window's median is at least this fraction of the earlier one's. A coupling
+# that still contracts at 0.98 per iteration falls to 0.82 over a window and is
+# never stopped; one that needs slower than that cannot reach a tolerance of
+# 1e-6 inside any iteration budget anyone sets.
+_STALL_MIN_ITERS = 30
+_STALL_WINDOW = 10
+_STALL_RATIO = 0.9
+
+
+def _plateaued(history: list[float], window: int = _STALL_WINDOW,
+               ratio: float = _STALL_RATIO):
+    """(early, late) medians when the last `window` residuals sit at `ratio` or
+    more of the `window` before them, else None. Finite residuals only."""
+    vals = [v for v in history if np.isfinite(v)]
+    if len(vals) < 2 * window:
+        return None
+    early = float(np.median(vals[-2 * window:-window]))
+    late = float(np.median(vals[-window:]))
+    return (early, late) if early > 0 and late >= ratio * early else None
 
 
 def _stalled(history: list[float], window: int = 12, floor_window: int = 6) -> bool:

@@ -158,16 +158,10 @@ def main() -> None:
 
     # Outward normal flux density q = -(K grad T).n on the interface.
     #
-    # WHY NOT A DIFFERENCE QUOTIENT. That is what this file used to do:
-    # q = -K * (T_if - T_near) / dx, a one-sided backward difference. It is only
-    # O(h) accurate, and so is the L2 projection of grad T that the other
-    # participants used, for the same reason: the gradient of a P1 solution is
-    # only O(h) accurate ON the boundary — the superconvergence points are
-    # interior — and the boundary trace is exactly what the coupling reads.
-    # Measured against a manufactured solution with a known exact interface
-    # flux, that recovery converges at order ~1 while the consistent flux below
-    # converges at ~2, so the recovery, not the physics and not the partner, was
-    # setting the answer.
+    # NOT A DIFFERENCE QUOTIENT OR A PROJECTED GRADIENT: the gradient of a P1
+    # solution is only O(h) accurate ON the boundary, which is exactly what the
+    # coupling reads. Measured against a manufactured solution with a known
+    # exact interface flux: order ~1 for those, ~2 for the consistent flux below.
     #
     # THE CONSISTENT (REACTION) FLUX. From
     #     a(u,v) - (f,v) = int_dOmega (K grad u . n) v ds = -int_Gamma qn v ds
@@ -234,8 +228,8 @@ def main() -> None:
                          "this side's own assembled system")
 
     # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-    # The audit and the hand-in read that exact shape, and they read it PER
-    # LEVEL: it is how a grader tells a refined mesh from the same mesh run
+    # The audit reads that exact shape, and they read it PER
+    # LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
     # three times. A number inside a prose sentence does not count, and a
     # wrong number is worse than none -- one coupled run that was right in
     # every other respect reported NDOF = 1 at all three levels, and its

@@ -38,7 +38,7 @@ import ngsolve                # the MODULE, so ngsolve.ngsglobals.msg_level = 3 
                               # and `from ngsolve import ...` alone leaves `ngsolve` undefined
 import numpy as np
 from netgen.geom2d import SplineGeometry
-from ngsolve import (VERTEX, BilinearForm, CF, GridFunction, InnerProduct,
+from ngsolve import (BND, VERTEX, BilinearForm, CF, GridFunction, InnerProduct,
                      LinearForm, Mesh, NodeId, TaskManager, VectorH1, ds, dx,
                      grad)
 
@@ -108,6 +108,67 @@ if Path("config.json").is_file() or os.environ.get("OPENPASO_CONFIG_JSON"):
         NY = int(_cfg.get("ny", NY))
     except (ValueError, TypeError, json.JSONDecodeError):
         pass
+
+# ── THE PROBLEM'S DATA ARE DATA, NOT CODE (served). config.json may carry this
+#    subdomain's box, interface, material, outer displacement and body force AS
+#    THE TASK WRITES THEM -- side, partner; x0, x1, y0, y1; iface ("left"|"right"|"bottom"|"top",
+#    or the coordinate of the interface line) and iface_axis ("x"|"y"); E and nu,
+#    or lam and mu; udx, udy (the four polynomial coefficients of the outer
+#    displacement); source_ux, source_uy as strings in x and y (`^` allowed) --
+#    and when it does they override the constants and the B_SRC body above.
+#    Measured on the thermo-elastic family: the side written as CODE solved a
+#    textbook sine source while its own config.json held the task's polynomials;
+#    a source typed twice is transcribed once wrong. The audit's momentum check
+#    reads the same keys, so a side that states them is the side it can judge.
+def _expr_fn(expr):
+    """A NumPy function of (x, y) from an expression string as a task writes it."""
+    src = str(expr).replace("^", "**")
+    code = compile(src, "<source>", "eval")
+    names = {"pi": np.pi, "sin": np.sin, "cos": np.cos, "exp": np.exp, "sqrt": np.sqrt,
+             "abs": np.abs, "log": np.log, "tanh": np.tanh, "cosh": np.cosh, "sinh": np.sinh}
+    def f(x, y):
+        env = dict(names); env["x"] = x; env["y"] = y
+        return eval(code, {"__builtins__": {}}, env) + 0.0 * x
+    return f
+try:
+    _cfg_all = json.loads(Path("config.json").read_text() or "{}") if Path("config.json").is_file() else {}
+    _cfg_all.update(json.loads(os.environ.get("OPENPASO_CONFIG_JSON") or "{}"))
+except (ValueError, TypeError, json.JSONDecodeError):
+    _cfg_all = {}
+if all(_k in _cfg_all for _k in ("x0", "x1", "y0", "y1")):
+    X0, X1, Y0, Y1 = (float(_cfg_all[_k]) for _k in ("x0", "x1", "y0", "y1"))
+if str(_cfg_all.get("iface_axis", "")).strip().lower()[:1] in ("x", "y"):
+    IFACE_AXIS = str(_cfg_all["iface_axis"]).strip().lower()[:1]
+_ifc = str(_cfg_all.get("iface", "")).strip().lower()
+if _ifc in ("left", "right", "bottom", "top"):
+    IFACE_AXIS = ("x" if _ifc in ("left", "right") else "y")
+    IFACE_X = {"left": X0, "right": X1, "bottom": Y0, "top": Y1}[_ifc]
+elif _ifc:
+    try:
+        IFACE_X = float(_ifc)
+    except ValueError:
+        pass
+if str(_cfg_all.get("side", "")).strip().lower() in ("dirichlet", "neumann"):
+    SIDE = str(_cfg_all["side"]).strip().lower()
+if str(_cfg_all.get("partner", "")).strip():
+    PARTNER = str(_cfg_all["partner"]).strip()
+if "E" in _cfg_all and "nu" in _cfg_all:
+    E_MOD, NU = float(_cfg_all["E"]), float(_cfg_all["nu"])
+elif ("lam" in _cfg_all or "lambda" in _cfg_all) and "mu" in _cfg_all:
+    _lam, _mu = float(_cfg_all.get("lam", _cfg_all.get("lambda"))), float(_cfg_all["mu"])
+    E_MOD, NU = _mu * (3.0 * _lam + 2.0 * _mu) / (_lam + _mu), _lam / (2.0 * (_lam + _mu))
+for _nm, _key in (("UDX", "udx"), ("UDY", "udy")):
+    if isinstance(_cfg_all.get(_key), (list, tuple)) and len(_cfg_all[_key]) == 4:
+        globals()[_nm] = tuple(float(_c) for _c in _cfg_all[_key])
+_SOURCES_FROM = "code (the B_SRC body above)"
+if _cfg_all.get("source_ux") is not None and _cfg_all.get("source_uy") is not None:
+    _bx_cfg, _by_cfg = _expr_fn(_cfg_all["source_ux"]), _expr_fn(_cfg_all["source_uy"])
+    def B_SRC(x, y):                                   # noqa: F811 -- config wins over the body above
+        return _bx_cfg(x, y), _by_cfg(x, y)
+    _SOURCES_FROM = "config.json"
+print(f"SOURCES IN USE: from {_SOURCES_FROM}"
+      + (f"; b_x = {str(_cfg_all.get('source_ux'))[:60]}; b_y = {str(_cfg_all.get('source_uy'))[:60]}"
+         if _cfg_all.get("source_ux") is not None else "; b = the B_SRC body above (config carries no source_ux/source_uy)"))
 
 UI_X, UI_Y = 0.0, 0.0     # iteration-1 fallback interface displacement
 TI_X, TI_Y = 0.0, 0.0     # iteration-1 fallback interface traction export
@@ -263,10 +324,35 @@ gfu = GridFunction(fes)                    # also carries the Dirichlet data
 gfu.vec[:] = 0.0
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
 
+# ── WHAT THE SERVED LINES BELOW RELY ON, CHECKED (served) ─ keep this block.
+#    y_if is the coordinate ALONG the interface: x on a horizontal one (the
+#    name is the vertical case's). And the two served lines that integrate over
+#    ds("interface") need a boundary of exactly that name on the interface line:
+#    NGSolve integrates a ds() over a name the mesh does not carry over NOTHING,
+#    with no error, so the Neumann load and the traction weights come out zero.
+y_if = np.asarray(y_if, float)
+if (y_if.size != len(iface_v) or y_if.size < 2 or np.any(np.diff(y_if) <= 0)
+        or abs(y_if[0] - ALO) > TOL or abs(y_if[-1] - AHI) > TOL):
+    raise SystemExit(f"INTERFACE NODES: y_if must hold the coordinate ALONG the interface ({'xy'[AL]}), "
+                     f"one per node of iface_v in the same order, strictly increasing from {ALO:g} to "
+                     f"{AHI:g}; it holds {y_if.size} value(s) for {len(iface_v)} node(s)"
+                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else ""))
+_ends = (np.abs(y_if - ALO) <= TOL) | (np.abs(y_if - AHI) <= TOL)   # the interface's two ends
+_if_pts = np.array([mesh[_n].point for _el in mesh.Elements(BND) if _el.mat == "interface"
+                    for _n in _el.vertices], float).reshape(-1, 2)
+if (not len(_if_pts) or np.abs(_if_pts[:, AX] - IFACE_X).max() > TOL
+        or _if_pts[:, AL].min() > ALO + TOL or _if_pts[:, AL].max() < AHI - TOL):
+    raise SystemExit("BOUNDARY NAME: two served lines integrate over ds(\"interface\"), and on this mesh "
+                     + ("no boundary carries that name" if not len(_if_pts) else
+                        "that name is not exactly the whole interface line")
+                     + f" (the mesh's boundary names: {sorted(set(mesh.GetBoundaries()))}). Name the edge "
+                     f"on the line {'xy'[AX]} = {IFACE_X:g}, and only that edge, \"interface\": the bcs of "
+                     f"AddRectangle are YOUR names, given in the edge order bottom, right, top, left.")
+
 if SIDE == "dirichlet":
     u_if = sample(imp, "values", (UI_X, UI_Y), y_if)
     for k, vtx in enumerate(iface_v):
-        if corner[k]:
+        if _ends[k]:
             continue
         gfu.vec[int(vdof[vtx, 0])] = float(u_if[k, 0])
         gfu.vec[int(vdof[vtx, 1])] = float(u_if[k, 1])
@@ -300,6 +386,18 @@ with TaskManager():
     gfu.vec.data += a.mat.Inverse(fes.FreeDofs(),
                                   inverse="sparsecholesky") * res
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
+
+    # ── DID THE PARTNER'S DISPLACEMENT ENTER THE SOLVE? (served) ─ keep this block.
+    #    A Dirichlet side whose solve freed the interface dofs returns its own
+    #    answer and the coupling "converges" to two fields that disagree there.
+    if SIDE == "dirichlet":
+        _gap = max((abs(float(gfu.vec[int(vdof[vtx, c])]) - float(u_if[k, c]))
+                    for k, vtx in enumerate(iface_v) if not _ends[k] for c in (0, 1)), default=0.0)
+        if _gap > 1e-9 * max(1.0, float(np.abs(u_if).max())):
+            raise SystemExit("EXPORT SELF-CHECK: the partner's displacement is not in the solution at the "
+                             "interface nodes: the interface must be a Dirichlet boundary of the space "
+                             "(dirichlet='outer|interface') and the solve must use fes.FreeDofs(); a solve "
+                             "that frees them returns this side's own answer and couples to nothing")
 
     # Interface traction export q_out = -(sigma . n_own).
     #
@@ -381,20 +479,22 @@ with TaskManager():
             else:
                 ok[k, c] = False
 
-    # THE TWO INTERFACE CORNERS ARE ON THE OUTER DIRICHLET BOUNDARY (a y-face),
-    # so their rows carry the OUTER reaction too and their residual is not this
-    # interface's traction. Take the nearest interior interface node rather
-    # than exporting a corner value that is physically a different quantity.
-    # This holds on BOTH sides: the corners are outer-Dirichlet either way.
-    suspect = np.isin(iface_v, outer_v) | ~ok.all(axis=1)
+    # THE TWO INTERFACE CORNERS ARE ON THE OUTER DIRICHLET BOUNDARY (the faces
+    # the interface ends on), so their rows carry the OUTER reaction too and
+    # their residual is not this interface's traction. Take the nearest interior
+    # interface node rather than exporting a corner value that is physically a
+    # different quantity. This holds on BOTH sides: the corners are
+    # outer-Dirichlet either way. They are found by position (_ends), so an
+    # outer_v that leaves them out does not let them through.
+    suspect = _ends | np.isin(iface_v, outer_v) | ~ok.all(axis=1)
     good = np.where(~suspect)[0]
     if len(good):
         for i in np.where(suspect)[0]:
             Q[i] = Q[good[np.argmin(np.abs(good - i))]]
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-# The audit and the hand-in read that exact shape, and they read it PER
-# LEVEL: it is how a grader tells a refined mesh from the same mesh run
+# The audit reads that exact shape, and they read it PER
+# LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
 # three times. The LEADING NEWLINE is deliberate -- a program that writes
 # without a trailing newline glues its text onto the front of the next
 # line, and an X11 warning has done exactly that here, turning a correct

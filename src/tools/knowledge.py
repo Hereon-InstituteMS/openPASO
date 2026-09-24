@@ -308,7 +308,7 @@ IF YOU HAVE DELIVERED AND WANT TO KNOW WHETHER IT IS RIGHT
         separated a third of all result sets.
      b. IS YOUR EVALUATOR ITSELF SECOND ORDER? Push a function you KNOW (say
         x(1-x)y(1-y)) through the SAME code that produces your probe values.
-        Measured on a 44x44 grid at N = 8, 16, 32:
+        Measured on a fine midpoint probe grid over three halvings of a coarse mesh:
             nearest-node lookup    5.39e-3 -> 2.66e-3 -> 1.34e-3   order ~1.0
             linear/shape function  1.09e-3 -> 2.73e-4 -> 6.85e-5   order ~2.0
         Your evaluator's own order BOUNDS the order you can report.
@@ -565,7 +565,7 @@ TEN RULES THAT APPLY WHATEVER YOU ASKED FOR
    powers are `^` not `**`, constants are the solver's own (lowercase `pi`),
    and a wrong operator is often SILENT: the numeric prefix is taken, the rest
    dropped, and the run succeeds with the wrong load. Rewrite every term of a
-   source you copied out of the task text.
+   source you copied out of your problem statement.
 
 3. DO NOT CONCLUDE A SOLVER IS BROKEN. Nearly every "broken solver" seen in
    development was an unread log: capture BOTH streams (`cmd > out.log 2>&1`),
@@ -651,7 +651,7 @@ SEVEN RULES THAT APPLY WHATEVER YOU ASKED FOR
    powers are `^` and not `**` (`-1*X^2`, never `-1*X**2`), and `pi`, `sin`
    and `exp` may not exist. A wrong operator is often SILENT: the numeric
    prefix is taken and the rest discarded, so the run succeeds with the wrong
-   load. Rewrite every term of a source you copied out of the task text.
+   load. Rewrite every term of a source you copied out of your problem statement.
 
 3. DO NOT CONCLUDE A SOLVER IS BROKEN. Almost every "broken solver" seen in
    development was a missing capture or an unread log. Redirect BOTH streams
@@ -735,9 +735,9 @@ Full detail, per backend: knowledge(topic="physics", solver=..., physics=...)
    each measured:
      * NGSolve: after `from ngsolve import *`, ANY loop that assigns `x` or
        `y` rebinds the symbolic coordinates to floats, so your source becomes
-       a CONSTANT. Verified: `type(f)` is CoefficientFunction before a
-       44x44 probe-point loop and `float` after, value 0.02514662, with x and
-       y both left at 0.9886363636. `CoefficientFunction((float, float))` is
+       a CONSTANT. Verified: `type(f)` is CoefficientFunction before the
+       probe-point loop and `float` after, value 0.02514662, with x and y
+       both left at 0.9886363636 -- the last probe the loop visited. `CoefficientFunction((float, float))` is
        accepted silently. A constant body force on a fully-Dirichlet
        incompressible domain gives u identically 0 -- measured 7.16e-17,
        3.60e-17, 1.30e-17 at the three levels, order 0.0000 -- against
@@ -794,11 +794,12 @@ Full detail, per backend: knowledge(topic="physics", solver=..., physics=...)
 
     CHECK IT FOR FREE, no reference needed: count the DISTINCT values you
     wrote. Nearest-node sampling on a mesh of N cells per side can only ever
-    return (N-1)^2 + 1 distinct interior values, so 1936 probe points collapse
-    to 50, 226 and 962 at N = 8, 16, 32. Measured on real result sets: four
-    reported exactly 50/1936, 226/1936, 962/1936; a correct one reported
-    1908/1928/1936. If distinct is far below the probe count, you sampled
-    nodes.
+    return (N-1)^2 + 1 distinct interior values, so a probe grid of a few
+    thousand points collapses to a few dozen, a few hundred and under a
+    thousand distinct values over three halvings -- exactly (N-1)^2 + 1 each
+    time. Measured on real result sets: four reported exactly that count at
+    every level; a correct one reported close to one distinct value per
+    probe. If distinct is far below the probe count, you sampled nodes.
 
     THE FIX IS POST-PROCESSING -- you do not re-run the solver, you re-read
     it. Every backend already has the call:

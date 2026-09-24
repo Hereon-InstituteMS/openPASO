@@ -61,12 +61,15 @@ BETA      = 1.0           # thermal stress coefficient: sigma_tot = sigma_el - B
 
 
 def F_T(x, y):
-    """Heat source f_T(x, y) as NumPy on arrays; `0.0 * x` for none."""
+    """Heat source f_T(x, y) as NumPy on arrays; `0.0 * x` for none.
+    PREFER config.json: state the task's f_T there as source_T (a string in x, y)
+    and this body is never used -- see the served block below the constants."""
     return 0.0 * x
 
 
 def F_U(x, y):
-    """Body force (f_x, f_y) as two NumPy arrays; zeros for none."""
+    """Body force (f_x, f_y) as two NumPy arrays; zeros for none.
+    PREFER config.json: source_ux and source_uy as the task writes them."""
     return 0.0 * x, 0.0 * y
 T_OUTER   = 0.0           # T on the whole NON-interface boundary
 UX_OUTER, UY_OUTER = 0.0, 0.0   # u on the whole NON-interface boundary
@@ -88,6 +91,55 @@ if Path("config.json").is_file() or os.environ.get("OPENPASO_CONFIG_JSON"):
         NY = int(_cfg.get("ny", NY))
     except (ValueError, TypeError, json.JSONDecodeError):
         pass
+
+# ── THE PROBLEM'S DATA ARE DATA, NOT CODE (served). config.json may carry this
+#    subdomain's box, coefficients and source terms AS THE TASK WRITES THEM --
+#    x0, x1, y0, y1, k, lam, mu, beta, iface ("left"|"right"), T_outer, and
+#    source_T, source_ux, source_uy as strings in x and y (`^` allowed) -- and
+#    when it does they override the constants and the F_T / F_U bodies above.
+#    Measured on two coupled runs: the side written as CODE solved a textbook
+#    sine source while its own config.json held the task's polynomials; a source
+#    typed twice is transcribed once wrong. The audit's equation check reads the
+#    same keys, so a side that states them is also the side it can judge.
+def _expr_fn(expr):
+    """A NumPy function of (x, y) from an expression string as a task writes it."""
+    src = str(expr).replace("^", "**")
+    code = compile(src, "<source>", "eval")
+    names = {"pi": np.pi, "sin": np.sin, "cos": np.cos, "exp": np.exp, "sqrt": np.sqrt,
+             "abs": np.abs, "log": np.log, "tanh": np.tanh, "cosh": np.cosh, "sinh": np.sinh}
+    def f(x, y):
+        env = dict(names); env["x"] = x; env["y"] = y
+        return eval(code, {"__builtins__": {}}, env) + 0.0 * x
+    return f
+try:
+    _cfg_all = json.loads(Path("config.json").read_text() or "{}") if Path("config.json").is_file() else {}
+    _cfg_all.update(json.loads(os.environ.get("OPENPASO_CONFIG_JSON") or "{}"))
+except (ValueError, TypeError, json.JSONDecodeError):
+    _cfg_all = {}
+if all(_k in _cfg_all for _k in ("x0", "x1", "y0", "y1")):
+    X0, X1, Y0, Y1 = (float(_cfg_all[_k]) for _k in ("x0", "x1", "y0", "y1"))
+    _ifc = str(_cfg_all.get("iface", "")).strip().lower()
+    IFACE_X = X0 if _ifc == "left" else X1 if _ifc == "right" else IFACE_X
+for _nm, _key in (("K", "k"), ("LAM", "lam"), ("MU", "mu"), ("BETA", "beta"), ("T_OUTER", "T_outer")):
+    if _key in _cfg_all:
+        globals()[_nm] = float(_cfg_all[_key])
+_SOURCES_FROM = "code (the F_T / F_U bodies above)"
+if _cfg_all.get("source_T") is not None:
+    _fT_cfg = _expr_fn(_cfg_all["source_T"])
+    def F_T(x, y):                                   # noqa: F811 -- config wins over the body above
+        return _fT_cfg(x, y)
+    _SOURCES_FROM = "config.json"
+if _cfg_all.get("source_ux") is not None and _cfg_all.get("source_uy") is not None:
+    _fx_cfg, _fy_cfg = _expr_fn(_cfg_all["source_ux"]), _expr_fn(_cfg_all["source_uy"])
+    def F_U(x, y):                                   # noqa: F811
+        return _fx_cfg(x, y), _fy_cfg(x, y)
+    _SOURCES_FROM = "config.json"
+# ALL THREE SOURCES ARE ECHOED: a run whose config carried the heat source and "0.0" for both body-force
+# components solved a different momentum problem with the temperature right, and the console said f_T only.
+print(f"SOURCES IN USE: from {_SOURCES_FROM}"
+      + (f"; f_T = {str(_cfg_all.get('source_T'))[:90]}" if _cfg_all.get("source_T") is not None else "")
+      + (f"; f_ux = {str(_cfg_all.get('source_ux'))[:60]}; f_uy = {str(_cfg_all.get('source_uy'))[:60]}"
+         if _cfg_all.get("source_ux") is not None else "; f_u = the F_U body above (config carries no source_ux/source_uy)"))
 
 OUTER_X = X0 if abs(IFACE_X - X1) < abs(IFACE_X - X0) else X1
 S = 1.0 if IFACE_X > OUTER_X else -1.0     # outward normal at the interface = S*e_x
@@ -357,9 +409,16 @@ if SIDE == "neumann" and _qin.size:
     for c in range(3):
         _sc = np.abs(_qa[_int, c]).max()
         if _sc > 0 and np.abs(Q[_int, c] + _qa[_int, c]).max() / _sc > 0.3:
-            raise SystemExit(f"EXPORT SELF-CHECK: component {c} of the recovered flux does not match the "
-                             f"load applied (max|q_own + q_imported| / max|q_imported| > 0.3): the "
-                             f"imported datum entered the form wrongly scaled or on the wrong facets")
+            # IT REPORTS, IT DOES NOT EXIT -- the same rule as the scalar sides.
+            # This ratio is measured against the PARTNER'S CURRENT iterate, so
+            # it can be large at an early or a stalling iterate while the form is
+            # correct, and it is evaluated after the solve has already succeeded.
+            # Exiting here discards a finished level; the coupling's own residual
+            # history is what decides whether the exchange is converging.
+            print(f"EXPORT SELF-CHECK WARNING: component {c} of the recovered flux does not match the "
+                  f"load applied (max|q_own + q_imported| / max|q_imported| > 0.3). If this persists at "
+                  f"every iteration, the imported datum entered the form wrongly scaled or on the wrong "
+                  f"facets. The export CONTINUES so this level is not lost.", file=sys.stderr)
 if SIDE == "dirichlet" and _qin.shape == Q.shape and Q.size and np.array_equal(Q, -_qin):
     raise SystemExit("EXPORT SELF-CHECK: the exported flux is the partner's array negated, bit for bit")
 

@@ -292,7 +292,7 @@ if SIDE == "dirichlet" and _chk_qin.shape == _chk_flux.shape and _chk_flux.size 
                      "this side's own assembled system")
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN, printed
-# PER LEVEL. It is how a grader tells a refined mesh from the same mesh run
+# PER LEVEL. It is how anyone checking the result tells a refined mesh from the same mesh run
 # three times, and a number inside a prose sentence does not count. The
 # LEADING NEWLINE is deliberate: a program that writes to the terminal
 # without a trailing newline glues its text onto the front of the next

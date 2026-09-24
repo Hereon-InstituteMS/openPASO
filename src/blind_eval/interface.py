@@ -284,10 +284,10 @@ def recover_normal_derivative(field_pts, field_vals, iface_pts,
     function keys the field columns on the EXACT tangential coordinate of each
     interface probe, so it only works when the interface probes sit on the
     field grid's tangential lines.  They do not, and by construction: measured
-    on ``C8_27b_BARE_seed4``, the field grid for side A is the 44x44 midpoint
-    rule on (0, 0.625) x (0, 1), giving y = (j+0.5)/44, while the interface
-    probes are y = 1/4 + (i+0.5)/88 — **0 of 44 interface probes share a
-    tangential coordinate with the field grid.**  So the recovery returned
+    on a recorded coupled submission, the field grid is a midpoint rule on the
+    subdomain box while the interface probes are a midpoint rule on a
+    sub-interval of the interface at twice the density — **no interface probe
+    shares a tangential coordinate with the field grid.**  So the recovery returned
     ``None`` for every point of every coupled submission ever graded, and the
     consistency check downstream could only ever answer NOT_ASSESSED.
 

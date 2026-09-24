@@ -68,6 +68,15 @@ class ReviewRecord:
     findings: str
     created: float
     ttl_s: float = DEFAULT_TTL_S
+    # THE TEXT THE DIGEST WAS TAKEN OF, so a run whose digest does not match
+    # can say WHICH PART of the setup changed instead of only that something
+    # did. Measured 2026-09-19: ten of ten coupled runs were told "a critic
+    # review exists for this solver but NOT for this setup" with no way for
+    # the caller -- or for us reading the record afterwards -- to see what
+    # differed. Server-side only; it is never served, it is the caller's own
+    # arguments, and it is what makes the next mismatch diagnosable in one
+    # reply rather than in an afternoon.
+    setup_text: str = ""
     consumed_by: str | None = None
     consumed_at: float | None = None
 
@@ -85,7 +94,8 @@ class CriticRegistry:
 
     # ── issuing ──────────────────────────────────────────────────────────
     def submit_review(self, *, solver: str, findings: str,
-                      digest: str, ttl_s: float = DEFAULT_TTL_S) -> ReviewRecord:
+                      digest: str, ttl_s: float = DEFAULT_TTL_S,
+                      setup_text: str = "") -> ReviewRecord:
         text = (findings or "").strip()
         if len(text) < MIN_FINDINGS_CHARS:
             raise CriticGateError(
@@ -94,7 +104,7 @@ class CriticRegistry:
                 f"An empty approval is indistinguishable from no review.")
         rec = ReviewRecord(token=secrets.token_urlsafe(24), digest=digest,
                            solver=solver, findings=text, created=time.time(),
-                           ttl_s=ttl_s)
+                           ttl_s=ttl_s, setup_text=setup_text or "")
         self._reviews[rec.token] = rec
         self._append_audit("review_submitted", rec)
         return rec

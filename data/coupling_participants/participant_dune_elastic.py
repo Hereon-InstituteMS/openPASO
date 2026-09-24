@@ -316,15 +316,33 @@ gdofs[2 * outer_n] = UDX[0] + UDX[1] * ox + UDX[2] * oy + UDX[3] * oy * oy
 gdofs[2 * outer_n + 1] = UDY[0] + UDY[1] * ox + UDY[2] * oy + UDY[3] * oy * oy
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
 
+# ── WHAT THE SERVED LINES BELOW RELY ON, CHECKED (served) ─ keep this block.
+#    y_if is the coordinate ALONG the interface: x on a horizontal one (the
+#    name is the vertical case's). iface_bc_n is iface_n without its two end
+#    nodes, in the same order. The boundary indicators below are written on
+#    AX and AL, so they follow IFACE_AXIS.
+y_if = np.asarray(y_if, float)
+if (y_if.size != len(iface_n) or y_if.size < 2 or np.any(np.diff(y_if) <= 0)
+        or abs(y_if[0] - ALO) > TOL or abs(y_if[-1] - AHI) > TOL):
+    raise SystemExit(f"INTERFACE NODES: y_if must hold the coordinate ALONG the interface ({'xy'[AL]}), "
+                     f"one per node of iface_n in the same order, strictly increasing from {ALO:g} to "
+                     f"{AHI:g}; it holds {y_if.size} value(s) for {len(iface_n)} node(s)"
+                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else ""))
+_ends = (np.abs(y_if - ALO) <= TOL) | (np.abs(y_if - AHI) <= TOL)   # the interface's two ends
+if not np.array_equal(np.asarray(iface_bc_n), np.asarray(iface_n)[~_ends]):
+    raise SystemExit("INTERFACE NODES: iface_bc_n must be iface_n without the interface's two end "
+                     "nodes, in the same order: the Dirichlet branch below writes the partner's values "
+                     "into it row by row")
+
 if SIDE == "dirichlet":
     u_if = sample(imp, "values", (UI_X, UI_Y), y_if)
-    gdofs[2 * iface_bc_n] = u_if[~corner, 0]
-    gdofs[2 * iface_bc_n + 1] = u_if[~corner, 1]
+    gdofs[2 * iface_bc_n] = u_if[~_ends, 0]
+    gdofs[2 * iface_bc_n + 1] = u_if[~_ends, 1]
     # the interface corners keep the OUTER value already written above
-    bc_where = conditional(lt(abs(x[0] - OUTER_X), EPS), 1,
-                           conditional(lt(abs(x[1] - Y0), EPS), 1,
-                                       conditional(lt(abs(x[1] - Y1), EPS), 1,
-                                                   on_iface)))
+    bc_where = conditional(lt(abs(x[AX] - OUTER_X), EPS), 1,
+                           conditional(lt(abs(x[AL] - ALO), EPS), 1,
+                                       conditional(lt(abs(x[AL] - AHI), EPS), 1,
+                                                   conditional(lt(abs(x[AX] - IFACE_X), EPS), 1, 0))))
 else:
     t_if = sample(imp, "normal_fluxes", (TI_X, TI_Y), y_if)
     tfun = space.interpolate(as_vector([0.0, 0.0]), name="iface_traction")
@@ -335,8 +353,10 @@ else:
     # APPLY the partner's numbers UNCHANGED (+ integral(g . v) ds_interface).
     # `b_vol` above still holds the VOLUME load alone — the traction recovery
     # subtracts that, not this, and the distinction is the whole point.
-    b = b + conditional(lt(abs(x[0] - IFACE_X), EPS), dot(tfun, v), 0.0) * ds
-    bc_where = on_outer
+    b = b + conditional(lt(abs(x[AX] - IFACE_X), EPS), dot(tfun, v), 0.0) * ds
+    bc_where = conditional(lt(abs(x[AX] - OUTER_X), EPS), 1,
+                           conditional(lt(abs(x[AL] - ALO), EPS), 1,
+                                       conditional(lt(abs(x[AL] - AHI), EPS), 1, 0)))
 
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ begin
 scheme = galerkin([a == b, DirichletBC(space, gfun, bc_where)], solver="cg")
@@ -418,7 +438,7 @@ rfun = space.interpolate(as_vector([0.0, 0.0]), name="residual")
 op_free(uh, rfun)                           # r = A u_h - b_vol
 r = np.array(rfun.as_numpy)
 
-wfun = assemble(conditional(lt(abs(x[0] - IFACE_X), EPS),
+wfun = assemble(conditional(lt(abs(x[AX] - IFACE_X), EPS),
                             v[0] + v[1], 0.0) * ds)
 wt = np.array(wfun.as_numpy)                # w_i = int_Gamma phi_i ds
 
@@ -428,11 +448,13 @@ Q = np.zeros_like(wi)
 ok = np.abs(wi) > 1e-14
 Q[ok] = -r[idx][ok] / wi[ok]
 
-# THE TWO INTERFACE CORNERS ARE ON THE OUTER DIRICHLET BOUNDARY (a y-face) ON
-# BOTH SIDES, so their rows carry the OUTER reaction too and their residual is
-# not this interface's traction. Take the nearest interior interface node rather
-# than exporting a corner value that is physically a different quantity.
-suspect = np.isin(iface_n, outer_n) | ~ok.all(axis=1)
+# THE TWO INTERFACE CORNERS ARE ON THE OUTER DIRICHLET BOUNDARY (the faces the
+# interface ends on) ON BOTH SIDES, so their rows carry the OUTER reaction too
+# and their residual is not this interface's traction. Take the nearest interior
+# interface node rather than exporting a corner value that is physically a
+# different quantity. They are found by position (_ends), so an outer_n that
+# leaves them out does not let them through.
+suspect = _ends | np.isin(iface_n, outer_n) | ~ok.all(axis=1)
 good = np.where(~suspect)[0]
 if len(good):
     for i in np.where(suspect)[0]:
@@ -448,8 +470,8 @@ print(f"[dune {SIDE}] interface n={len(U)} "
 
 # exports.json LAST: the driver takes its existence as proof of success.
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-# The audit and the hand-in read that exact shape, and they read it PER
-# LEVEL: it is how a grader tells a refined mesh from the same mesh run
+# The audit reads that exact shape, and they read it PER
+# LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
 # three times. The LEADING NEWLINE is deliberate -- a program that writes
 # without a trailing newline glues its text onto the front of the next
 # line, and an X11 warning has done exactly that here, turning a correct

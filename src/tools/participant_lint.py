@@ -16,7 +16,9 @@ those are the agent's and openPASO has no business dictating them. It reads the 
 """
 from __future__ import annotations
 
+import functools
 import re
+from pathlib import Path
 
 # (backend, pattern, what the run prints, the call that works)
 _TRAPS: tuple[tuple[str, str, str, str], ...] = (
@@ -572,9 +574,9 @@ _ERROR_FIXES: tuple = (
      "NGSolve: `inverse` is a KEYWORD of Inverse, not an import -- "
      "a.mat.Inverse(fes.FreeDofs(), inverse='sparsecholesky')"),
     ("cannot import name 'sym' from 'ngsolve'",
-     "NGSolve: there is no `sym`. Sym and Trace exist but act on a MATRIX -- the strain is "
-     "Sym(Grad(u)), never Sym(u) (that raises 'Sym of non-matrix called') -- and the identity "
-     "is Id(mesh.dim), never Id()"),
+     "NGSolve: there is no `sym`, `trace` or `Div`. Sym and Trace exist but act on a MATRIX -- the "
+     "strain is Sym(Grad(u)), never Sym(u) (that raises 'Sym of non-matrix called'); the "
+     "divergence is lowercase div(u); and the identity is Id(mesh.dim), never Id()"),
     ("Sym of non-matrix called",
      "NGSolve: Sym takes a matrix, so build the strain from the gradient -- Sym(Grad(u)), not Sym(u)"),
     ("cannot import name 'Div' from 'ngsolve'",
@@ -657,7 +659,14 @@ def participant_findings(text: str) -> list:
             return [f for f in undefined_names(text) if f.startswith("this file does not parse")]
         return []
     body = _strip_strings_and_comments(text)
-    out, seen = _module_findings(body, text) + undefined_names(text), set()
+    # AN UNFILLED SERVED CONTRACT IS NOT JUDGED FOR THE NAMES ITS HOLE MUST
+    # DEFINE. Measured: the pristine FEniCSx contract, written before its fill,
+    # drew nine NameError findings ("`domain` is used at line 234 and never
+    # defined") in three cells of one round -- the served text below the hole
+    # uses exactly the names the hole is asked to leave behind. Once the hole
+    # is filled (its markers go with the fill) the names are judged again.
+    out, seen = (_module_findings(body, text)
+                 + ([] if _SERVED_MARK in text else undefined_names(text))), set()
     for backend, pattern, error, fix in _TRAPS:
         if backend not in codes or (backend, pattern) in seen:
             continue
@@ -849,8 +858,8 @@ def missing_export_selfcheck(content: str) -> str:
 # downstream reports agreement. One recorded cell converged to 1.8e-15 that
 # way and graded on a field its partner never influenced.
 #
-# The separation is exact on the recorded runs: this fires on thirty-two of
-# them, no correct one among them, and is silent on every correct one. It is silent on all 32
+# The separation is exact on the recorded runs: it fires only on failing
+# ones and is silent on every correct one. It is silent on all 32
 # served contracts, including the two volume-coupled ones whose import
 # legitimately enters through the load vector rather than through essential
 # entries -- which is why the check identifies the solution vector from the
@@ -922,10 +931,11 @@ def imported_values_not_held(content: str) -> str:
             return (
                 f"`{sol}.vec[...]` is written with values first and then "
                 f"`{sol}.vec.data = ...` replaces the whole vector, so those "
-                "entries are gone by the time anything reads them. On a "
-                "Dirichlet side that is the partner's interface trace: it is "
-                "loaded, discarded, and the system is solved as though the "
-                "interface carried no condition at all. Re-applying the values "
+                "entries are gone by the time anything reads them: whatever "
+                "they held -- prescribed outer values on any side, the partner's "
+                "interface trace on a Dirichlet side -- is loaded, discarded, and "
+                "the system is solved as though those boundaries carried a zero "
+                "condition. Re-applying the values "
                 "AFTER the solve does not repair it -- the interior was computed "
                 "without them and is the answer to a different problem. This is "
                 "the one defect that still converges, so the residual history "
@@ -966,8 +976,8 @@ def imported_values_not_held(content: str) -> str:
 # contract builds the same elements and recovers finite fluxes.
 #
 # MEASURED: 48 recorded scripts build 3D4N elements by hand and 29 of them
-# check no sign at all. Every one of those that was evaluated is
-# incomplete. Silent on the served set.
+# check no sign at all; every recorded run among those was incomplete.
+# Silent on the served set.
 #
 # It names the defect, not the mesh: which decomposition to use stays the
 # author's choice, and the only claim is that a tetrahedron handed to an
@@ -1015,7 +1025,22 @@ def unoriented_tetrahedra(content: str) -> str:
 # Silent on all 33 served contracts, every one of which reads its imports
 # before it solves.
 
-_EXPORTS_ANY = re.compile(r"exports\.json")
+# A NAME IN A STRING IS NOT A USE, AND THIS CHECK COUNTED IT AS ONE.
+#
+# `_EXPORTS_ANY` matched the six characters anywhere in a file, including in a
+# path being READ. Measured on one coupled run: a post-processing
+# script that only reads side_A/exports.json and side_B/exports.json was told
+# three times, on three successive writes, "this script writes exports.json and
+# never reads imports.json, so nothing the partner computes can change what it
+# exports. A partitioned iteration between two sides where one side does not
+# listen is a fixed point at the first step". It is not a participant, it wrote
+# no export, and there was no partner for it to listen to.
+#
+# The correct pattern was two hundred lines above it the whole time:
+# `_EXPORTS_WRITE`, which requires an actual write. The same shape as counting
+# our own served text as failures, and as a coverage marker matching a name
+# inside a C++ string literal -- three instances in two days.
+_EXPORTS_ANY = _EXPORTS_WRITE
 _IMPORTS_ANY = re.compile(r"imports\.json|\bread_imports\s*\(")
 
 
@@ -1067,6 +1092,241 @@ _CONTRACT_DOOR = {
     "skfem": "skfem", "dune": "dune", "kratos": "kratos",
     "fourc": "fourc", "febio": "febio", "dealii": "dealii",
 }
+
+
+_SERVED_MARK = "DOES NOT SERVE THIS"
+# THE HOLE MARKERS DO NOT SURVIVE THE FILL. Measured on a live round: every
+# filled contract on disk (45-53k chars, side A; 27-28k, side B) had lost
+# "DOES NOT SERVE THIS" with the hole it framed, and read as hand-written to
+# a marker-only test. The export self-check block is served in every
+# contract ("keep this block") and stays through the fill.
+_SERVED_SIGNS = (_SERVED_MARK, "EXPORT SELF-CHECK")
+
+
+_HOLE_RE = re.compile(r"# ── SOLVE ─ [^\n]*?DOES NOT SERVE THIS ─ begin.*?DOES NOT SERVE THIS ─ end", re.S)
+
+
+@functools.lru_cache(maxsize=1)
+def _served_line_sets() -> tuple:
+    """Per shipped contract, its served lines of 40 characters or more, holes cut."""
+    out = []
+    try:
+        for q in sorted(_PARTICIPANT_DIR.glob("participant_*.py")):
+            lines = frozenset(ln.strip() for ln in _HOLE_RE.sub("", q.read_text(errors="ignore")).splitlines()
+                              if len(ln.strip()) >= 40)
+            if len(lines) >= 20:
+                out.append(lines)
+    except OSError:
+        return ()
+    return tuple(out)
+
+
+def _is_served_contract(text: str) -> bool:
+    """A served contract carries one of the served signs AND most of the served lines
+    of one shipped contract. ONE PHRASE WAS NOT ENOUGH: a hand-written side that
+    imitated a single served line ("EXPORT SELF-CHECK" in a comment) read as served,
+    and the check that names a hand-written side beside a served one stayed silent.
+    Measured over every shipped contract: 100 % of its served lines are in it, as
+    shipped and as the knowledge door serves it; the imitation shares none."""
+    if not isinstance(text, str) or not any(m in text for m in _SERVED_SIGNS):
+        return False
+    sets = _served_line_sets()
+    if not sets:
+        return True                      # nothing to compare against: the sign decides
+    have = {ln.strip() for ln in text.splitlines()}
+    return max(len(ls & have) / len(ls) for ls in sets) >= 0.5
+
+
+def hand_written_beside_a_served_side(content: str, near=None) -> str:
+    """'' unless this participant is hand-written while its partner side is a served contract.
+
+    MEASURED over twenty runs of one thermo-elastic family: seven runs wrote the served
+    contract for BOTH sides and every one delivered a complete three-level result; six
+    wrote it for one side and hand-wrote the other, and none delivered anything -- the
+    hand-written side was small (4.8-8.5k chars) and never read imports.json.
+    """
+    if not isinstance(content, str) or _is_served_contract(content) or near is None:
+        return ""
+    near = Path(near)
+    if near.suffix != ".py":
+        return ""
+    dirs = [near.parent]
+    if near.parent.name.lower().startswith("side"):
+        dirs += [d for d in sorted(near.parent.parent.glob("side*")) if d.is_dir() and d != near.parent]
+    partner = None
+    for d in dirs:
+        for q in sorted(d.glob("*.py")):
+            if q.resolve() == near.resolve() or ".replaced-" in q.name:
+                continue
+            try:
+                txt = q.read_text(errors="ignore")
+            except OSError:
+                continue
+            if _is_served_contract(txt) and ("imports.json" in txt or "exports.json" in txt):
+                partner = q
+                break
+        if partner:
+            break
+    if partner is None:
+        return ""
+    codes = [c for c in backends_in(content) if c in _CONTRACT_DOOR]
+    code = _CONTRACT_DOOR[codes[0]] if codes else None
+    try:
+        rel = str(near.relative_to(near.parent.parent)) if near.parent.name.lower().startswith("side") else near.name
+    except ValueError:
+        rel = near.name
+    try:
+        who = str(partner.relative_to(partner.parent.parent))
+    except ValueError:
+        who = partner.name
+    call = (f"write_participant_contract(solver='{code}', path='{rel}')" if code
+            else f"write_participant_contract(solver=<this side's code>, path='{rel}')")
+    return (
+        f"this side is HAND-WRITTEN ({len(content):,} chars) while {who} is the served contract. "
+        f"MEASURED over twenty runs of one family: every run that wrote the served contract for both "
+        f"sides delivered a complete three-level result; every run that hand-wrote its second side "
+        f"delivered nothing -- the hand-written side never read imports.json. The served contract for "
+        f"this side is one call, {call}; then fill only its marked hole, in place.")
+
+
+_PARTICIPANT_DIR = Path(__file__).resolve().parents[2] / "data" / "coupling_participants"
+
+
+def unsolved_linear_solve(content: str) -> str:
+    """'' unless a PETSc solve is configured to apply one preconditioner sweep and call it a solve.
+
+    MEASURED (petsc4py 3.24.4): LinearProblem(..., petsc_options={"ksp_type": "preonly"}) with no
+    pc_type leaves |b - Ax|/|b| at 0.61 / 0.80 / 0.90 on refining Laplacians -- PETSc's default
+    preconditioner is one ILU sweep and 'preonly' asks for exactly one application. With
+    "pc_type": "lu" the same call reaches 1e-14. A run whose side never solved its systems
+    showed every field diverging, the interface flux jump O(1) at every level, and the served
+    cause list at the time (sign, points) sent it verifying causes that did not apply.
+    """
+    if not isinstance(content, str):
+        return ""
+    body = _strip_strings_and_comments(content)
+    hits = []
+    for m in re.finditer(r"petsc_options\s*=\s*\{([^}]*)\}", body):
+        opts = m.group(1)
+        if re.search(r"[\"']ksp_type[\"']\s*:\s*[\"']preonly[\"']", opts) and not re.search(
+                r"[\"']pc_type[\"']\s*:\s*[\"'](?:lu|cholesky)[\"']", opts):
+            hits.append(body[:m.start()].count("\n") + 1)
+    if not hits:
+        return ""
+    where = ", ".join(str(h) for h in hits[:4])
+    return (f"a PETSc solve at line {where} asks for ksp_type 'preonly' WITHOUT pc_type 'lu': that applies "
+            f"one preconditioner sweep (ILU by default) and solves nothing -- measured |b - Ax|/|b| = 0.6-0.9 on "
+            f"every level, every field diverging, the interface flux jump O(1). A direct solve is "
+            f'petsc_options={{"ksp_type": "preonly", "pc_type": "lu"}} (add "pc_factor_mat_solver_type": '
+            f'"mumps" when available); an iterative one needs a converging KSP (cg/gmres with a tolerance).')
+
+
+def served_guard_removed(content: str, near=None) -> str:
+    """'' unless this is a served contract whose refusals were deleted or demoted to prints.
+
+    MEASURED: a run replaced the served `raise SystemExit("the TSI deck's temperature differs ...")`
+    with a WARNING print, its own logs then carried "scatra-vs-tsi T mismatch 1.00e+00" at every
+    level -- the structural deck's temperature was zero, its traction had no thermal stress -- and
+    the coupling never converged at the finest level. A served refusal stops a run that would hand
+    in a wrong number; the fill is the agent's, the guards are not.
+    """
+    if not isinstance(content, str) or not _is_served_contract(content):
+        return ""
+    first = content.lstrip().split("\n", 1)[0].strip()
+    if not first.startswith('"""') or len(first) < 20:
+        return ""
+    template = None
+    try:
+        for q in sorted(_PARTICIPANT_DIR.glob("participant_*.py")):
+            head = q.read_text(errors="ignore").lstrip().split("\n", 1)[0].strip()
+            if head == first:
+                template = q.read_text(errors="ignore")
+                break
+    except OSError:
+        return ""
+    if template is None:
+        return ""
+    # THE HOLE'S OWN LINES ARE NEVER SERVED: the contract reaches the agent
+    # with every hole elided, so a refusal inside a hole (the "hole is not
+    # filled" stop) is not a guard the agent received. Measured: the pristine
+    # served 4C contract drew this finding in four cells of one round for
+    # exactly that stop, and the round was abandoned after five minutes.
+    hole_free = re.sub(r"# ── SOLVE ─ [^\n]*?DOES NOT SERVE THIS ─ begin.*?DOES NOT SERVE THIS ─ end",
+                       "", template, flags=re.S)
+    # A GUARD IS ITS CONDITION, AND ITS MESSAGE ONLY SECOND. Matching the
+    # message word for word over 70 characters called a refusal "removed"
+    # when a run had kept it and only shortened its text (served three times
+    # to a correct run, measured). A guard counts as kept when its `if`
+    # condition is still there and a `raise SystemExit` follows it, or when
+    # the first words of its message still sit behind a `raise SystemExit`;
+    # demoted when the condition is followed by a print instead; gone only
+    # when neither its condition nor the start of its message is left.
+    def _norm(line):
+        return re.sub(r"\s+", "", line)
+
+    hole_lines = hole_free.splitlines()
+    guards = []                      # (condition or None, message head)
+    for i, line in enumerate(hole_lines):
+        if "raise SystemExit(" not in line:
+            continue
+        m = re.search(r"raise SystemExit\(\s*f?([\"'])", line)
+        text = ""
+        if m:                         # up to the quote that opened it; an apostrophe inside stays
+            rest = line[m.end():]
+            end = rest.find(m.group(1))
+            text = rest if end < 0 else rest[:end]
+        full = text.split("{", 1)[0].strip()
+        head = full[:30]
+        if "not filled" in full or "DOES NOT SERVE" in full:
+            continue
+        cond = None
+        for j in range(i - 1, max(-1, i - 4), -1):
+            prev = hole_lines[j].strip()
+            if not prev or prev.startswith("#"):
+                continue
+            if prev.startswith("if ") and prev.endswith(":"):
+                cond = _norm(prev)
+            break
+        if (cond, head, full[:50]) not in guards and (cond or len(head) >= 12):
+            guards.append((cond, head, full[:50]))
+    if not guards:
+        return ""
+    body_lines = content.splitlines()
+    norm_body = [_norm(l) for l in body_lines]
+    gone = []
+    for cond, head, label in guards:
+        state = None
+        if cond is not None:
+            for i, nl in enumerate(norm_body):
+                if nl != cond:
+                    continue
+                follow = [l.strip() for l in body_lines[i + 1:i + 5] if l.strip() and not l.strip().startswith("#")]
+                nxt = follow[0] if follow else ""
+                state = "kept" if nxt.startswith("raise SystemExit") else ("demoted" if nxt.startswith("print(") else "changed")
+                if state == "kept":
+                    break
+        if state != "kept" and len(head) >= 12:
+            for mm in re.finditer(re.escape(head), content):
+                before = content[max(0, mm.start() - 40):mm.start()]
+                if "raise SystemExit" in before:
+                    state = "kept"
+                    break
+                if "print(" in before:
+                    state = state or "demoted"
+        if state == "kept":
+            continue
+        label = label or head or (cond or "")[:40]
+        if state == "demoted":
+            gone.append(f"'{label}' (demoted to a print)")
+        elif state is None:
+            gone.append(f"'{label}'")
+    if not gone:
+        return ""
+    return (f"SERVED GUARD REMOVED: {len(gone)} of the {len(guards)} refusals this contract came with "
+            f"are gone or demoted to a print: {'; '.join(gone[:4])}{'; ...' if len(gone) > 4 else ''}. "
+            f"Each stops a run that would hand in a wrong number (measured: with the temperature "
+            f"cross-check demoted, a run exported tractions with no thermal stress at every level). "
+            f"Put them back as `raise SystemExit(...)`; fill the hole, keep the guards.")
 
 
 def _solvers_asked_about(near=None):
