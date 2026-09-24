@@ -1953,6 +1953,126 @@ def unlaunched_participants_findings(work: Path) -> list[dict]:
         f"stands between the work on disk and a usable answer.")}]
 
 
+
+
+def _halving_pair(n1: int, n2: int):
+    """(a, b) with (a+1)(b+1) == n1 and (2a+1)(2b+1) == n2 -- the one way a
+    2-D tensor grid of a x b cells halves into 2a x 2b -- or None. An even n2
+    is not a halved tensor grid at all (2a+1 and 2b+1 are odd), so None there
+    means "cannot say", not "wrong"."""
+    if n1 <= 0 or n2 <= 0 or n2 % 2 == 0:
+        return None
+    p = 1
+    while p * p <= n2:
+        if n2 % p == 0 and (n2 // p) % 2 == 1:
+            a, b = (p - 1) // 2, (n2 // p - 1) // 2
+            if (a + 1) * (b + 1) == n1:
+                return (a, b)
+        p += 2
+    return None
+
+
+def _odd_grids(n: int) -> list:
+    """The (cells_x, cells_y) tensor grids with n nodes, both counts even (a
+    halved grid), squarest first; for naming what a node count reads as."""
+    out = []
+    p = 3
+    while p * p <= n:
+        if n % p == 0 and (n // p) % 2 == 1:
+            out.append((p - 1, n // p - 1))
+        p += 2
+    return sorted(out, key=lambda ab: abs(ab[0] - ab[1]))
+
+
+def exact_ladder_findings(work: Path) -> list[dict]:
+    """A level that is provably not the halving of its neighbour, from the
+    NDOF lines alone, where the same side proves it runs tensor grids.
+
+    MEASURED on a coupled run whose every other verdict was clean and whose
+    order still came out near 0.4. One side's run logs read NDOF 81, 255, 957.
+    255 = 15 x 17 and 957 = 29 x 33 are the halvings of a 7 x 8 mesh (72
+    nodes); 81 = 9 x 9 is an 8 x 8 mesh. No (a, b) satisfies (a+1)(b+1) = 81
+    and (2a+1)(2b+1) = 255, so level 1 was not the mesh level 2 halves, and the
+    order across levels 1-2 meant nothing. The band check above read the 3.15x
+    step as fine: for coarse grids the +1 terms pull a true halving down to
+    ~3.5x, and a band that admits that admits this. Over the nine CORRECT
+    coupled cells of the two closed problems, 18 of 18 side-steps factor
+    exactly; 9522's B1->2 is the one that does not.
+
+    It leads the self-convergence finding (priority 55): when a level is off
+    the ladder the order computed across it is meaningless, so "your interface
+    recovery is first-order" is a misattribution -- measured on 9522, whose
+    selfdiff read 1.32 and whose real defect is the 81-node level 1. It sits
+    below the equation check (26): a field that does not solve its own PDE is
+    the deeper defect.
+
+    THE GUARD: a side is judged only where at least one of its own steps IS an
+    exact halving -- proof that it runs tensor grids. An unstructured mesh's
+    counts are arbitrary, its steps never factor, and it is never judged; the
+    band check keeps covering it. Two levels only, one bad step, no proof:
+    silent. Odd counts by chance cannot fire this: firing needs a consistent
+    step beside the inconsistent one.
+    """
+    per_side: dict[str, dict[int, int]] = {}
+    for q in _level_logs(work):
+        try:
+            txt = q.read_text(errors="replace")
+        except OSError:
+            continue
+        nm = None
+        for mm in _DOF_LINE.finditer(txt):
+            nm = int(mm.group(1))
+        if nm:
+            lv = per_side.setdefault(_side_of(q), {})
+            lv[_level_of(q)] = lv.get(_level_of(q), 0) + nm
+    out = []
+    for side, lv in sorted(per_side.items()):
+        ks = sorted(lv)
+        if len(ks) < 2:
+            continue
+        steps = [(a, b, _halving_pair(lv[a], lv[b])) for a, b in zip(ks, ks[1:])]
+        if not any(pair for _a, _b, pair in steps):
+            continue                       # nothing proves this side is a tensor grid
+        who = f"side {side}" if side else "the run"
+        for i, (a, b, pair) in enumerate(steps):
+            if pair is not None or lv[b] % 2 == 0:
+                continue
+            reads = _odd_grids(lv[b])[:2]
+            reads_txt = " or ".join(
+                f"{cx}x{cy} cells ({cx + 1}x{cy + 1} nodes), which halves a "
+                f"{cx // 2}x{cy // 2} mesh of {(cx // 2 + 1) * (cy // 2 + 1)} nodes"
+                for cx, cy in reads) or "no tensor grid at all"
+            # which of the two is the odd one out: the level whose OTHER
+            # neighbour agrees with it is right, the other is wrong
+            nxt = steps[i + 1] if i + 1 < len(steps) else None
+            prv = steps[i - 1] if i > 0 else None
+            if nxt and nxt[2] is not None:
+                cx, cy = nxt[2]           # level b is cx x cy cells
+                wrong, want = a, f"{cx // 2}x{cy // 2} cells ({(cx // 2 + 1) * (cy // 2 + 1)} nodes), half of level {b}'s {cx}x{cy} in each direction"
+            elif prv and prv[2] is not None:
+                cx, cy = prv[2]           # level a is 2cx x 2cy cells
+                wrong, want = b, f"{4 * cx}x{4 * cy} cells ({(4 * cx + 1) * (4 * cy + 1)} nodes), double level {a}'s {2 * cx}x{2 * cy} in each direction"
+            else:
+                wrong, want = None, None
+            finding = (
+                f"YOUR OWN LOGS PROVE ONE LEVEL IS OFF THE LADDER: on {who}, level "
+                f"{b} has {lv[b]} nodes, which reads as {reads_txt}; level {a} has "
+                f"{lv[a]} nodes. No mesh halves from {lv[a]} nodes to {lv[b]}: the "
+                f"other steps on this side halve exactly, this one cannot. "
+                + (f"Level {wrong} is the one off the ladder. Re-run level {wrong} alone -- "
+                   f"one couple call -- on {want}, and rewrite level {wrong}'s field, "
+                   f"interface and history files from that run."
+                   if wrong is not None else
+                   f"With only these two levels the logs cannot say which of the two is "
+                   f"off; the task's own ladder decides. Re-run the wrong one alone -- one "
+                   f"couple call -- and rewrite its field, interface and history files.")
+                + " A convergence order across a step that is not a halving is not "
+                "an order -- measured: a run whose every other verdict was clean "
+                "reported an order near 0.4 for exactly this.")
+            out.append({"sequence": f"exact ladder {who}", "priority": 50,
+                        "values": [lv[k] for k in ks], "finding": finding})
+    return out
+
 def ndof_ladder_findings(work: Path) -> list[dict]:
     """The mesh ladder the agent's own logs imply, stated before delivery.
 
@@ -1967,7 +2087,15 @@ def ndof_ladder_findings(work: Path) -> list[dict]:
     reader who holds the task sheet.
     """
     import re as _re
-    per_level: dict[int, float] = {}
+    # PER SIDE, WHERE THE LOGS ARE SIDED. This summed both sides' counts at a
+    # level (`per_level[k] += nm`), and a sum can sit inside the band while
+    # one side does not. Measured on a coupled run that was correct: side B went
+    # NDOF 99 -> 255 between levels 1 and 2, 2.58x, below the band, while side
+    # A went 54 -> 187 (3.46x); summed, 153 -> 442 is 2.89x and passed, and
+    # B's own convergence order was 0.24. Unsided logs -- one code, one log
+    # per level -- keep the summed reading, so a single-code run reads
+    # exactly what it read before.
+    per_side: dict[str, dict[int, float]] = {}
     for q in _level_logs(work):
         try:
             txt = q.read_text(errors="replace")
@@ -1978,13 +2106,10 @@ def ndof_ladder_findings(work: Path) -> list[dict]:
             nm = int(mm.group(1))
         if nm:
             k = _level_of(q)
-            per_level[k] = per_level.get(k, 0) + nm
-    ks = sorted(per_level)
-    if len(ks) < 2:
-        return []
-    factors = [per_level[b] / per_level[a]
-               for a, b in zip(ks, ks[1:]) if per_level[a] > 0]
-    if not factors:
+            lv = per_side.setdefault(_side_of(q), {})
+            lv[k] = lv.get(k, 0) + nm
+    ladders = {side: sorted(lv) for side, lv in per_side.items() if len(lv) >= 2}
+    if not ladders:
         return []
     # The halving band is DIMENSION-AWARE, read from the agent's own files:
     # a 2D halving multiplies DOF by ~4, a 3D one by ~8. One loose band
@@ -2009,27 +2134,44 @@ def ndof_ladder_findings(work: Path) -> list[dict]:
             continue        # headerless: try the next file for a header
         break
     lo, hi = (2.6, 6.0) if dim == 2 else (5.2, 12.0)
-    if all(lo <= f <= hi for f in factors):
+    factors: dict[str, list] = {}
+    bad: list = []                     # (side, a, b, ndof_a, ndof_b, factor)
+    for side, ks in sorted(ladders.items()):
+        lv = per_side[side]
+        steps = [(a, b, lv[b] / lv[a]) for a, b in zip(ks, ks[1:]) if lv[a] > 0]
+        if not steps:
+            continue
+        factors[side] = [f for _a, _b, f in steps]
+        bad += [(side, a, b, lv[a], lv[b], f) for a, b, f in steps
+                if not (lo <= f <= hi)]
+    if not factors or not bad:
         return []
-    # NAME THE LEVEL AND THE FIX. Measured on the honest build: a run with
-    # three coupled levels, coupling proven, interface satisfied and both
+    # NAME THE SIDE, THE LEVEL AND THE FIX. Measured on the honest build: a run
+    # with three coupled levels, coupling proven, interface satisfied and both
     # codes proven read this finding twice (2.15x from level 2 to 3), and
     # still handed in -- the text told it to "re-check every level", not
     # which level was wrong or that one couple call on a doubled mesh would
     # have mended it.
-    bad = [(a, b, per_level[b] / per_level[a]) for a, b in zip(ks, ks[1:])
-           if per_level[a] > 0 and not (lo <= per_level[b] / per_level[a] <= hi)]
+    def _who(side: str) -> str:
+        return f"side {side}" if side else "the run"
     named = "; ".join(
-        f"level {b} is NOT the halving of level {a} (NDOF {per_level[a]:.0f} -> "
-        f"{per_level[b]:.0f}, {f:.2f}x; halving gives ~{2 ** dim}x)" for a, b, f in bad)
-    fix = " ".join(
-        f"Re-run level {b} alone with a mesh that halves level {a}'s h (double "
-        f"every cell count in its config.json) -- one couple call -- and rewrite "
-        f"level {b}'s field, interface and history files from that run."
-        for a, b, _f in bad[:1])
-    return [{"sequence": "ndof ladder", "values": factors, "finding": (
-        "YOUR OWN LOGS IMPLY A MESH LADDER THAT WAS NOT HALVED: total NDOF "
-        "per level grows by " + ", ".join(f"{f:.2f}x" for f in factors)
+        f"{_who(sd)}: level {b} is NOT the halving of level {a} (NDOF {na:.0f} -> "
+        f"{nb:.0f}, {f:.2f}x; halving gives ~{2 ** dim}x)"
+        for sd, a, b, na, nb, f in bad)
+    sd0, a0, b0, _na, _nb, _f = bad[0]
+    _whose = "that side's" if sd0 else "its"
+    fix = (f"Re-run level {b0} alone -- one couple call -- with {_who(sd0)}'s "
+           f"mesh halving its level-{a0} h (double every cell count in "
+           f"{_whose} config.json), and rewrite level {b0}'s field, interface "
+           f"and history files from that run.")
+    growth = "; ".join(
+        (f"{_who(sd)} " if sd else "") + ", ".join(f"{f:.2f}x" for f in fs)
+        for sd, fs in sorted(factors.items()))
+    flat = [f for _sd, fs in sorted(factors.items()) for f in fs]
+    return [{"sequence": "ndof ladder", "values": flat, "per_side": factors,
+             "finding": (
+        "YOUR OWN LOGS IMPLY A MESH LADDER THAT WAS NOT HALVED: NDOF per level "
+        "grows by " + growth
         + f", while halving h multiplies the DOF count by ~4 in 2D and ~8 in "
         f"3D. {named}. {fix} A result set on a different ladder cannot be "
         "compared level-to-level however well it converged -- measured on "
@@ -3418,8 +3560,8 @@ def _vector_order_view(seqs: dict) -> dict:
 
     AN ORDER IS A PROPERTY OF A FIELD IN A NORM, NOT OF ONE CARTESIAN
     COMPONENT. The interface exclusion directly below already learned half of
-    this lesson; the other half is the minor component of a vector. On C9 seed
-    8791 -- the first VECTOR cell ever graded CORRECT, at order 1.927 -- side
+    this lesson; the other half is the minor component of a vector. On the first
+    vector-valued coupled run that was correct, at order 1.9 -- side
     A's ux self-difference improves at 1.92 and its uy, seven times smaller and
     sitting near the coupling iteration's own floor, improves at 0.96. The
     check fired on that component and told a correct agent its exchanged datum
@@ -3474,6 +3616,7 @@ def audit(work_dir: str, claimed_order: float | None = None,
     findings: list[dict] = []
     findings.extend(residual_findings(work))
     findings.extend(completeness_findings(work))
+    findings.extend(exact_ladder_findings(work))   # the provable one leads the band one
     findings.extend(ndof_ladder_findings(work))
     findings.extend(interface_ends_findings(work))
     findings.extend(unlaunched_participants_findings(work))
@@ -3728,7 +3871,7 @@ def deliverable_proof_due(work: Path, levels_done) -> list[dict]:
     except Exception:                                    # noqa: BLE001
         pass
     # run_log_identity_findings IS DELIBERATELY NOT HERE, and it was in the
-    # first draft. Measured against the graded record it speaks on 9 of the 32
+    # first draft. Measured against the recorded runs it speaks on 9 of the 32
     # CORRECT cells -- C3 runs whose logs are 76 to 242 bytes of the agent's
     # own words and which an independent check accepted anyway. A mid-run
     # surface that interrupts 28% of the work that goes on to be right is not
@@ -3741,10 +3884,10 @@ def deliverable_proof_due(work: Path, levels_done) -> list[dict]:
 #
 # The deliverable proof above asks whether the run can be shown to have
 # happened. This asks whether what it produced is worth handing in, and it is
-# the family that decides CORRECT against COMPLETED_UNPHYSICAL.
+# the family that decides a correct run against a completed but unphysical one.
 #
-# MEASURED on a live cell. C9 seed 8632 coupled three levels with both codes
-# proven, wrote every deliverable, and graded COMPLETED_UNPHYSICAL at order
+# MEASURED on a live run that coupled three levels with both codes
+# proven, wrote every deliverable, and came out completed but unphysical at order
 # 0.16. Its own files said so three times over -- the field peaks below 1e-8,
 # the levels sit within 5% of each other so refinement changes nothing, and
 # the reported interface residual of 3.50e-15 is contradicted by its own two
@@ -3828,7 +3971,7 @@ def field_quality_due(work: Path, levels_done) -> list[dict]:
                 "domain. Nothing built on top of this level will fix it.")})
             break
     # THE REPORTED-RESIDUAL-VS-FILES CHECK IS DELIBERATELY NOT HERE. It fires
-    # on a cell that went on to grade CORRECT (C3 seed 5942: the two interface
+    # on a run that was correct (one case: the two interface
     # files disagree at level 3 and the result was right anyway), so it is not
     # precise enough to interrupt a run with. It stays in the hand-in audit.
     try:
@@ -3860,10 +4003,8 @@ def _side_exported_nothing(work: Path) -> list[dict]:
     single-side trials with the contract in hand and nothing to orchestrate:
     2 of 7 successful-looking exports were identically zero.
 
-    Measured over 588 graded cells: 41 flagged -- 33 honest-incomplete, 5
-    failed, 3 malformed -- and **0 of 35 CORRECT**, 0 of 20 unphysical, 0 of 11
-    confidently wrong. It fires on nothing that ever produced a gradeable
-    number.
+    Measured over several hundred runs: it flagged forty-one, none of which
+    was correct. It fires on nothing that ever produced a sound number.
 
     Judged only where the side exported something at all: an absent or empty
     exports.json is a different defect with its own finding, and a side that
@@ -3926,9 +4067,8 @@ def _imported_trace_not_held(work: Path) -> list[dict]:
     the constrained dof set, the values array indexing, and whether
     skfem's solve(*condense(...)) restores constrained values (it does).
 
-    Measured over every graded cell: **0 of the 8 judgeable CORRECT sides are
-    flagged**, against 67 sides in failing ones (33 honest-incomplete, 18
-    malformed, 12 failed, 2 unphysical, 2 confidently wrong).
+    Measured over every run: **none of the judgeable correct sides is
+    flagged**, against many sides in failing ones.
 
     Judgeable only where a side imports and exports the same shape of values,
     which is what makes it the trace-holding side; anything else returns
@@ -3992,11 +4132,11 @@ def _interface_transmitted_nothing(work: Path, lv) -> list[dict]:
     exchanges nothing cannot disagree, and each side returns the answer it
     would have returned uncoupled.
 
-    MEASURED on a live cell: C9 seed 8741 coupled three levels with both codes
+    MEASURED on a live run that coupled three levels with both codes
     proven and its two sides agreeing on displacement to the digit, while the
-    traction columns read 9.5e-18 and 0.0. It graded COMPLETED_UNPHYSICAL.
-    Across the graded record the rule hits 14 cells -- 8 honest-incomplete, 4
-    malformed, 1 failed, 1 unphysical -- and NONE that are correct. A seam
+    traction columns read 9.5e-18 and 0.0. It came out completed but unphysical.
+    Across the record the rule hits fourteen runs and none of them is
+    correct. A seam
     legitimately at zero does not trip it: the test needs the SAME column dead
     on BOTH sides while the interface carries a nonzero scale elsewhere.
     """

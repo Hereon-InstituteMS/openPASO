@@ -87,8 +87,7 @@ def _detect_midpoint_grid(coords: list, box: list | None = None) -> tuple:
     half a step inside each face. A VERTEX grid -- the corners of the same
     tiling, which is what a participant's own mesh dump is -- is just as
     uniform, and under the midpoint weight its boundary row carries a whole
-    cell where it should carry half. Measured on a coupled run that graded
-    correct, over its own mesh dumps: the delivered field read 0.370, 0.200,
+    cell where it should carry half. Measured on a coupled run that was correct, over its own mesh dumps: the delivered field read 0.370, 0.200,
     0.104 and the same field scaled by 1.20 read 0.245, 0.040, 0.076 -- the
     20 % error scoring BETTER than the truth, both CONSISTENT. On that run's
     probe-grid deliverables, true cell midpoints, the same check separates them
@@ -252,8 +251,8 @@ def check_levels(levels: dict, source_expr: str, coefficient,
     behaviour bit for bit.
 
     WHY IT IS HERE. Without it the check judges a reacting field against a
-    different equation than the one that produced it. Measured on the two
-    coupled runs that graded correct this week, over their own delivered probe
+    different equation than the one that produced it. Measured on two
+    coupled runs that were correct, over their own delivered probe
     files: side A (c = 10) reads 1.79e-02 -> 5.18e-03 -> 1.63e-03 CONSISTENT
     with the term and 3.61e-01 -> 3.54e-01 -> 3.52e-01 INCONSISTENT without it.
     A flat 35 % residual on the one field that is right is not a weak check, it
@@ -315,8 +314,7 @@ def check_levels(levels: dict, source_expr: str, coefficient,
         # probe sits h/2 inside the face, so a field that IS zero on the
         # boundary still reads |grad u| h/2 there -- percent-level, the same
         # order as a face genuinely carrying a partner's data. The two cases
-        # are not separable by magnitude. Measured: C2 seed 6751, graded
-        # CORRECT, has a layer of 0.067 of its own scale, went to the sines,
+        # are not separable by magnitude. Measured on a coupled run that was correct: has a layer of 0.067 of its own scale, went to the sines,
         # and was called INCONSISTENT -- 1.32e-02 -> 5.79e-03 -> 1.06e-02, flat
         # and non-monotone. The same three files under the v below fall
         # 1.25e-02 -> 3.76e-03 -> 1.59e-03, monotone, and read CONSISTENT. The

@@ -168,18 +168,15 @@ def two_sided_jumps(side_a, side_b, coord_tol: float = 1e-6):
     # flattering thing this function could do. So each channel is judged on its
     # own scale and refused on its own.
     #
-    # MEASURED over all 841 graded interface files, with the column roles read
-    # from each file's own header: 0 of the 198 belonging to CORRECT cells have
-    # either channel at round-off, so this never speaks on a correct run. It
-    # speaks on 68 files elsewhere -- 6 unphysical, 18 malformed, 36
-    # honest-incomplete, 8 failed.
+    # This never speaks on a correctly coupled result: such a result has a real
+    # jump on every channel it exchanges, so no channel sits at round-off. It
+    # speaks only where a whole channel is dead across the pair.
     #
     # NOT THE SAME QUESTION AS "did this side export anything". A Dirichlet side
-    # legitimately holds the seam at zero and exports a real recovered flux, and
-    # correct cells do exactly that -- so a check reading ONE side's exports.json
-    # must leave values-zero-and-flux-real alone. This reads BOTH sides' interface
-    # files for a level and asks whether a whole channel is dead across the pair,
-    # which is a different condition and occurs in no correct cell here.
+    # legitimately holds the seam at zero and exports a real recovered flux -- so
+    # a check reading ONE side's exports.json must leave values-zero-and-flux-real
+    # alone. This reads BOTH sides' interface files for a level and asks whether a
+    # whole channel is dead across the pair, which is a different condition.
     _ROUNDOFF = 1e-14
     su, sq = _rms(scale_u), _rms(scale_q)
     dead = [name for name, scale in (("value", su), ("flux", sq))

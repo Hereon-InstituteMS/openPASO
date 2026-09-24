@@ -503,6 +503,37 @@ class FourcBackend(SolverBackend):
             # the installed 4C, 2026-08-03); terzaghi_2d and
             # consolidation_3d fall through to the ~1 kB reference-stub
             # template and are documentation, not runnable input.
+            # Added 2026-09-19. 4C declares porofluid_pressure_based_elasticity
+            # as a problem type DISTINCT from Poroelasticity and from
+            # porofluid_pressure_based, with its own section names. openPASO
+            # reached the third but not this one, so a user asking for
+            # monolithic pressure-based poro-elasticity was told 4C could not
+            # do it. Deck executed on the installed binary (commit 89519cfe76):
+            # rc=0, 26 VTU steps to the configured end time, porosity and solid
+            # displacement both varying.
+            # Added 2026-09-19, both verified by running the exact text
+            # openPASO serves on the installed binary.
+            PhysicsCapability("poroelast_scatra",
+                              "Poroelasticity + reacting scalar transport "
+                              "through the pore fluid", [3],
+                              ["HEX8"],
+                              ["homogeneous_3d"]),
+            PhysicsCapability("fluid_ale",
+                              "Fluid on a deforming (ALE) mesh -- the moving-"
+                              "domain setting every FSI and free-surface "
+                              "problem needs", [2],
+                              ["QUAD4", "TRI3"],
+                              ["hdg_2d"]),
+            PhysicsCapability("porofluid_elasticity_scatra",
+                              "Multiphase porous flow + deformable skeleton + "
+                              "scalar transport, monolithically coupled", [3],
+                              ["HEX8"],
+                              ["monolithic_3d"]),
+            PhysicsCapability("porofluid_elasticity",
+                              "Pressure-based porous-media flow monolithically "
+                              "coupled to an elastic skeleton", [3],
+                              ["HEX27", "HEX8"],
+                              ["monolithic_3d"]),
             PhysicsCapability("porous_media", "Poroelasticity (Biot/mixture theory, consolidation)", [2, 3],
                               ["WALLQ4PORO", "WALLQ9PORO", "SOLIDH8PORO", "SOLIDT4PORO"],
                               ["single_phase_3d", "terzaghi_2d", "consolidation_3d"]),
@@ -687,6 +718,19 @@ class FourcBackend(SolverBackend):
             gen_entry["funct_wiring"] = _FUNCT_WIRING
             gen_entry["grammar_dump"] = _GRAMMAR_DUMP
             return _with_grammar(gen_entry)
+        # Last resort: the deck catalog. Four physics rows are served only
+        # from there and had no knowledge at all -- the templates ran and
+        # get_knowledge() returned an error for the same name.
+        try:
+            from backends.fourc import decks as _decks
+            deck_entry = _decks.knowledge_for(physics)
+        except Exception:                                # pragma: no cover
+            deck_entry = {}
+        if deck_entry:
+            deck_entry = dict(deck_entry)
+            deck_entry["funct_wiring"] = _FUNCT_WIRING
+            deck_entry["grammar_dump"] = _GRAMMAR_DUMP
+            return _with_grammar(deck_entry)
         return {"error": f"no knowledge for {physics!r} in fourc"}
 
     def generate_input(self, physics: str, variant: str, params: dict) -> str:
@@ -704,8 +748,11 @@ class FourcBackend(SolverBackend):
             return self._umbrella_template(physics, variant)
 
         # Executed deck templates come first. Every entry in
-        # backends.fourc.decks was run on the installed binary and exited 0,
-        # which is a stronger guarantee than any other branch below offers,
+        # backends.fourc.decks was run on the installed binary, exited 0 AND
+        # wrote a finite field (checked by scripts/coverage_harness; exit 0
+        # alone let fsi_2d serve a NaN pressure at every node of every step
+        # until 2026-09-23), which is a stronger guarantee than any other
+        # branch below offers,
         # and the pairs it covers are exactly the ones that used to fall
         # through to the "Not a runnable input" stub.
         from backends.fourc import decks as _decks

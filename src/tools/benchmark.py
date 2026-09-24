@@ -9,6 +9,7 @@ import json
 import time
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
+from core.backend import error_excerpt
 from core.registry import available_backends, get_backend
 from core.post_processing import post_process_file, compare_results
 
@@ -116,7 +117,7 @@ def register_benchmark_tools(mcp: FastMCP):
                     else:
                         entry["output_files"] = [f.name for f in result_files]
                 elif job.error:
-                    entry["error"] = job.error[:500]
+                    entry["error"] = error_excerpt(job.error)
 
                 results.append(entry)
 

@@ -118,5 +118,20 @@ problem = LinearProblem(
                     "pc_type": "lu",
                     "pc_factor_mat_solver_type": "mumps"}})
 uh = problem.solve()
+# --- Write the result where a reader can open it ------------------------------
+# This template printed a norm and wrote nothing, so a model that ran it had
+# no field to look at, plot or verify. XDMFFile writes P1 functions; the
+# openPASO backend converts result.xdmf/.h5 into a standard result.vtu after
+# the run (the same route the Poisson template uses). Higher-order or
+# non-Lagrange functions are interpolated into P1 for output first.
+import json
+from dolfinx.io import XDMFFile
+_Vout = fem.functionspace(domain, basix.ufl.element("Lagrange", domain.basix_cell(), 1))
+_uo = fem.Function(_Vout, name="u"); _uo.interpolate(uh)
+with XDMFFile(domain.comm, "result.xdmf", "w") as _x:
+    _x.write_mesh(domain); _x.write_function(_uo)
+_l2 = float(np.sqrt(domain.comm.allreduce(fem.assemble_scalar(fem.form(ufl.inner(uh, uh) * ufl.dx)))))
+with open("results_summary.json", "w") as _f:
+    json.dump({{"l2_norm_u": _l2, "n_dofs": V.dofmap.index_map.size_global}}, _f, indent=2)
 print(f"||u||_L2 = {{np.sqrt(domain.comm.allreduce(fem.assemble_scalar(fem.form(ufl.inner(uh, uh) * ufl.dx))))}}")
 '''

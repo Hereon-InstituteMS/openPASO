@@ -1,6 +1,8 @@
 """NGSolve generator registry — maps physics_variant -> generator function."""
 
 from .poisson import GENERATORS as _poisson_gen, KNOWLEDGE as _poisson_kn
+from .space_survey import (GENERATORS as _ssurv_gen,
+                           KNOWLEDGE as _ssurv_kn)
 from .linear_elasticity import GENERATORS as _elast_gen, KNOWLEDGE as _elast_kn
 from .heat import GENERATORS as _heat_gen, KNOWLEDGE as _heat_kn
 from .stokes import GENERATORS as _stokes_gen, KNOWLEDGE as _stokes_kn
@@ -19,7 +21,7 @@ from .advanced import GENERATORS as _advanced_gen, KNOWLEDGE as _advanced_kn
 # Merged generator registry: physics_variant -> callable(params) -> str
 GENERATORS: dict[str, callable] = {}
 for _g in [
-    _poisson_gen, _elast_gen, _heat_gen, _stokes_gen, _ns_gen,
+    _poisson_gen, _ssurv_gen, _elast_gen, _heat_gen, _stokes_gen, _ns_gen,
     _maxwell_gen, _helmholtz_gen, _hyper_gen, _eigen_gen,
     _convdiff_gen, _mixed_gen, _therm_struct_gen, _surface_gen,
     _plasticity_gen, _advanced_gen,
@@ -29,7 +31,7 @@ for _g in [
 # Merged knowledge registry: physics_name -> dict
 KNOWLEDGE: dict[str, dict] = {}
 for _k in [
-    _poisson_kn, _elast_kn, _heat_kn, _stokes_kn, _ns_kn,
+    _poisson_kn, _ssurv_kn, _elast_kn, _heat_kn, _stokes_kn, _ns_kn,
     _maxwell_kn, _helmholtz_kn, _hyper_kn, _eigen_kn,
     _convdiff_kn, _mixed_kn, _therm_struct_kn, _surface_kn,
     _plasticity_kn, _advanced_kn,

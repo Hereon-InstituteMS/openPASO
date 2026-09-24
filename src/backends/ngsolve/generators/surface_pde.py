@@ -35,43 +35,59 @@ print(f"Surface mesh: {{mesh.ne}} elements, {{mesh.nv}} vertices")
 # trial/test occurrence with .Trace() so the BND integral
 # typechecks. See Joachim Schöberl's surface-FEM example
 # in iFEM lecture notes (definedon + .Trace() pattern).
-fes_constrained = H1(mesh, order={order},
-                      definedon=mesh.Boundaries(".*"))
-u_c, v_c = fes_constrained.TnT()
-
-a_c = BilinearForm(fes_constrained)
-a_c += (grad(u_c).Trace() * grad(v_c).Trace()
-         + 1e-8 * u_c.Trace() * v_c.Trace()) * ds
+# Laplace-Beltrami on the closed surface: -div_G grad_G u = f has a one-dimensional
+# kernel (the constants), so the discrete system needs ONE constraint. The served
+# template used to add 1e-8 * u * v as a regulariser; the mesh's quadrature error
+# in int_G f (which is 0 exactly for 6z^2 - 2) was then divided by 1e-8 and came
+# out as a constant of order 10^3 -- "max=3387" for a solution whose exact
+# magnitude never exceeds 2/3. A Lagrange multiplier enforcing int_G u = 0 is the
+# correct constraint and adds no error. Measured and fixed 2026-09-23.
+fes_u = H1(mesh, order={order}, definedon=mesh.Boundaries(".*"))
+fes_l = NumberSpace(mesh, definedon=mesh.Boundaries(".*"))
+fes = fes_u * fes_l
+(u_c, lam), (v_c, mu) = fes.TnT()
+a_c = BilinearForm(fes)
+a_c += grad(u_c).Trace() * grad(v_c).Trace() * ds
+a_c += (lam * v_c.Trace() + mu * u_c.Trace()) * ds
 a_c.Assemble()
-
-# Source term on the surface — set for your problem.
-# Use spherical harmonics Y_2^0 as forcing: f = 6*z^2 - 2
-# (eigenfunction of -Δ_S on the unit sphere). Integral over
-# the sphere is 0, so the residual has no constant mode and
-# the 1e-8 regulariser is just a safety net to keep the
-# matrix non-singular.
-f_expr = 6 * z * z - 2
-f_c = LinearForm(fes_constrained)
+f_expr = 6 * z * z - 2                    # = -Delta_G (z^2 - 1/3) on the unit sphere
+f_c = LinearForm(fes)
 f_c += f_expr * v_c.Trace() * ds
 f_c.Assemble()
-
-gfu = GridFunction(fes_constrained)
-gfu.vec.data = a_c.mat.Inverse(fes_constrained.FreeDofs()) * f_c.vec
-
-# The exact solution is the spherical harmonic Y_2^0 = z^2 - 1/3
-# (up to a constant shift)
+gf = GridFunction(fes)
+gf.vec.data = a_c.mat.Inverse(fes.FreeDofs(), inverse="umfpack") * f_c.vec
+gfu = gf.components[0]
 max_val = max(gfu.vec)
 min_val = min(gfu.vec)
-print(f"Solution: max={{max_val:.8f}}, min={{min_val:.8f}}")
+print(f"Solution: max={{max_val:.8f}}, min={{min_val:.8f}}   (exact Y_2^0 = z^2 - 1/3 ranges over [-1/3, 2/3])")
 
-vtk = VTKOutput(mesh, coefs=[gfu], names=["solution"],
-                filename="result", subdivision=2)
-vtk.Do()
+# Pointwise comparison with the exact solution at the surface vertices, and an
+# export ON THE SURFACE MESH. VTKOutput on the volume mesh evaluates a surface
+# function inside the volume, where it is zero, and the result file showed
+# nothing but zeros. Here the boundary triangles and their vertices are written
+# directly, with the computed and exact fields side by side.
+import numpy as np
+import meshio
+_pts = {{}}
+_tris = []
+for el in mesh.Elements(BND):
+    _tris.append([v.nr for v in el.vertices])
+    for v in el.vertices:
+        _pts[v.nr] = mesh[v].point
+_ids = sorted(_pts)
+_index = {{nr: i for i, nr in enumerate(_ids)}}
+_xyz = np.array([_pts[nr] for nr in _ids])
+_val = np.array([gfu(mesh(*_pts[nr], BND)) for nr in _ids])
+_exact = _xyz[:, 2] ** 2 - 1.0 / 3.0
+_err = float(np.max(np.abs(_val - _exact)))
+print(f"max|u_h - (z^2 - 1/3)| at surface vertices = {{_err:.3e}}  (P{order} on a curved surface: O(h^2) at best; information, not a verdict)")
+meshio.Mesh(_xyz, [("triangle", np.array([[_index[n] for n in t] for t in _tris]))],
+            point_data={{"solution": _val, "exact": _exact, "error": _val - _exact}}).write("result.vtu")
 
 summary = {{
     "max_value": float(max_val),
     "min_value": float(min_val),
-    "n_dofs": fes_constrained.ndof,
+    "n_dofs": fes_u.ndof,
     "n_elements": mesh.ne,
     "order": {order},
 }}

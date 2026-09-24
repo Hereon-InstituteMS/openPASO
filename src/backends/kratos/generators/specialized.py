@@ -982,7 +982,17 @@ os.environ["OMP_NUM_THREADS"] = os.environ.get("KRATOS_DEMFEM_THREADS", "1")
 import KratosMultiphysics as Kratos
 import KratosMultiphysics.StructuralMechanicsApplication  # noqa: F401 (registers SMA)
 import KratosMultiphysics.DEMApplication as Dem
-import KratosMultiphysics.DemStructuresCouplingApplication as DemFem
+# NEEDS AN APPLICATION THAT IS NOT IN EVERY KRATOS BUILD.
+# Without this guard the script dies on a bare ImportError naming a
+# module path, which reads as a broken template rather than a missing
+# optional component -- and openPASO knows the difference, because it
+# probes what is installed.
+try:
+    import KratosMultiphysics.DemStructuresCouplingApplication as DemFem
+except ImportError as _kratos_app_missing:
+    raise SystemExit(
+        "This template needs KratosMultiphysics.DemStructuresCouplingApplication (DEM-to-structure coupling), which is NOT present in this Kratos install. It is a real Kratos capability, not a stub, but it is outside the minimal pip stack (StructuralMechanics, ConvectionDiffusion, ContactStructuralMechanics, LinearSolvers). Install a Kratos build that includes it, or ask openPASO for a physics your installed applications can solve: discover(query='physics', solver='kratos')."
+        + ' [' + str(_kratos_app_missing) + ']')
 from KratosMultiphysics.DemStructuresCouplingApplication.dem_main_script_ready_for_coupling_with_fem import (
     StructuresCoupledDEMAnalysisStage,
 )
@@ -1601,7 +1611,17 @@ import math
 import time
 import KratosMultiphysics as KM
 import KratosMultiphysics.StructuralMechanicsApplication as SMA
-import KratosMultiphysics.CableNetApplication as CNA
+# NEEDS AN APPLICATION THAT IS NOT IN EVERY KRATOS BUILD.
+# Without this guard the script dies on a bare ImportError naming a
+# module path, which reads as a broken template rather than a missing
+# optional component -- and openPASO knows the difference, because it
+# probes what is installed.
+try:
+    import KratosMultiphysics.CableNetApplication as CNA
+except ImportError as _kratos_app_missing:
+    raise SystemExit(
+        "This template needs KratosMultiphysics.CableNetApplication (cable-net elements), which is NOT present in this Kratos install. It is a real Kratos capability, not a stub, but it is outside the minimal pip stack (StructuralMechanics, ConvectionDiffusion, ContactStructuralMechanics, LinearSolvers). Install a Kratos build that includes it, or ask openPASO for a physics your installed applications can solve: discover(query='physics', solver='kratos')."
+        + ' [' + str(_kratos_app_missing) + ']')
 
 t_start = time.time()
 
@@ -1844,7 +1864,17 @@ import time
 import numpy as np
 import KratosMultiphysics as KM
 import KratosMultiphysics.StructuralMechanicsApplication as SMA
-import KratosMultiphysics.OptimizationApplication as KOA
+# NEEDS AN APPLICATION THAT IS NOT IN EVERY KRATOS BUILD.
+# Without this guard the script dies on a bare ImportError naming a
+# module path, which reads as a broken template rather than a missing
+# optional component -- and openPASO knows the difference, because it
+# probes what is installed.
+try:
+    import KratosMultiphysics.OptimizationApplication as KOA
+except ImportError as _kratos_app_missing:
+    raise SystemExit(
+        "This template needs KratosMultiphysics.OptimizationApplication (the optimization driver), which is NOT present in this Kratos install. It is a real Kratos capability, not a stub, but it is outside the minimal pip stack (StructuralMechanics, ConvectionDiffusion, ContactStructuralMechanics, LinearSolvers). Install a Kratos build that includes it, or ask openPASO for a physics your installed applications can solve: discover(query='physics', solver='kratos')."
+        + ' [' + str(_kratos_app_missing) + ']')
 
 t_start = time.perf_counter()
 

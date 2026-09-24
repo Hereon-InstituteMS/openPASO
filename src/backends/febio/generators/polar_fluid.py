@@ -90,6 +90,11 @@ def _polar_fluid_3d_channel(params: dict) -> str:
     </load_controller>
   </LoadData>
   <Output>
+    <!-- text node data beside the binary plot file: the .xplt needs FEBio's own reader,
+         while a CSV can be opened, plotted and checked by anything. -->
+    <logfile>
+      <node_data data="nfvx;nfvy;nfvz" delim="," file="node_fluid_vel.csv"/>
+    </logfile>
     <plotfile type="febio">
       <var type="fluid velocity"/>
       <var type="fluid pressure"/>

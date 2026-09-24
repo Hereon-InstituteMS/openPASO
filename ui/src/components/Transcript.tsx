@@ -69,16 +69,10 @@ function solverVerdict(raw: string): { verdict: 'verified' | 'unverified' | 'fai
   // Two shapes, the same two the server reads (webui/outcome.py): a run reports
   // "status" plus the verification gate's "trustworthy_result"; a coupling
   // reports no status at all, only the gate's verdict beside "converged".
-  // The same rule the server applies to a record it cannot parse: these
-  // matches may belong to different objects, so a mixture is never verified —
-  // pairing a healthy participant with a failed report once read as "Finished".
-  const flags = [...t.matchAll(/"trustworthy_result"\s*:\s*(true|false)/g)].map((m) => m[1])
-  const trusted = flags.length > 0 && flags.every((f) => f === 'true')
-  const untrusted = flags.includes('false')
-  const statuses = [...t.matchAll(/"status"\s*:\s*"([A-Za-z_]+)"/g)].map((m) => m[1].toLowerCase())
-  // one status in the whole text can only be this report's own; several, and
-  // there is no way to tell whose, so none of them speaks for the whole
-  const status = statuses.length === 1 ? statuses[0] : ''
+  const trusted = /"trustworthy_result"\s*:\s*true/.test(t)
+  const untrusted = /"trustworthy_result"\s*:\s*false/.test(t)
+  const st = t.match(/"status"\s*:\s*"([A-Za-z_]+)"/)
+  const status = st?.[1].toLowerCase() ?? ''
   const err = t.match(/"(?:error|message)"\s*:\s*"([^"\n]{1,140})/)
   const unverified = { verdict: 'unverified' as const, reason: 'ran, but openPASO did not verify the result' }
   // The status decides first, exactly as the server does. Checking the

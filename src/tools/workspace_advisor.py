@@ -389,16 +389,71 @@ _SOLVER_MARKERS = (
     "DOLFINX", "dolfinx", "Solving linear variational problem",
     "deallog", "DEAL_II", "Starting value", "Convergence step",
     "NGSolve", "assemble VOL", "call pardiso", "iteration 1 err",
+    # DUNE-fem's ACTUAL console on this install, measured rather than guessed.
+    # The three spellings above are the ones a reader would expect and none of
+    # them appears in a real DUNE run, so this check told an agent
+    # "THIS LOG CARRIES YOUR OWN WORDS, NOT THE SOLVER'S OUTPUT -- 1311 bytes
+    # with no line any of the nine codes emits" about a file that began
+    # `DUNE-INFO: Compiling HierarchicalGrid (new)`. The agent read the same
+    # file back four calls later to check. Our own served fact 8 quotes
+    # `DUNE-INFO: Compiling Integrands (new)` as the canonical DUNE line, so
+    # the marker list disagreed with the knowledge we serve about the same
+    # solver.
     "dune-fem", "linear.verbose", "Newton iteration",
+    "DUNE-INFO", "Fem::CG", "Compiling Integrands", "Compiling Scheme",
     "scikit-fem", "skfem", "Basis(",
     "FEBio", "febio", "N O R M A L   T E R M I N A T I O N",
     "SPARTA", "Step CPU", "Loop time of",
     "Solver Time", "Solution Time", "Total Time",
 )
 
+
+_CONTRACT_LINE = _re_mod.compile(r"^\s*NDOF\s*=\s*\d+\s*$", _re_mod.M | _re_mod.I)
+
+
 def _looks_like_captured_output(text: str) -> bool:
+    """Whether this text is a solver's console rather than a written summary.
+
+    A MARKER LIST CANNOT BE COMPLETE, AND THIS ONE ACCUSES ON ABSENCE. Measured
+    on this install: a DUNE-fem run whose JIT modules are already cached prints
+    NOTHING a marker list can match -- the `DUNE-INFO: Compiling ...` lines that
+    the served facts quote as canonical appear only on a COLD cache, which is
+    the first run and never the rest. So a correct participant, run twice,
+    produces a second log this check would call the agent's own words.
+
+    The contract line is the second answer. Every served participant prints
+    `NDOF = <integer>` on a line of its own, and that line IS the product's own
+    evidence that a solve happened at a stated mesh. A log carrying it is a
+    participant's console whether or not the solver was chatty.
+
+    Reporting an ABSENCE as a finding is the shape this repository keeps
+    finding; narrowing it to "no marker AND no contract line" is what stops
+    this one accusing a solver of not existing.
+    """
     low = text.lower()
-    return any(m.lower() in low for m in _SOLVER_MARKERS)
+    if any(m.lower() in low for m in _SOLVER_MARKERS):
+        return True
+    return bool(_CONTRACT_LINE.search(text))
+
+
+def _only_the_contract_line(text: str) -> bool:
+    """A log that proves a run happened but not WHICH code performed it.
+
+    THE TWO DOORS MUST NOT DISAGREE IN THE REASSURING DIRECTION. This module
+    accepts `NDOF = <n>` as evidence of a solver console, because a warm JIT
+    cache prints nothing else and a marker list can never be complete. The
+    evidence rule that judges a finished result is stricter, and rightly: when
+    every line a log offers is the code-agnostic contract line -- which any
+    script can echo -- it proves an iteration happened, not who performed it,
+    and a coupled result needs to show that the two PRESCRIBED codes ran. A
+    write-time check that stays silent on such a log while the later verdict
+    condemns it is the same drift as three doors resolving a path three ways.
+    """
+    low = text.lower()
+    if any(m.lower() in low for m in _SOLVER_MARKERS):
+        return False
+    return bool(_CONTRACT_LINE.search(text))
+
 
 def _discarded_proof_check(written: Path, content: str) -> str:
     """An execution log carrying the agent's prose instead of the capture.
@@ -432,6 +487,30 @@ def _discarded_proof_check(written: Path, content: str) -> str:
     if not _lm or _lm.group("ext").lower() != "log":
         return ""
     if _looks_like_captured_output(content):
+        if _only_the_contract_line(content):
+            return (
+                "\n\n[early check of " + written.name + ":]\n"
+                "  * THIS LOG PROVES A RUN, NOT WHICH CODE RAN IT. Its only "
+                "recognisable line is the `NDOF = <n>` contract line, which any "
+                "script can echo; nothing in it is the solver's own console. A "
+                "coupled result has to show that each PRESCRIBED code ran, and a "
+                "side whose log carries no output from its own named code "
+                "cannot be credited to that code however right its numbers "
+                "are. Capture the solver's own output into this log -- its "
+                "banner, its iteration lines, its termination message -- "
+                "alongside the NDOF line, the way the served participant does. "
+                "If you ran it through subprocess you already have the bytes:\n"
+                "        r = subprocess.run(cmd, capture_output=True, text=True)\n"
+                "        Path(log).write_text(r.stdout + r.stderr)   # plus the "
+                "NDOF line\n"
+                "    -- or drop capture_output and redirect instead, "
+                "`cmd > <that side's run log> 2>&1`. Do not summarise it and do "
+                "not retype it: a real capture of a 4C or Kratos side runs to "
+                "kilobytes (2947 and 1476 bytes, measured), and a run that got "
+                "everything else right wrote three lines of its own prose here "
+                "and could not be credited for any of it. A quiet solver still "
+                "prints something of its own on the first run of a level; keep "
+                "that capture rather than a summary of it.")
         return ""
     return (
         "\n\n[early check of " + written.name + ":]\n"
@@ -454,6 +533,9 @@ def _discarded_proof_check(written: Path, content: str) -> str:
         "wrote three lines of its own prose here and "
         "could not be credited for any of it. For reference, a real capture of "
         "these two codes is 2947 and 1476 bytes.")
+
+
+
 _WRAPPERS = ("stdbuf", "timeout", "nice", "nohup", "ionice", "setsid")
 
 def _env_after_wrapper_check(command: str) -> str:
@@ -586,7 +668,7 @@ def _constant_deliverable_check(written: Path, content: str) -> str:
 
     MEASURED, on a live full-task coupled run of this fork. The coupling
     SUCCEEDED: side A solved at three levels with max|u| of 6.57e-07, 4.13e-07
-    and 3.81e-07 -- the same order as the campaign cell that graded CORRECT --
+    and 3.81e-07 -- the same order as a correct run --
     the interface residual reached 6.8e-11, and the iteration converged in 7
     steps. The participants then failed to write their per-level dumps,
     openPASO said so at the level with the fix, and the agent answered by
@@ -617,10 +699,7 @@ def _constant_deliverable_check(written: Path, content: str) -> str:
     the same 579 cells. They built the loose version -- any script mentioning a
     deliverable stem that also carries placeholder language ("placeholder",
     "replace with actual", "for now,", "# TODO") -- and it speaks on 159 cells,
-    including ELEVEN OF THE THIRTY-FOUR graded CORRECT:
-
-        CORRECT 11/34, MALFORMED 40/116, UNPHYSICAL 9/18,
-        CONFIDENTLY_WRONG 5/11, HONEST_INCOMPLETE 63/259, FABRICATED 2/2
+    including many that were correct.
 
     A third of the correct submissions say "placeholder" somewhere. So the words
     carry no signal at all and the entire discrimination comes from the AST
@@ -1192,7 +1271,7 @@ def _participant_write_check(written: Path, content: str) -> str:
     # THE IMPORT THAT NEVER REACHED THE ANSWER IS ITS OWN CATEGORY TOO, and the
     # quietest of the three: the run finishes, the interface residual collapses,
     # and the submission is complete and wrong. Measured on 63 recorded NGSolve
-    # participants (32 fire) and on the 516 graded cells (32 fire, none CORRECT).
+    # participants (32 fire) and on the recorded runs (32 fire, no correct one among them).
     try:
         from tools.participant_lint import imported_values_not_held   # noqa: PLC0415
         lost = imported_values_not_held(content)
@@ -1203,7 +1282,7 @@ def _participant_write_check(written: Path, content: str) -> str:
     # A MESH THAT ASSEMBLES A SINGULAR SYSTEM IS THE THIRD CATEGORY: the run
     # starts, the solver reports its own failure, and the mesh is never
     # suspected. 29 of the 48 recorded hand-built tetrahedral scripts skip the
-    # sign check; every graded cell among them is incomplete.
+    # sign check; every evaluated run among them is incomplete.
     try:
         from tools.participant_lint import unoriented_tetrahedra   # noqa: PLC0415
         tets = unoriented_tetrahedra(content)
@@ -1426,7 +1505,7 @@ def deliverable_findings_after_worker(workdir: Path) -> str:
         # ONLY WHERE THE LOG IS DEMONSTRABLY ANOTHER LEVEL'S. The body reports
         # any mismatch between a deliverable log's dof count and that side's
         # captured console, and a near-miss is not a copied log: measured on
-        # the graded record it speaks on 3 of the 32 correct cells, two of them
+        # the recorded runs it speaks on 3 of the 32 correct cells, two of them
         # differing by 1% and 6% with no other level to match. It says which
         # case it found -- "it is level N's console" -- so keep that one.
         found += [f for f in (wrong_level_run_log_findings(workdir) or [])

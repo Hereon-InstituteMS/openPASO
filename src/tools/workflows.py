@@ -20,6 +20,7 @@ from pathlib import Path
 import yaml
 from mcp.server.fastmcp import FastMCP
 
+from core.backend import error_excerpt
 from core.registry import get_backend, available_backends
 from core.backend import BackendStatus
 
@@ -269,7 +270,7 @@ def register_workflow_tools(mcp: FastMCP):
                         entry["max"] = pp.fields[0].max
                         entry["min"] = pp.fields[0].min
             elif job.error:
-                entry["error"] = job.error[:200]
+                entry["error"] = error_excerpt(job.error, 400)
 
             results.append(entry)
 

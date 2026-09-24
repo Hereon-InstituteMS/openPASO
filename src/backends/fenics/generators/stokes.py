@@ -204,6 +204,15 @@ with VTXWriter(domain.comm, "velocity.bp", [u_h]) as vtx:
 with VTXWriter(domain.comm, "pressure.bp", [p_h]) as vtx:
     vtx.write(0.0)
 
+# Beside the VTX (.bp) output, which needs an ADIOS2 reader nobody may have,
+# write result.xdmf of a P1 interpolation; the openPASO backend converts it to a
+# standard result.vtu after the run (XDMFFile refuses P>1 functions directly).
+import basix.ufl
+from dolfinx.io import XDMFFile
+_Vvis = fem.functionspace(domain, basix.ufl.element("Lagrange", domain.basix_cell(), 1, shape=(domain.geometry.dim,)))
+_o = fem.Function(_Vvis, name="velocity"); _o.interpolate(u_h)
+with XDMFFile(domain.comm, "result.xdmf", "w") as _x:
+    _x.write_mesh(domain); _x.write_function(_o)
 print(f"Stokes: DOFs={{W.dofmap.index_map.size_global}}")
 print("Stokes solve complete.")
 '''

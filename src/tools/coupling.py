@@ -2315,10 +2315,27 @@ try:
     s = gmsh.model.geo.addPlaneSurface([cl])
     gmsh.model.geo.synchronize()
     gmsh.model.mesh.generate(2)
-    from dolfinx.io import gmshio
-    domain, _, _ = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, 0, gdim=2)
+    # dolfinx 0.10 RENAMED this module: dolfinx.io.gmshio is gone and the reader lives in
+    # dolfinx.io.gmsh, returning a MeshData object rather than a tuple. openPASO's own knowledge
+    # says so; this template still imported the old name, so on the installed version the import
+    # raised and the handler below quietly replaced the L-domain with a UNIT SQUARE -- a different
+    # problem, solved confidently, with nothing said. Try the current name first, fall back to the
+    # old one for dolfinx 0.9.
+    try:
+        from dolfinx.io import gmsh as _dio
+    except ImportError:
+        from dolfinx.io import gmshio as _dio
+    _read = _dio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, 0, gdim=2)
+    domain = getattr(_read, "mesh", None) or _read[0]
     gmsh.finalize()
-except Exception:
+except Exception as _mesh_err:
+    # A SUBSTITUTED GEOMETRY IS NOT A FALLBACK, IT IS A DIFFERENT PROBLEM. This replaced the
+    # L-domain with a unit square and said nothing, so the run reported an answer to a question
+    # nobody asked. Say what happened, in the output the reader sees.
+    print(f"MESH FAILED: the Gmsh L-domain could not be built ({type(_mesh_err).__name__}: "
+          f"{_mesh_err}). Falling back to a UNIT SQUARE, which is NOT the requested geometry: "
+          f"any result below is for the wrong domain and must not be reported as an answer.",
+          flush=True)
     domain = mesh.create_unit_square(MPI.COMM_WORLD, 32, 32, mesh.CellType.triangle)
 
 gdim = domain.geometry.dim

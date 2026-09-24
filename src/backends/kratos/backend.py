@@ -73,13 +73,32 @@ def _find_kratos_python():
     import sys
     from pathlib import Path
 
-    if "python" in _KRATOS_PYTHON_CACHE:
-        return _KRATOS_PYTHON_CACHE["python"]
+    # The cache is keyed by the explicit pin. A KRATOS_PYTHON set later in the
+    # process (the coverage harness pins through it) must win over an
+    # interpreter resolved earlier under a different environment. Measured
+    # 2026-09-24: the full test suite resolved and cached the server venv --
+    # Kratos core, no ConvectionDiffusionApplication -- before the
+    # planted-failure tests set the pin, and every Kratos run of theirs died on
+    # the missing application while the same tests passed alone.
+    cache_key = os.environ.get("KRATOS_PYTHON", "") or "python"
+    if cache_key in _KRATOS_PYTHON_CACHE:
+        return _KRATOS_PYTHON_CACHE[cache_key]
 
     candidates = []
     env_python = os.environ.get("KRATOS_PYTHON", "")
     if env_python and Path(env_python).is_file():
-        candidates.append((-3, env_python))
+        # A NAMED INTERPRETER IS USED, NOT AUDITIONED. Until 2026-09-24 the pin
+        # was only the first candidate to be probed, and when its probe failed
+        # for any reason -- a timeout under a loaded box, a crashed import --
+        # the finder fell through to conda environments and silently ran Kratos
+        # somewhere else. Measured in two full test suites: the pinned venv
+        # (Kratos 10.3, ConvectionDiffusionApplication present) was passed over
+        # for a 3.12 build without that application, and every pinned run died
+        # on the missing import while the same runs passed alone. Someone who
+        # names an interpreter means it; if it cannot do the work, the run fails
+        # loudly under that interpreter instead of succeeding under another.
+        _KRATOS_PYTHON_CACHE[cache_key] = env_python
+        return env_python
     try:
         from core.autodiscovery import load_discovered_config
         entry = ((load_discovered_config() or {}).get("backends") or {}).get("kratos")
@@ -116,8 +135,8 @@ def _find_kratos_python():
     # REGISTERS and could not actually run, and five more it does not yet offer.
     #
     # So candidates are scored by how many of those applications import, and the
-    # best wins. An explicit KRATOS_PYTHON still wins outright: someone who names
-    # an interpreter means it.
+    # best wins. (An explicit KRATOS_PYTHON never reaches this loop: it returned
+    # above, unprobed, because someone who names an interpreter means it.)
     probe = (
         "import importlib.util as u\n"
         "apps = %r\n"
@@ -141,12 +160,12 @@ def _find_kratos_python():
         except (ValueError, IndexError):
             score = 0
         if priority <= -2:            # named outright: take it and stop
-            _KRATOS_PYTHON_CACHE["python"] = python
+            _KRATOS_PYTHON_CACHE[cache_key] = python
             return python
         if score > best_score:
             best, best_score = python, score
 
-    _KRATOS_PYTHON_CACHE["python"] = best
+    _KRATOS_PYTHON_CACHE[cache_key] = best
     return best
 
 
@@ -312,6 +331,38 @@ class KratosBackend(SolverBackend):
                 template_variants=["2d"],
             ),
             # New applications
+            # Added 2026-09-19. FluidDynamicsApplication is installed and was
+            # unreached. The June audit deleted a 'fluid' row that was an
+            # availability-probe stub; this one is a real monolithic VMS
+            # Navier-Stokes solve that checks its own result against mass
+            # conservation and the developed-channel peak/mean ratio -- both
+            # derived from the geometry asked for, not retrieved.
+            # Added 2026-09-19. FSIApplication is installed and was
+            # unreached. Its substance is the convergence accelerators for a
+            # partitioned fixed-point iteration, and this uses one for
+            # exactly that across two real ConvectionDiffusion solves. It
+            # checks the converged interface against the value derived from
+            # the conductivities, lengths and boundary temperatures, and
+            # checks that the accelerator moves only the iteration count and
+            # not the answer.
+            PhysicsCapability(
+                name="fsi_partitioned",
+                description=("Partitioned Dirichlet-Neumann coupling driven "
+                             "by a KratosFSIApplication convergence "
+                             "accelerator (FSIApplication)"),
+                spatial_dims=[2],
+                element_types=["LaplacianElement2D3N", "ThermalFace2D2N"],
+                template_variants=["2d"],
+            ),
+            PhysicsCapability(
+                name="fluid_dynamics",
+                description=("Incompressible Navier-Stokes via "
+                             "FluidDynamicsApplication, monolithic VMS "
+                             "element (FluidDynamicsApplication)"),
+                spatial_dims=[2],
+                element_types=["VMS2D3N", "QSVMS2D3N"],
+                template_variants=["channel_2d"],
+            ),
             PhysicsCapability("poromechanics", "Poromechanics: fracture in porous media, dam/tunnel (PoromechanicsApplication)", [2, 3],
                               ["SmallStrainUPwDiffOrderElement2D6N"], ["2d"]),
             PhysicsCapability("shallow_water", "Shallow water equations: floods, dam breaks, coastal (ShallowWaterApplication)", [2],

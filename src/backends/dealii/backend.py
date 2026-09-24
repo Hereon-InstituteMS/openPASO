@@ -417,6 +417,18 @@ class DealiiBackend(SolverBackend):
     def supported_physics(self) -> list[PhysicsCapability]:
         return [
             PhysicsCapability(
+                name="element_survey",
+                description="Finite-element survey: builds every FE_* class "
+                            "this deal.II install declares and checks each one "
+                            "(quadrature integrates the cell, mass matrix is "
+                            "SPD, space reproduces a constant). Answers 'which "
+                            "elements does this build actually have, and how "
+                            "does each behave' without guessing from docs.",
+                spatial_dims=[2, 3],
+                element_types=["all"],
+                template_variants=["default"],
+            ),
+            PhysicsCapability(
                 name="poisson",
                 description="Poisson / Laplace equation (step-3/6/7, with AMR, "
                             "L-domain, rectangle, 3D mixed Dirichlet-Neumann "

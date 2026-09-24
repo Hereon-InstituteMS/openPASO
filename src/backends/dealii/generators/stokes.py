@@ -242,8 +242,8 @@ KNOWLEDGE = {
             "regions).",
     },
     "mesh_generators": {
-        "hyper_cube": "Driven-cavity Stokes benchmark; reference values Ghia et al. (1982).",
-        "channel_with_cylinder": "Schäfer-Turek benchmark — cylinder at (0.2, 0.2) in (2.2 × 0.41) channel. Reference lift/drag at Re=20/100.",
+        "hyper_cube": "Driven-cavity Stokes geometry; the classic reference series is Ghia et al. (1982) — retrieve it, it is not stored here.",
+        "channel_with_cylinder": "Schäfer-Turek channel-with-cylinder geometry — cylinder at (0.2, 0.2) in a (2.2 × 0.41) channel; retrieve the published lift/drag for the Re you run.",
         "hyper_rectangle": "Generic channel domain — inflow left, outflow right.",
         "hyper_L": "Backward-facing step; classic recirculating-flow test.",
         "subdivided_hyper_rectangle": "Anisotropic refinement (taller in y than long in x) for boundary-layer resolution.",
@@ -346,15 +346,19 @@ KNOWLEDGE = {
         "RaviartThomas — orders of magnitude smaller than the "
         "1e-3 to 1e-5 typical of FE_Q Taylor-Hood at the same h. "
         "This is the expected H(div) behaviour, not a bug.",
-        "[Integration] channel_with_cylinder is the Schäfer-Turek "
-        "benchmark — set the cylinder centre to (0.2, 0.2) and the "
-        "channel size to (2.2 × 0.41) to match the published "
-        "lift/drag values; off-by-one on these dimensions makes "
-        "the reference values not match. Signal: computed drag "
-        "coefficient C_D from VectorTools::compute_mean_value or "
-        "user-side post-processing differs from the Schäfer-Turek "
-        "1996 reference (Re=20: C_D ≈ 5.58, Re=100: C_D ≈ 3.22) by "
-        "more than 10%; the mismatch is systematic across "
-        "Triangulation::refine_global, not noise.",
+        "[Integration] channel_with_cylinder gives the Schäfer-Turek "
+        "geometry, and the published numbers belong to those exact "
+        "dimensions — cylinder centre (0.2, 0.2), channel 2.2 × 0.41. "
+        "Change either and your run is a different problem, so a "
+        "comparison against a retrieved reference is meaningless; "
+        "off-by-one here is a common and silent cause of a "
+        "'wrong' result. Signal: a drag coefficient from "
+        "VectorTools::compute_mean_value or user-side "
+        "post-processing that differs from the reference you "
+        "retrieved by more than about 10%, where the offset is "
+        "SYSTEMATIC across Triangulation::refine_global rather than "
+        "shrinking — a discrepancy that does not close under "
+        "refinement is a setup error, not discretisation error. "
+        "Retrieve the reference and cite it; it is not stored here.",
     ],
 }

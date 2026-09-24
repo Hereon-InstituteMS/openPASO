@@ -72,12 +72,33 @@ MU = E_MOD / (2.0 * (1.0 + NU))
 GEOM_TOL = 1e-9 * max(X1 - X0, Y1 - Y0)
 
 
+
+def _partner_block(imp):
+    """The partner's block from imports.json, by the name the driver actually used."""
+    if not isinstance(imp, dict) or not imp:
+        return None
+    if PARTNER in imp:
+        return imp[PARTNER] or None
+    others = [k for k in imp if isinstance(imp.get(k), dict)]
+    if len(others) == 1:     # named differently in couple(...) than here: read it, say so
+        import sys as _sys
+        print(f"NOTE: PARTNER is {PARTNER!r} but imports.json is keyed {others[0]!r} "
+              f"-- reading that block; align PARTNER with the name in your "
+              f"couple(...) call.", file=_sys.stderr)
+        return imp[others[0]] or None
+    if others:
+        raise SystemExit(f"imports.json holds blocks named {others} and none is "
+                         f"PARTNER={PARTNER!r}: set PARTNER to the partner's name "
+                         f"in your couple(...) call.")
+    return None
+
+
 def read_imports():
     p = Path("imports.json")
     if not p.is_file():
         return None
     try:
-        return json.loads(p.read_text()).get(PARTNER) or None
+        return _partner_block(json.loads(p.read_text()))
     except json.JSONDecodeError:
         return None
 

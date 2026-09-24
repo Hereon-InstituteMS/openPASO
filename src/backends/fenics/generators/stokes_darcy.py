@@ -252,6 +252,21 @@ u_darcy = fem.assemble_scalar(fem.form(
     u_mag_form * dx_subdomain(2)))
 u_stokes = domain.comm.allreduce(u_stokes)
 u_darcy = domain.comm.allreduce(u_darcy)
+# --- Write the result where a reader can open it ------------------------------
+# This template printed a norm and wrote nothing, so a model that ran it had
+# no field to look at, plot or verify. XDMFFile writes P1 functions; the
+# openPASO backend converts result.xdmf/.h5 into a standard result.vtu after
+# the run (the same route the Poisson template uses). Higher-order or
+# non-Lagrange functions are interpolated into P1 for output first.
+import json
+from dolfinx.io import XDMFFile
+_Vvis = fem.functionspace(domain, basix.ufl.element("Lagrange", domain.basix_cell(), 1, shape=(domain.geometry.dim,)))
+_uo = fem.Function(_Vvis, name="velocity"); _uo.interpolate(sol.sub(0).collapse())
+_po = sol.sub(1).collapse(); _po.name = "pressure"
+with XDMFFile(domain.comm, "result.xdmf", "w") as _x:
+    _x.write_mesh(domain); _x.write_function(_uo); _x.write_function(_po)
+with open("results_summary.json", "w") as _f:
+    json.dump({{"u_l1_stokes": float(u_stokes), "u_l1_darcy": float(u_darcy), "n_dofs": W.dofmap.index_map.size_global}}, _f, indent=2)
 print(f"||u||_L1 stokes = {{u_stokes}}, ||u||_L1 darcy = {{u_darcy}}")
 print(f"darcy/stokes ratio = {{u_darcy / max(u_stokes, 1e-12)}}")
 print(f"||p||_L2 = {{np.sqrt(domain.comm.allreduce(fem.assemble_scalar(fem.form(p_sol * p_sol * ufl.dx))))}}")

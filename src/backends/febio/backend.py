@@ -340,6 +340,22 @@ class FebioBackend(SolverBackend):
                 element_types=["hex8"],
                 template_variants=["3d_bar"],
             ),
+            # Added 2026-09-19. FEBio registers 'solute' (Biphasic Solute
+            # Analysis) as a module in its own right, between 'biphasic' and
+            # 'multiphasic'. openPASO reached the two neighbours and not this
+            # one. Derived from the multiphasic template and verified by
+            # execution on FEBio 4.12.0: NORMAL TERMINATION with defaults and
+            # again with E and diffusivity overridden.
+            PhysicsCapability(
+                name="solute",
+                description=("Biphasic poroelasticity carrying EXACTLY ONE "
+                             "solute (FEBio module 'solute'); use "
+                             "'multiphasic' for several solutes or a fixed "
+                             "charge density"),
+                spatial_dims=[3],
+                element_types=["hex8", "tet4"],
+                template_variants=["3d_diffusion"],
+            ),
             PhysicsCapability(
                 name="multiphasic",
                 description=("Biphasic poroelasticity + solute transport "

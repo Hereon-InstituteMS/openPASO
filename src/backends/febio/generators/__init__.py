@@ -14,6 +14,7 @@ from .hyperelasticity import GENERATORS as _he_gen, KNOWLEDGE as _he_kn
 from .biphasic import GENERATORS as _bi_gen, KNOWLEDGE as _bi_kn
 from .heat import GENERATORS as _ht_gen, KNOWLEDGE as _ht_kn
 from .multiphasic import GENERATORS as _mp_gen, KNOWLEDGE as _mp_kn
+from .solute import GENERATORS as _sol_gen, KNOWLEDGE as _sol_kn
 from .fluid import GENERATORS as _fl_gen, KNOWLEDGE as _fl_kn
 from .fluid_fsi import GENERATORS as _fsi_gen, KNOWLEDGE as _fsi_kn
 from .rigid_body import GENERATORS as _rb_gen, KNOWLEDGE as _rb_kn
@@ -38,7 +39,7 @@ for _g in (_le_gen, _he_gen, _bi_gen, _ht_gen,
            _mp_gen, _fl_gen, _fsi_gen, _rb_gen,
            _ve_gen, _pl_gen, _fr_gen, _ac_gen,
            _bfs_gen, _pf_gen, _dm_gen, _gr_gen,
-           _mms_gen):
+           _mms_gen, _sol_gen):
     GENERATORS.update(_g)
 
 
@@ -47,7 +48,7 @@ for _k in (_le_kn, _he_kn, _bi_kn, _ht_kn,
            _mp_kn, _fl_kn, _fsi_kn, _rb_kn,
            _ve_kn, _pl_kn, _fr_kn, _ac_kn,
            _bfs_kn, _pf_kn, _dm_kn, _gr_kn,
-           _mms_kn):
+           _mms_kn, _sol_kn):
     KNOWLEDGE.update(_k)
 
 

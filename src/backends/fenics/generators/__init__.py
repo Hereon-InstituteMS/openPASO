@@ -41,6 +41,7 @@ _PHYSICS_MODULES: dict[str, str] = {
     "fracture":             ".fracture",
     "stokes_darcy":         ".stokes_darcy",
     "matrix_free_poisson":  ".matrix_free_poisson",
+    "element_survey":       ".element_survey",
     # Advanced physics — all served by .advanced (multi-physics module)
     "dg_methods":           ".advanced",
     "contact":              ".advanced",

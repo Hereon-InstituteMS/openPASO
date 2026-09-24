@@ -18,10 +18,30 @@ def _elasticity_2d_kratos(params: dict) -> str:
     code -- and every coupled task does. See _structural_real for the API
     facts, each of which was a corrected first guess.
 
-    Verified by execution: a 40x4 cantilever, L=10, h=1, E=1e5, nu=0.3, tip
-    shear traction 1 per unit length gives max|u| = 3.9010e-02 against the
-    Euler-Bernoulli slender estimate P L^3/(3 E I) = 4.0e-02 -- 2.5% under,
-    which is what shear flexibility and bilinear quads give at 10:1.
+    Verified by execution on a slender cantilever at about 10:1: bilinear
+    quads come in a couple of per cent UNDER the Euler-Bernoulli slender
+    estimate P L^3/(3 E I), and further still under Timoshenko.
+
+    THAT DEFICIT IS THE ELEMENT BEING TOO STIFF -- shear locking -- AND IT
+    IS NOT SHEAR FLEXIBILITY. An earlier version of this entry said it was,
+    which is backwards: shear flexibility ADDS deflection. Timoshenko is
+    Euler-Bernoulli PLUS a shear term, so a result below Euler-Bernoulli is
+    even further below Timoshenko, and nothing that adds compliance can
+    explain it. Measured on the verified case: Euler-Bernoulli 4.0000e-02,
+    Timoshenko 4.0312e-02 (shear adds 3.1e-04), quad4 result 3.9010e-02 --
+    2.5% under the first and 3.2% under the second.
+
+    The practical consequence is the opposite of the old advice: a few per
+    cent under is the ordinary locking of a bilinear quad at this aspect
+    ratio and is tolerable, but it is an ERROR SOURCE and it gets worse as
+    the element gets thinner, not better. Refining in-plane barely helps;
+    the cure is a quadratic element. structural_dynamics.py carries the
+    measured recovery curve and reaches the same conclusion, which this
+    entry used to contradict.
+
+    Derive the slender estimate for your own L, E, I and P and compare, and
+    compute Timoshenko too if the beam is not slender -- the gap between the
+    two tells you whether shear matters at all for your geometry.
     """
     nx = params.get("nx", 40)
     return real_structural_script(
@@ -61,8 +81,8 @@ def _elasticity_nonlinear_kratos(params: dict) -> str:
 
     Use the LINEAR route, which is verified: `linear_elasticity/2d` emits
     SmallDisplacementElement2D4N with LinearElasticPlaneStrain2DLaw and
-    reproduces a 40x4 cantilever tip deflection of 3.9010e-02 against the
-    Euler-Bernoulli 4.0e-02. For genuinely large deformation on this install,
+    reproduces a slender cantilever tip deflection to within a few per cent
+    of the Euler-Bernoulli estimate. For genuinely large deformation on this install,
     4C's SOLID/WALL elements with KINEM nonlinear are the established path.
     """
     return (
@@ -84,7 +104,7 @@ def _elasticity_nonlinear_kratos(params: dict) -> str:
         "# template: it looks like an answer. Two routes that ARE verified:\n"
         "#   prepare_simulation('kratos', 'linear_elasticity')  -> small\n"
         "#     displacement, SmallDisplacementElement2D4N, cantilever tip\n"
-        "#     3.9010e-02 vs Euler-Bernoulli 4.0e-02\n"
+        "#     within a few per cent of the Euler-Bernoulli estimate\n"
         "#   prepare_simulation('fourc', 'structure')           -> SOLID/WALL\n"
         "#     with KINEM nonlinear for genuine large deformation\n"
         "# =====================================================\n")

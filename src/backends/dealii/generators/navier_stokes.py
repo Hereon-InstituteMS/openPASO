@@ -285,8 +285,8 @@ KNOWLEDGE = {
             "where upwinding helps stability.",
     },
     "mesh_generators": {
-        "channel_with_cylinder": "Schäfer-Turek benchmark — cylinder (0.2, 0.2) in (2.2 × 0.41) channel matches published Re=20/100 lift/drag.",
-        "hyper_cube": "Driven-cavity benchmark; Ghia/Ghia/Shin (1982) reference values at Re=100/400/1000/3200/5000/7500/10000.",
+        "channel_with_cylinder": "Schäfer-Turek channel-with-cylinder geometry — GridGenerator fixes the cylinder at (0.2, 0.2) in a (2.2 × 0.41) channel; retrieve the published lift/drag for the Re you run.",
+        "hyper_cube": "Driven-cavity geometry; the classic reference series is Ghia/Ghia/Shin (1982) — look up the values for your Re, they are not stored here.",
         "hyper_L": "Backward-facing step; reattachment-length benchmark.",
         "hyper_cube_with_cylindrical_hole": "Flow around cylinder; vortex-shedding at Re > 47.",
         "subdivided_hyper_rectangle": "Channel flow with prescribed-aspect elements (boundary-layer resolution).",

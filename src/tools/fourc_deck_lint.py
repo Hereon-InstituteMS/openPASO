@@ -643,7 +643,7 @@ def _lines_without_an_element_edge(text: str) -> list[str]:
 
 def field_scale_findings(deck_text: str, out_dir: Path) -> list[str]:
     """A finished 4C run whose field dwarfs every number the deck prescribes is a deck defect, not a
-    solution. Measured (round 39, a C1 cell): the scatra run finished normally with T = 8.5e13 at every
+    solution. Measured on one run: the scatra run finished normally with T = 8.5e13 at every
     node while the deck's largest Dirichlet value was 0.8 and its source coefficient 2*pi^2; nothing in
     the console said so and the parent read it as a result. Reads the newest VTU next to the deck with
     meshio, compares each point field's peak with the largest prescribed VAL / FUNCT constant (at least

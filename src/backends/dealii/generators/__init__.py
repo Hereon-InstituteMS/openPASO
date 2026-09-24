@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Maps template key ("physics_variant") to (module_path, function_name).
 _TEMPLATE_SPECS: dict[str, tuple[str, str]] = {
+    # element survey -- every FE class the install declares, as a literal
+    # constructor call, with an SPD check and a constant-reproduction check
+    "element_survey":            (".element_survey",       "_element_survey"),
+    "element_survey_default":    (".element_survey",       "_element_survey"),
     # poisson
     "poisson_2d":                (".poisson",              "_poisson_2d"),
     "poisson_3d":                (".poisson",              "_poisson_3d"),
@@ -94,6 +98,7 @@ _TEMPLATE_SPECS: dict[str, tuple[str, str]] = {
 
 # Maps physics name to (module_path, dict_name) for knowledge.
 _KNOWLEDGE_SPECS: dict[str, tuple[str, str]] = {
+    "element_survey":       (".element_survey",       "KNOWLEDGE"),
     "poisson":              (".poisson",              "KNOWLEDGE"),
     # Mixed-BC MMS study — knowledge lives in its own module; the
     # template key poisson_3d_mixed_bc is a variant of physics

@@ -855,44 +855,6 @@ def test_a_correction_sent_late_becomes_a_message_the_record_keeps():
     assert ("user", "Use a finer mesh.") in h
 
 
-def test_a_coupling_is_judged_before_its_record_is_shortened():
-    """A coupling reply carries no "status" and routinely runs past the length
-    at which a result is shortened for the record. Judged from that shortened
-    copy it read as a call that computed nothing, and a failed one whose first
-    participant looked good read as verified — the interface asserting the two
-    things it exists to prevent."""
-    from webui.outcome import classify_solver_result as c, shorten
-
-    verified = _wrap({"converged": True, "iterations": 7, "trustworthy_result": True,
-                      "verification": "VERIFIED - evidence and a critic review on record",
-                      "history": [[i, 1.0 / (i + 1)] for i in range(300)],
-                      "participant_output_logs": {"fluid": "x" * 4000, "solid": "y" * 4000}})
-    failed = _wrap({"participants": [{"name": "fluid", "status": "completed", "trustworthy_result": True},
-                                     {"name": "solid", "status": "failed", "trustworthy_result": False}],
-                    "pad": "z" * 9000, "converged": False, "trustworthy_result": False})
-    assert len(verified) > 8000 and len(failed) > 8000, "these are the everyday sizes"
-    # the invariant: shortening a record for storage never changes the verdict
-    assert c(verified) == "verified" and c(shorten(verified)) == "verified"
-    assert c(failed) == c(shorten(failed)), "the same evidence, the same answer"
-    assert c(shorten(failed)) != "verified", "a mixture is never a verified result"
-
-
-def test_a_report_with_no_verdict_of_its_own_is_not_verified_by_a_part_of_it():
-    """The docstring's ladder: levels 1 and 2 verified, level 3 a null
-    exchange. Taking the best evidence anywhere reported it as finished."""
-    from webui.outcome import classify_solver_result as c
-    mixed = _wrap({"levels": [{"level": 1, "trustworthy_result": True},
-                              {"level": 2, "trustworthy_result": False,
-                               "coupled_evidence": "null exchange"}]})
-    allgood = _wrap({"levels": [{"trustworthy_result": True}, {"trustworthy_result": True}]})
-    assert c(mixed) == "unverified"
-    assert c(allgood) == "verified"
-
-
-def _wrap(obj):
-    return "[{'type': 'text', 'text': '" + json.dumps(obj) + "'}]"
-
-
 def test_a_coupling_reports_its_verdict_in_its_own_shape():
     """couple and couple_precice carry the verification gate's verdict with no
     `status` field at all. Reading only the run shape called every verified

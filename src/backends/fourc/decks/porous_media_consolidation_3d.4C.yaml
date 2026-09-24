@@ -3,7 +3,9 @@ TITLE:
   - "Column 0.1 x 0.1 x 1.0, surface load q=1 ramped on over 0.05 s, drained"
   - "at the top (p=0), impervious base and sides, lateral rollers all round."
   - "The 3-D counterpart of the 2-D Terzaghi deck: excess pore pressure starts"
-  - "at ~q, dissipates upwards, settlement tends to q*H/E_oed = 9.0e-04."
+  - "at ~q and dissipates upwards; the settlement tends to the drained"
+  - "oedometric value q*H/E_oed, which you should evaluate for your own"
+  - "parameters and compare against what the run reports."
   - "Element: SOLIDPORO_PRESSURE_VELOCITY_BASED (3 solid dofs/node, the pore"
   - "fluid lives on a cloned porofluid discretisation with vx,vy,vz,p)."
 PROBLEM TYPE:

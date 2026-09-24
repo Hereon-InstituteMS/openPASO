@@ -141,8 +141,11 @@ Ai = A[inner_dofs][:, inner_dofs]
 Mi = M[inner_dofs][:, inner_dofs]
 
 # sigma=0 shift-invert: smallest eigenvalues of the generalised problem
-lam = np.sort(spla.eigsh(Ai, k=n_modes, M=Mi, sigma=0.0, which="LM",
-                         return_eigenvectors=False))
+_vals, _vecs = spla.eigsh(Ai, k=n_modes, M=Mi, sigma=0.0, which="LM",
+                          return_eigenvectors=True)
+_order = np.argsort(_vals)
+lam = _vals[_order]
+_vecs = _vecs[:, _order]
 
 # analytic lambda_(m,n) = pi^2 (m^2 + n^2), sorted
 mn = sorted(np.pi**2 * (m*m + n*n) for m in range(1, 6) for n in range(1, 6))
@@ -153,7 +156,17 @@ for i, (l, e) in enumerate(zip(lam, exact)):
     print(f"mode {{i}}: lambda = {{l:.6f}}   exact = {{e:.6f}}   "
           f"rel error = {{abs(l - e) / e:.3e}}")
 
-gridView.writeVTK("result", pointdata={{"mesh": space.interpolate(0, name="z")}})
+# Export the FIRST eigenvector as the result field. This used to write
+# space.interpolate(0) under the name "mesh": a field of zeros presented as the
+# run's result, which a check for a trivial field rightly refused. The
+# interior-dof eigenvector is scattered back onto the full space (boundary dofs
+# are zero by the Dirichlet condition) and normalised to max|phi| = 1.
+_phi = np.zeros(A.shape[0])
+_phi[inner_dofs] = _vecs[:, 0]
+_phi /= np.max(np.abs(_phi)) if np.max(np.abs(_phi)) > 0 else 1.0
+_ef = space.interpolate(0, name="eigenvector_0")
+_ef.as_numpy[:] = _phi
+gridView.writeVTK("result", pointdata=[_ef])
 summary = {{
     "eigenvalues": [float(l) for l in lam],
     "analytic_eigenvalues": [float(e) for e in exact],
@@ -1006,24 +1019,34 @@ KNOWLEDGE = {
             ],
         },
         "verification_you_can_run": (
-            "Kovasznay flow (Kovasznay 1948) is a closed-form steady "
-            "Navier-Stokes solution whose convective term is NOT zero, "
-            "unlike every parallel-flow test: with "
-            "lam = Re/2 - sqrt(Re^2/4 + 4*pi^2), "
-            "u = (1 - exp(lam*x)*cos(2*pi*y), "
-            "lam/(2*pi)*exp(lam*x)*sin(2*pi*y)) and "
-            "p = (1 - exp(2*lam*x))/2. Impose it as Dirichlet data on "
-            "three sides and impose the MATCHING EXACT TRACTION "
-            "nu*grad(u).n - p*n on the outflow, which is the natural "
-            "boundary term of this form and is what pins the pressure "
-            "level. Executed 2026-08-03 at Re=40 on a 16x16 "
-            "structuredGrid with P2/P1: Newton converged in 4 "
-            "iterations to a relative velocity error of 1.5e-04 and a "
-            "relative pressure error of 4.5e-04. The error must FALL "
-            "when you refine; a value that stalls means a boundary "
-            "term or the convective term is wrong. A parallel-flow "
-            "test such as Poiseuille CANNOT detect a broken convective "
-            "term, because (u.grad)u vanishes identically on it."),
+            "A PARALLEL-FLOW TEST SUCH AS POISEUILLE CANNOT DETECT A "
+            "BROKEN CONVECTIVE TERM, because (u.grad)u vanishes "
+            "identically on it — a solver with the convective term "
+            "deleted, mis-signed or written with the arguments swapped "
+            "passes Poiseuille exactly. To verify Navier-Stokes you "
+            "need a solution whose convective term is NOT zero. "
+            "Kovasznay flow (Kovasznay 1948) is the standard choice. "
+            "THE SHIPPED navier_stokes/2d TEMPLATE ALREADY IMPLEMENTS "
+            "THIS TEST and writes the closed form out in full — read it "
+            "there rather than looking it up, because a verification "
+            "template whose exact solution is missing is not a "
+            "verification template. (An earlier version of this entry "
+            "told you to retrieve it while the template three hundred "
+            "lines away handed it over: the same file giving two "
+            "opposite instructions.) If you want a DIFFERENT exact "
+            "solution than the one shipped, that one you retrieve and "
+            "cite. Two things "
+            "decide whether the test is valid. Impose the solution as "
+            "Dirichlet data on three sides and impose the MATCHING "
+            "EXACT TRACTION nu*grad(u).n - p*n on the outflow: that is "
+            "the natural boundary term of this form and it is what "
+            "pins the pressure level, and without it the pressure "
+            "error is meaningless. Then judge the result by "
+            "REFINEMENT, not by magnitude — the error must FALL as you "
+            "refine; one that stalls means a boundary term or the "
+            "convective term is wrong. Do not compare against an error "
+            "value someone else measured, including one of ours: on a "
+            "different grid and a different Re it means nothing."),
 
         "pitfalls": [
             (
@@ -1066,8 +1089,9 @@ KNOWLEDGE = {
                 "[Numerical] Taylor-Hood enforces incompressibility "
                 "only WEAKLY. Signal: ||div u||_L2 does not go to "
                 "machine zero the way the Stokes-Poiseuille test does "
-                "— measured 1.1e-02 at 8x8 and 2.6e-03 at 16x16 for "
-                "Kovasznay at Re=40. That is the discretisation, not a "
+                "— on a convective test case it stays visibly above "
+                "it, and falls by roughly a factor of four per mesh "
+                "halving. That is the discretisation, not a "
                 "bug; judge it by whether it FALLS under refinement. "
                 "(Executed 2026-08-03.)"
             ),
