@@ -51,8 +51,12 @@ You need Python 3.10–3.13 and about ten minutes. One solver is enough to begin
 
 ```bash
 pip install openpaso             # the server, with scikit-fem as a first solver
+openpaso doctor                  # which solvers openPASO can use on this machine; no key, no network
 openpaso                         # starts the MCP server on stdio; Ctrl-C to stop
 ```
+
+Missing a solver? `openpaso install ngsolve` (or `kratos`, `dune`, ...) checks first and installs only
+what is missing, the same way the server's `setup_backend` tool would.
 
 `openpaso` is the command your AI app's MCP configuration points at. Working from a checkout
 instead (to change the code, or to run `check_install.py`, which lists the solvers openPASO can

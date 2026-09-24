@@ -51,8 +51,13 @@ From PyPI, into a fresh virtual environment:
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install openpaso              # the server, with scikit-fem as a first solver
+openpaso doctor                   # which solvers openPASO can use on this machine; no key, no network
 openpaso                          # starts the MCP server on stdio; Ctrl-C stops it
 ```
+
+Missing a solver? `openpaso install ngsolve` (or `kratos`, `dune`, `fenics`, ...) checks first and
+installs only what is missing, the same way the server's `setup_backend` tool would; for the codes
+without a package (4C, deal.II, FEBio, SPARTA) it says what to do by hand.
 
 `openpaso` is the command your AI app's MCP configuration points at
 ([Option A](../use/ai-app.md)). scikit-fem comes with it; the other solvers that pip can

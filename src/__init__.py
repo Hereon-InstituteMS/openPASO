@@ -18,10 +18,10 @@ _HERE = _os.path.dirname(_os.path.abspath(__file__))
 if _HERE not in _sys.path:
     _sys.path.insert(0, _HERE)
 
-__version__ = "1.2.1"
+__version__ = "1.3.0"
 
 
 def main() -> None:
-    """Start the openPASO MCP server on stdio (the ``openpaso`` command)."""
-    from server import main as _serve  # noqa: E402  (flat import, see above)
-    _serve()
+    """The ``openpaso`` command: the server by default, ``doctor`` and ``install`` beside it."""
+    from cli import main as _cli  # noqa: E402  (flat import, see above)
+    raise SystemExit(_cli())
