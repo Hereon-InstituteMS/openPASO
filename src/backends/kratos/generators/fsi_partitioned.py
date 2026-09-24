@@ -216,9 +216,10 @@ KNOWLEDGE = {
             "0.5 converged cleanly to 0.177 instead. Divide by the node's "
             "tributary length -- h for an interior node, h/2 at each end -- "
             "and the same run lands on 0.500000. Nothing about the failure "
-            "looks like a failure. Signal: a coupling that converges cleanly to a "
-            "value you can also derive analytically, and misses it by a "
-            "factor of roughly the tributary length -- 0.177 where 0.5 was "
+            "looks like a failure. Signal: the interface TEMPERATURE "
+            "converges cleanly under the Aitken loop to a value you can "
+            "also derive analytically, and misses it by a factor of "
+            "roughly the tributary length -- 0.177 where 0.5 was "
             "derivable. Derive the interface value and compare; a clean "
             "convergence to the wrong number has no other symptom.",
 
