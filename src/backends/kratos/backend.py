@@ -601,9 +601,20 @@ class KratosBackend(SolverBackend):
 
         cmd = [python, str(script_path)]
 
-        # If KRATOS_ROOT has a source build, use it over pip-installed version
+        # If KRATOS_ROOT has a source build, use it over pip-installed version --
+        # UNLESS an interpreter was named. A named interpreter is used as it is,
+        # with its own site-packages: prepending a source tree to its PYTHONPATH
+        # swaps the Kratos it imports for whatever that tree holds. Measured
+        # 2026-09-24 in three full test suites: the registry had promoted a
+        # recorded, unbuilt source checkout to KRATOS_ROOT, its install/ held a
+        # core without ConvectionDiffusionApplication, and every run under the
+        # pinned venv (which has it) died on the import while the same runs
+        # passed wherever that record did not exist.
         from core.backend import get_env_with_source_root
-        env = get_env_with_source_root("KRATOS_ROOT")
+        if os.environ.get("KRATOS_PYTHON", "").strip():
+            env = os.environ.copy()
+        else:
+            env = get_env_with_source_root("KRATOS_ROOT")
 
         start = time.time()
         try:
