@@ -323,6 +323,17 @@ def main():
     #     argument of ResidualBasedLinearStrategy); the conservation self-check
     #     is built from REACTION_FLUX.
 
+    # ── HELD EDGES, END TO END (served) ─ keep. Measured: fills that skipped the
+    #    interface column on the held edges left its two end nodes free.
+    _loose = [_n for _n in mp.Nodes if not _n.IsFixed(KM.TEMPERATURE) and (
+        abs((_n.X, _n.Y)[AX] - OUTER_X) < TOL or (bool(FULL_OUTER_DIRICHLET) and (
+            abs((_n.X, _n.Y)[AL] - ALO) < TOL or abs((_n.X, _n.Y)[AL] - AHI) < TOL)))]
+    if _loose:
+        sys.exit(f"OUTER BOUNDARY: {len(_loose)} node(s) on the edges this side holds are free "
+                 f"(the first at ({_loose[0].X:g}, {_loose[0].Y:g})); every node of them, "
+                 f"{'the interface end nodes included, ' if FULL_OUTER_DIRICHLET else ''}"
+                 f"must be fixed before the solve. Nothing was exported.")
+
     # ── served: the trace is read from the nodes AT x = IFACE_X, checked by
     #    coordinate before anything is exported. Measured: two of three worker
     #    fills exported the OUTER column's temperature under the interface's

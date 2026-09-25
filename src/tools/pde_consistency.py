@@ -441,9 +441,10 @@ def _decide(res: ConsistencyResult) -> ConsistencyResult:
         res.explanation = (
             f"the weak residual falls at every refinement ({seq}; rate "
             f"{res.rate:.2f} per refinement overall). The field solves the "
-            f"equation you state inside its subdomain, so a remaining error is "
-            f"discretisation. This check does not see the boundary conditions: "
-            f"the interface and outer-boundary checks judge those.")
+            f"equation you state inside its subdomain. That says nothing about "
+            f"the values it holds on its boundary and interface -- a field "
+            f"solving the right equation with the wrong boundary data passes "
+            f"here -- which the interface and outer-boundary checks judge.")
     elif (lambda z: len(z) >= 2 and max(z) > 2.0 * min(z))([r.umax for r in good if r.umax > 0]):
         # A FIELD THAT CHANGES SIZE BETWEEN LEVELS IS A DIFFERENT PROBLEM AT EACH.
         # Measured on a coupled run: a Neumann side fed a partner flux that grew

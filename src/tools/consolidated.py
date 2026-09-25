@@ -79,6 +79,18 @@ _LOCAL_IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)", re.M)
 _SYSPATH = re.compile(r"""sys\.path\.\w+\(\s*\d*\s*,?\s*["']([^"'\n]+)["']""")
 
 
+def _at_sentence(text: str, limit: int) -> str:
+    """`text` cut to at most `limit` characters at the end of a sentence; a cut
+    with no sentence end in its second half ends at a word and says so."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    end = max(head.rfind(". "), head.rfind(".\n"))
+    if end >= limit // 2:
+        return head[:end + 1]
+    return head[:head.rfind(" ")] + " [...]" if " " in head else head
+
+
 def _referenced_file_digest(setup_text: str) -> str:
     """Fingerprint the files a deck REFERENCES, not just the deck itself.
 
@@ -846,11 +858,17 @@ def _coupling_setup_text(**kwargs) -> str:
     # what both sides hash: an unknown key cannot change the digest, so it
     # cannot break a binding, and a key that DOES change what is solved is in
     # the list below and still does.
-    _COVERED = ("participants", "monolithic", "probe", "max_iter", "tol",
+    # AN ITERATION CAP DOES NOT CHANGE WHAT IS SOLVED, any more than a time limit
+    # does: the answer is the tolerance's, and a run that hits the cap says it did
+    # not converge. Measured: a review of couple(max_iter=100) and the ladder
+    # couple() itself recommends, run with couple_levels' own default of 150, were
+    # two setups, and a right ladder read "no critic review of this coupling setup
+    # is on record (max_iter: reviewed 100, now 150)".
+    _COVERED = ("participants", "monolithic", "probe", "tol",
                 "theta", "accelerator", "relaxation", "problem", "solver_a",
                 "solver_b", "nx", "ny", "params", "data", "exchanges",
                 "scheme", "dimensions", "max_time", "time_window",
-                "max_iterations", "convergence_tol", "mapping")
+                "convergence_tol", "mapping")
     payload = {k: v for k, v in payload.items()
                if k in _COVERED or k.startswith("__")}
     payload["__coupling_setup__"] = True
@@ -5709,8 +5727,7 @@ def register_consolidated_tools(mcp: FastMCP):
                             f"THE IMPLIED COEFFICIENT ({', '.join(f'{k:.4g}' for k in _ki)}) IS NOT "
                             f"THE k YOUR CONFIG STATES ({_ks:g}): a flux computed as -k du/dn from "
                             f"this field would read about {_ks:g}. The sign test passes, but the flux "
-                            f"does not follow from this field with this k -- check the field itself "
-                            f"(was its interior solved?) and the coefficient the recovery used.")
+                            f"this side delivers does not follow from this field with this k.")
                 except Exception:                            # noqa: BLE001
                     pass
                 out["per_side"].append(res)
@@ -7384,21 +7401,19 @@ def register_consolidated_tools(mcp: FastMCP):
                 _pde_said = ("YOUR EQUATION CHECK DID NOT RUN: " + "; ".join(_pde_notes[:3]) + ". ")
             _unchecked = ""
             if not pde_check:
+                # NO LONGER "UNTIL YOU HAND OVER THE FOUR STRINGS": couple_levels and the
+                # hand-in audit judge each side from its own config.json and dumps, and a
+                # check of one or two levels decides nothing (the rule needs three).
                 _unchecked = (
-                    "NO LEVEL HAS BEEN CHECKED AGAINST ITS OWN EQUATION, and this reply cannot do it "
-                    "for you until you hand over the four strings you already have. Pass "
-                    "pde_check={\"<side>\": {\"solution_files\": \"<this side's per-level "
-                    "field files, comma-separated, in level order, on the probe grid your task "
-                    "prescribes>\", \"equation\": \"<your task's EQUATION line>\", "
-                    "\"source\": \"<that side's source>\", \"coefficient\": \"<that side's "
-                    "coefficient>\", \"domain\": \"[[x0,x1],[y0,y1]]\"}, ...} on your next couple "
-                    "call and every level from the second on is checked automatically. This is the "
-                    "only check that separates a right answer from one that converged cleanly to the "
-                    "WRONG function -- measured on three recorded coupled runs whose every "
-                    "self-consistency measure reported a converging run while the answer was wrong, "
-                    "one of them wrong by ninety times its own field magnitude. It needs no "
-                    "reference answer, and openPASO neither stores your strings nor reads any task "
-                    "file. ")
+                    "NO LEVEL HAS BEEN CHECKED AGAINST ITS OWN EQUATION YET: that takes three levels of "
+                    "the same side. couple_levels and the hand-in audit check each side from its own "
+                    "config.json (k, reaction, source_expr and the box x0, x1, y0, y1) and its "
+                    "field_level<k>.csv dumps; a side whose config.json lacks those keys is reported NOT "
+                    "CHECKED. It is the check that tells a field solving the stated problem from one "
+                    "that converged cleanly to the wrong function, and it needs no reference answer. It "
+                    "judges the field inside its subdomain only; the values the field holds on its "
+                    "interface and outer boundary are judged by the checks that read it against what "
+                    "the side exports. ")
             _one_call = (_not_yet if _trivial else
                          (f"LEVEL {_lvl_for_log} CONVERGED. " if _lvl_for_log else "LEVEL CONVERGED. ")
                          + _unchecked
@@ -7494,8 +7509,15 @@ def register_consolidated_tools(mcp: FastMCP):
         except Exception:                                # noqa: BLE001
             _deliv = []
         if _deliv:
+            # THE WORST FIRST, AND EACH CUT AT A SENTENCE. Three findings are shown, in
+            # the order they were found; a finding cut mid-sentence ran on into the next
+            # line of the reply (measured: "Measured across recorded runs, LEVEL 1 ...").
+            try:
+                _deliv = sorted(_deliv, key=_ra._rank)
+            except Exception:                            # noqa: BLE001
+                pass
             _dtxt = ("YOUR DELIVERABLES ON DISK HAVE DEFECTS ANY READER OF THE RESULT WILL SEE -- fix them before the next level: "
-                     + " | ".join(str(_f.get("finding", ""))[:600] for _f in _deliv[:3]))
+                     + " | ".join(_at_sentence(str(_f.get("finding", "")), 700) for _f in _deliv[:3]))
             _lead = _dtxt + ("\n" + _lead if _lead else "")
         if _next:
             _lead = (_lead + "\n" + _next) if _lead else _next
@@ -7814,9 +7836,29 @@ def register_consolidated_tools(mcp: FastMCP):
         # this again; here it reaches the agent while it can still act. It reads
         # each side's own config.json for the operator, never a task file or a key.
         _eq = []
+        _cut = {}
         try:
             from .result_audit import equation_findings as _eqf
-            _all_eq = list(_eqf(Path(history_dir), since=_ladder_t0))
+            # A DUMP IS CURRENT WHEN IT IS NEWER THAN WHAT WROTE IT, not only newer
+            # than this call: a run that coupled level 1 with couple() and levels 2-3
+            # with couple_levels had its level-1 dump set aside, and a three-level
+            # result that satisfied its equation read "only two levels could be
+            # checked" (measured). Each side's cutoff is the newest of its
+            # participant script and its config.json.
+            for _sp in specs:
+                if not isinstance(_sp, dict) or not _sp.get("work_dir"):
+                    continue
+                _wd = Path(str(_sp["work_dir"]))
+                _wd = _wd if _wd.is_absolute() else Path(history_dir) / _wd
+                _stamps = [(_wd / "config.json")] + [
+                    (_wd / _c if not Path(str(_c)).is_absolute() else Path(str(_c)))
+                    for _c in (_sp.get("command") or []) if str(_c).endswith(".py")]
+                _ts = [q.stat().st_mtime for q in _stamps if q.is_file()]
+                try:
+                    _cut[str(_wd.resolve())] = max(_ts) if _ts else _ladder_t0
+                except OSError:
+                    pass
+            _all_eq = list(_eqf(Path(history_dir), since=_cut or _ladder_t0))
             _eq = [f["finding"] for f in _all_eq
                    if "NOT CHECKED" not in f.get("finding", "")]
             # THE GAP IS NAMED, IN ONE LINE. This filtered every NOT CHECKED
@@ -7916,8 +7958,16 @@ def register_consolidated_tools(mcp: FastMCP):
                 _part_dirs.append(_pd if _pd.is_absolute() else Path(history_dir) / _pd)
         try:
             from .result_audit import unsolved_field_findings as _unsolved
-            for _f in _unsolved(Path(history_dir), dirs=_part_dirs, since=_ladder_t0):
+            # THE LADDER ANSWERS FOR ITS PARTICIPANTS: a probe folder beside them holds
+            # no dump of this sequence and must not sink it (scan=False).
+            for _f in _unsolved(Path(history_dir), dirs=_part_dirs, since=_cut or _ladder_t0, scan=False):
                 _ladder_faults.append(str(_f.get("finding", ""))[:500])
+        except Exception:                                    # noqa: BLE001
+            pass
+        try:
+            from .result_audit import exports_not_the_field_findings as _not_field
+            for _f in _not_field(Path(history_dir), dirs=_part_dirs, since=_cut or _ladder_t0, scan=False):
+                _ladder_faults.append(str(_f.get("finding", ""))[:700])
         except Exception:                                    # noqa: BLE001
             pass
         for _t in _eq:

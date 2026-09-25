@@ -1073,7 +1073,18 @@ def unset_mask_bits(content: str) -> str:
             continue
         after = body[m.end():]
         first_write = re.search(rf"\b{re.escape(name)}\s*\[[^\]]+\]\s*=(?!=)", after)
-        init = re.search(rf"\b{re.escape(name)}\.(?:Clear|Set)\s*\(\s*\)", after)
+        # A WRITE OF EVERY BIT INITIALISES IT as well as .Clear() or .Set() does: a
+        # full slice `m[:] = FreeDofs()` (every bit copied, measured on 20 of 20
+        # constructions) and a loop over all of its bits were called "single-bit
+        # writes" on two correct files, one of them final.
+        n_ = re.escape(name)
+        a_ = re.escape(arg)
+        inits = [i for i in (
+            re.search(rf"\b{n_}\.(?:Clear|Set)\s*\(\s*\)", after),
+            re.search(rf"\b{n_}\s*\[\s*:\s*\]\s*=(?!=)", after),
+            re.search(rf"\bfor\s+(\w+)\s+in\s+range\s*\(\s*(?:{a_}|len\s*\(\s*{n_}\s*\))\s*\)\s*:"
+                      rf"\s*{n_}\s*\[\s*\1\s*\]\s*=(?!=)", after)) if i]
+        init = min(inits, key=lambda i: i.start()) if inits else None
         d = ""
         for dm in re.finditer(rf"^\s*{re.escape(arg)}\s*=\s*([^\n]*)", body[:m.start()], re.M):
             d = dm.group(1)
@@ -1182,9 +1193,14 @@ def imported_values_not_held(content: str) -> str:
                   if not re.fullmatch(r"\(?\s*0*\.?0*(?:e[+-]?\d+)?\s*\)?\s*", w.group(2).strip(), re.I)]
         # ONLY WHAT IS WRITTEN BEFORE THE SOLVE CAN BE LOST OR LEFT OUT OF IT.
         writes = [w for w in writes if not _never_together(body, w.start(), at)]
+        # `gfu.Set(0)` IS A ZERO START TOO, like `gfu.vec[:] = 0.0`: it fired on the
+        # correct final file of a right run, whose values were written
+        # later on a branch that solves in the residual form (measured).
         before = [w for w in writes if w.start() < at] + [
-            None for s in re.finditer(rf"\b{re.escape(sol)}\.Set\s*\(", body[:at])
-            if not _never_together(body, s.start(), at)][:1]
+            None for s in re.finditer(rf"\b{re.escape(sol)}\.Set\s*\(\s*([^\n]*)", body[:at])
+            if not _never_together(body, s.start(), at)
+            and not re.match(r"(?:(?:CoefficientFunction|CF)\s*\(\s*)?\(?\s*0*\.?0*(?:e[+-]?\d+)?"
+                             r"\s*\)?\s*(?:\)|,)", s.group(1), re.I)][:1]
         if not before:
             continue                                   # nothing essential loaded into it
         # IN WORDS, NOT AS THE TWO LINES OF THE SOLVE: the literal residual-form

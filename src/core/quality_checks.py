@@ -971,11 +971,18 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
         numbers["ends_only"] = True
     whole = "; ".join(str(m).replace("Interface flux NOT balanced: ", "").split(" — ")[0]
                       for m in w if str(m).startswith("Interface flux NOT balanced"))[:300]
+    # "WHICH THE EQUATION CHECK JUDGES" WAS FALSE OF A WRONG FIELD. Measured: a side
+    # whose interface nodes held 0.0 while its exports carried the partner's trace
+    # read this note at all three levels, passed the equation check (which judges the
+    # interior only), and handed in "the flux mismatch is likely the corner handling".
     return [f"{ENDS_ONLY_MARK}: the whole interface reads {whole}, but on the interior points the two "
-            f"sides agree, so the imbalance sits at the two end points. That is all this measures: "
-            f"on a Dirichlet-Neumann pair the interior agreement holds by construction and says "
-            f"nothing about the fields, which the equation check judges. At the ends, look at how "
-            f"each side treats the two nodes where the interface meets the outer boundary."] + list(w2)
+            f"sides' EXPORTS agree, so the imbalance in the exports sits at the two end points. That "
+            f"is all this measures. On a Dirichlet-Neumann pair the interior agreement of the exports "
+            f"holds by construction and says nothing about the fields themselves: whether a side's "
+            f"field carries what it exports is judged by the checks that read the fields (its own "
+            f"field dump against its interface file, its flux against its own field). Where those "
+            f"hold, look at how each side treats the two nodes where the interface meets the outer "
+            f"boundary."] + list(w2)
 
 
 def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",

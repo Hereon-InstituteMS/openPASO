@@ -351,6 +351,38 @@ if (not len(_if_pts) or np.abs(_if_pts[:, AX] - IFACE_X).max() > TOL
                      + f" (the mesh's boundary names: {sorted(set(mesh.GetBoundaries()))}). Name the edge "
                      f"on the line {'xy'[AX]} = {IFACE_X:g}, and only that edge, \"interface\": the bcs of "
                      f"AddRectangle are YOUR names, given in the edge order bottom, right, top, left.")
+# THE INTERFACE NODES ARE THE MESH'S OWN, AND vdof IS THEIR DOF MAP. Every served
+# line below writes the partner's data, reads the traction and exports the values
+# THROUGH iface_v and vdof, so a list naming other vertices, or a map naming other
+# dofs, puts the partner's data on other nodes and exports their values under the
+# interface's coordinates -- and a check reading the same lists agrees with them.
+# Measured on a coupled heat run: the interface dofs were the mesh's first
+# vertices' (its corners and part of an outer edge), the interface kept 0.0 at
+# most of its nodes, and the coupling converged with every exchange check passing.
+_line = {_i for _i in range(mesh.nv) if abs(mesh.vertices[_i].point[AX] - IFACE_X) < TOL}
+_ids = [int(_n) for _n in iface_v]
+_bad = [(_k, _n) for _k, _n in enumerate(_ids)
+        if _k >= y_if.size or _n not in _line
+        or abs(mesh.vertices[_n].point[AL] - float(y_if[_k])) > TOL
+        or [int(_c) for _c in vdof[_n][:2]] != [int(_c) for _c in fes.GetDofNrs(NodeId(VERTEX, _n))[:2]]]
+_missed = len(_line - set(_ids))
+if _bad or _missed or len(_ids) != y_if.size:
+    _k, _n = _bad[0] if _bad else (None, None)
+    raise SystemExit(
+        f"INTERFACE VERTICES: iface_v[k] must be the vertex number of the interface node at y_if[k], "
+        f"one per node, and vdof[i] that vertex's two dofs fes.GetDofNrs(NodeId(VERTEX, i))[:2]; "
+        f"iface_v has {len(_ids)} entries for {y_if.size} nodes"
+        + (f", and {len(_bad)} of them fail (the first: iface_v[{_k}] = {_n}, "
+           + (f"the vertex at ({mesh.vertices[_n].point[0]:g}, {mesh.vertices[_n].point[1]:g}) "
+              f"with vdof {[int(_c) for _c in vdof[_n][:2]]} and dofs "
+              f"{[int(_c) for _c in fes.GetDofNrs(NodeId(VERTEX, _n))[:2]]}"
+              if 0 <= _n < mesh.nv else "no vertex of this mesh")
+           + ")" if _bad else "")
+        + (f"; {_missed} of the {len(_line)} vertices on the interface line have no entry"
+           if _missed else "")
+        + ". The served lines below write the partner's data, read the traction and export the "
+          "values through these two. A vertex's number is its own (v.nr for a mesh vertex v), "
+          "not its place in a list.")
 
 if SIDE == "dirichlet":
     u_if = sample(imp, "values", (UI_X, UI_Y), y_if)
@@ -393,9 +425,14 @@ with TaskManager():
     # ── DID THE PARTNER'S DISPLACEMENT ENTER THE SOLVE? (served) ─ keep this block.
     #    A Dirichlet side whose solve freed the interface dofs returns its own
     #    answer and the coupling "converges" to two fields that disagree there.
-    if SIDE == "dirichlet":
-        _gap = max((abs(float(gfu.vec[int(vdof[vtx, c])]) - float(u_if[k, c]))
-                    for k, vtx in enumerate(iface_v) if not _ends[k] for c in (0, 1)), default=0.0)
+    #    The nodes are the mesh's own on the interface line, never the lists the
+    #    data were written through: a list naming the wrong nodes agrees with itself.
+    _tv = sorted((float(mesh.vertices[_i].point[AL]), _i) for _i in _line)
+    _tv = [(_a, _i) for _a, _i in _tv if ALO + TOL < _a < AHI - TOL]
+    if SIDE == "dirichlet" and _tv:
+        _ut = sample(imp, "values", (UI_X, UI_Y), np.array([_a for _a, _ in _tv], float))
+        _gap = max(abs(float(gfu.vec[int(fes.GetDofNrs(NodeId(VERTEX, _i))[_c])]) - float(_ut[_k, _c]))
+                   for _k, (_a, _i) in enumerate(_tv) for _c in (0, 1))
         if _gap > 1e-9 * max(1.0, float(np.abs(u_if).max())):
             raise SystemExit("EXPORT SELF-CHECK: the partner's displacement is not in the solution at the "
                              "interface nodes: the interface must be a Dirichlet boundary of the space "

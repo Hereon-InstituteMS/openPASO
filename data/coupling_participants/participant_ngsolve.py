@@ -309,6 +309,37 @@ if (not len(_if_pts) or np.abs(_if_pts[:, AX] - IFACE_X).max() > TOL
                      + f" (the mesh's boundary names: {sorted(set(mesh.GetBoundaries()))}). Name the edge "
                      f"on the line {'xy'[AX]} = {IFACE_X:g}, and only that edge, \"interface\": the bcs of "
                      f"AddRectangle are YOUR names, given in the edge order bottom, right, top, left.")
+# THE INTERFACE DOFS ARE THE INTERFACE NODES' OWN. Every served line below writes
+# the partner's trace, reads the flux and exports the values THROUGH iface_dofs,
+# so a list naming other dofs puts the trace on other nodes and exports their
+# values under the interface's coordinates -- and a check reading the same list
+# agrees with it. Measured on a coupled run: iface_dofs held the dofs of the
+# mesh's first vertices (its corners and part of an outer edge), the interface
+# kept 0.0 at most of its nodes, and the coupling converged with every exchange
+# check passing.
+_d2p = {int(fes.GetDofNrs(NodeId(VERTEX, _i))[0]): mesh.vertices[_i].point for _i in range(mesh.nv)}
+_line = {_d for _d, _pt in _d2p.items() if abs(_pt[AX] - IFACE_X) < TOL}
+_ids = [int(_d) for _d in iface_dofs]
+_bad = [(_k, _d) for _k, _d in enumerate(_ids)
+        if _k >= y_if.size or _d not in _line or abs(_d2p[_d][AL] - float(y_if[_k])) > TOL]
+_missed = len(_line - set(_ids))
+if _bad or _missed or len(_ids) != y_if.size:
+    _k, _d = _bad[0] if _bad else (None, None)
+    raise SystemExit(
+        f"INTERFACE DOFS: iface_dofs[k] must be the dof of the interface node at y_if[k], one "
+        f"per node; iface_dofs has {len(_ids)} entries for {y_if.size} nodes"
+        + (f", and {len(_bad)} of them are not that node's dof (the first: iface_dofs[{_k}] = {_d}, "
+           + (f"the dof of the vertex at ({_d2p[_d][0]:g}, {_d2p[_d][1]:g})" if _d in _d2p else
+              "no vertex's dof")
+           + ((f", where the interface node is at ({float(IFACE_X):g}, {float(y_if[_k]):g})"
+               if AX == 0 else
+               f", where the interface node is at ({float(y_if[_k]):g}, {float(IFACE_X):g})")
+              if _k < y_if.size else "") + ")" if _bad else "")
+        + (f"; {_missed} of the {len(_line)} vertices on the interface line have no entry"
+           if _missed else "")
+        + ". The served lines below write the trace, read the flux and export the values "
+          "through this list. The dof of vertex number i is fes.GetDofNrs(NodeId(VERTEX, i))[0], "
+          "with i the vertex's own number (v.nr for a mesh vertex v).")
 # THE HELD EDGES ARE WHAT FULL_OUTER_DIRICHLET SAYS. A space whose dirichlet= set
 # leaves the two edges the interface ends on free while the problem holds them (or
 # the reverse) solves a different problem and converges cleanly to it (measured:
@@ -360,10 +391,14 @@ with TaskManager():
     #    Measured on a coupled run: the interface was left out of the space's
     #    dirichlet= set and the solved vector replaced the imported values, so the
     #    side exported its own insulated trace; nothing stopped it. The two end
-    #    nodes are left out -- the outer boundary may hold them too.
-    if SIDE == "dirichlet" and len(iface_dofs) > 2:
-        _gap = max(abs(float(gfu.vec[int(d)]) - float(t))
-                   for d, t in list(zip(iface_dofs, T_if))[1:-1])
+    #    nodes are left out -- the outer boundary may hold them too. The nodes
+    #    are the mesh's own on the interface line, never the list the trace was
+    #    written through: a list naming the wrong dofs agrees with itself.
+    _tv = sorted((float(_d2p[_d][AL]), _d) for _d in _line)
+    _tv = [(_a, _d) for _a, _d in _tv if ALO + TOL < _a < AHI - TOL]
+    if SIDE == "dirichlet" and _tv:
+        _gap = max(abs(float(gfu.vec[_d]) - float(_t)) for (_a, _d), _t in
+                   zip(_tv, sample(imp, "values", T_INIT, np.array([_a for _a, _ in _tv], float))))
         if _gap > 1e-9 * max(1.0, float(np.abs(np.asarray(T_if, float)).max())):
             raise SystemExit("EXPORT SELF-CHECK: the partner's temperature is not in the solution at "
                              "the interface nodes (largest gap %.3e): on the Dirichlet side the "
