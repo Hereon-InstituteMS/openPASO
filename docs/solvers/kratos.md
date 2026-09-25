@@ -32,7 +32,7 @@ python check_install.py
 | `dem` | Discrete Element Method for granular/particle simulations (DEMApplication) | 2-D, 3-D | `2d` |
 | `dem_structures_coupling` | DEM-FEM coupling: impact on structures, blast | 2-D, 3-D | `2d` |
 | `fluid_dynamics` | Incompressible Navier-Stokes via FluidDynamicsApplication, monolithic VMS element (FluidDynamicsApplication) | 2-D | `channel_2d` |
-| `fsi_partitioned` | Partitioned Dirichlet-Neumann coupling driven by a KratosFSIApplication convergence accelerator (FSIApplication) | 2-D | `2d` |
+| `fsi_partitioned` | Partitioned Dirichlet-Neumann coupling driven by a KratosFSIApplication convergence accelerator (FSIApplication); a contract: each side's setup and solve are yours | 2-D | `2d` |
 | `heat` | Thermal convection-diffusion: steady and transient (ConvectionDiffusionApplication) | 2-D, 3-D | `2d` |
 | `heat_transient` | Transient heat conduction with backward Euler time integration | 2-D | `2d` |
 | `linear_elasticity` | Structural mechanics: linear/nonlinear, static/dynamic (StructuralMechanicsApplication) | 2-D, 3-D | `2d`, `2d_nonlinear` |
