@@ -73,6 +73,23 @@ PORTS = {"7b": 8000, "14b": 8001, "32b": 8002}
 # `{who}` is the role that was silent -- critic, verifier or researcher -- or
 # "sub-agent". This branch keeps the old product name until the freeze; the
 # rename script maps it.
+
+# A SUB-AGENT'S REPLY IS BOUNDED BEFORE THE PARENT CARRIES IT. Measured: a critic
+# sub-agent's free-text verdict ran to 121,752 characters (it was cut only by the
+# model's output cap) and went into the parent's context whole, where every later
+# call re-read it. Both arms; the start and the end are kept, and the cut says so.
+SUBAGENT_REPORT_CAP = 24_000
+
+
+def _bounded_report(text: str, cap: int = SUBAGENT_REPORT_CAP) -> str:
+    if len(text) <= cap:
+        return text
+    head, tail = text[: cap * 2 // 3], text[-(cap // 3):]
+    return (head + f"\n\n[... {len(text) - len(head) - len(tail):,} characters of this "
+            f"sub-agent's reply left out here: it ran to {len(text):,} characters; its start "
+            f"and its end are kept ...]\n\n" + tail)
+
+
 SILENT_SUBAGENT_REPORT = (
     "[the {who} returned no text. This is NOT approval and NOT a review: it "
     "produced nothing. Treat the step as not done. Do not write its answer for "
@@ -981,8 +998,28 @@ def _kill_group(proc) -> None:
             continue
 
 
+def _keep_version(keep: Path | None, workdir: Path, p: Path, content: str) -> None:
+    """Keep a full copy of what was written, outside the agent's folder.
+
+    THE TRANSCRIPT CUTS A WRITTEN FILE AT 600 CHARS, so a check that fired on a
+    write cannot be judged after the run: across five runs four firings of one
+    check were recorded and three of them could not be read back, because each
+    fix overwrote the version the check had seen. Both arms, every write
+    (edit_file writes through write_file); never raises."""
+    if keep is None:
+        return
+    try:
+        keep.mkdir(parents=True, exist_ok=True)
+        n = sum(1 for _ in keep.iterdir())
+        rel = str(p.resolve().relative_to(workdir.resolve())).replace("/", "__")
+        (keep / f"{n:04d}__{rel}").write_text(content)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
 def _read_write_tools_for(workdir: Path, *, audit_on_submit: bool = False,
-                          advice: bool = False, budget_note: bool = True):
+                          advice: bool = False, budget_note: bool = True,
+                          keep_versions: Path | None = None):
     # THE CLOCK RIDES ON EVERY TOOL REPLY, NOT ONLY ON THE SHELL'S. The wall
     # clock stamp and the action count were appended to run_bash replies alone,
     # so a run that spent its minutes in write_file calls -- measured: seven
@@ -1027,6 +1064,7 @@ def _read_write_tools_for(workdir: Path, *, audit_on_submit: bool = False,
                         f"inside it; use a relative path.]")
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content)
+            _keep_version(keep_versions, workdir, p, content)
             reply = f"wrote {len(content)} chars to {p}"
             # ROUND-8 MECHANISM, openPASO ARM ONLY: the submission is audited the
             # moment it is written, and the findings are placed in the reply
@@ -1356,6 +1394,14 @@ def _make_spawn_subagent_tool(
             # overwrote that file with the pristine contract and gave up with
             # 24 minutes left. Both exits now hand the parent the same report.
             report = _report_if_worker_out_of_steps(report, workdir, _t0, WORKER_RECURSION_LIMIT)
+            # A SILENT WORKER THAT WROTE FILES DID NOT "PRODUCE NOTHING": its files are
+            # named, newest first, as for a worker out of steps (measured: that sentence
+            # was handed back for a worker whose files were on disk).
+            if not str(report).strip() and role not in ("critic", "verifier", "researcher"):
+                _l = _worker_failure_report(RuntimeError(""), workdir, _t0, WORKER_RECURSION_LIMIT)
+                if " Everything it wrote" in _l:
+                    report = ("[the sub-agent returned no text; this is NOT approval and NOT a "
+                              "verdict on its work." + _l[_l.find(" Everything it wrote"):])
             # SILENCE IS NOT ASSENT, AND IT USED TO BE HANDED BACK AS "".
             #
             # MEASURED on a live run: the model spawned a critic, the critic ran
@@ -1393,7 +1439,7 @@ def _make_spawn_subagent_tool(
                                   + str(_f))
             except Exception:                          # noqa: BLE001
                 pass
-            return report
+            return _bounded_report(str(report))
         except Exception as e:
             # Still returned as text so one bad sub-agent cannot kill the run,
             # but marked loudly enough that a transcript sweep finds it: a
@@ -1712,10 +1758,12 @@ def _audit_submission(result_path: Path, content: str):
 
 def _host_tools(workdir: Path, *, size: str, seed: int,
                 parent_tools: list[BaseTool], depth: int,
-                audit_on_submit: bool = False) -> list[BaseTool]:
+                audit_on_submit: bool = False,
+                keep_versions: Path | None = None) -> list[BaseTool]:
     tools: list[BaseTool] = []
     tools.append(_bash_tool_for(workdir, audit_on_submit=audit_on_submit))
-    tools.extend(_read_write_tools_for(workdir, audit_on_submit=audit_on_submit))
+    tools.extend(_read_write_tools_for(workdir, audit_on_submit=audit_on_submit,
+                                       keep_versions=keep_versions))
     tools.append(web_search)
     spawn = _make_spawn_subagent_tool(
         size=size, seed=seed, workdir=workdir,
@@ -1725,9 +1773,10 @@ def _host_tools(workdir: Path, *, size: str, seed: int,
     return tools
 
 
-def build_bare_agent(*, size: str, seed: int, workdir: Path, depth: int = 0):
+def build_bare_agent(*, size: str, seed: int, workdir: Path, depth: int = 0,
+                     keep_versions: Path | None = None):
     tools = _host_tools(workdir, size=size, seed=seed,
-                        parent_tools=[], depth=depth)
+                        parent_tools=[], depth=depth, keep_versions=keep_versions)
     llm = _llm(size, temperature=0.2, seed=seed)
     return create_react_agent(llm, tools=tools, prompt=BARE_SYSTEM)
 
@@ -1809,14 +1858,14 @@ def _wrap_mcp_tool_with_artefact_hook(tool: BaseTool, workdir: Path):
 
 @asynccontextmanager
 async def build_mcp_agent(*, size: str, seed: int, workdir: Path,
-                          depth: int = 0):
+                          depth: int = 0, keep_versions: Path | None = None):
     """Yield an MCP agent whose tools share one live openPASO server."""
     async with openpaso_mcp_tools_session(workdir) as mcp_tools:
         mcp_tools = [_wrap_mcp_tool_with_artefact_hook(t, workdir)
                      for t in mcp_tools]
         host = _host_tools(workdir, size=size, seed=seed,
                            parent_tools=mcp_tools, depth=depth,
-                           audit_on_submit=True)
+                           audit_on_submit=True, keep_versions=keep_versions)
         llm = _llm(size, temperature=0.2, seed=seed)
         yield create_react_agent(llm, tools=mcp_tools + host,
                                  prompt=_mcp_system_prompt())

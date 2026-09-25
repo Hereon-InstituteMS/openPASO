@@ -385,7 +385,7 @@ def main():
     # sum_i r_i = -sum_i b_i, because sum_i A_ij = int K grad(sum_i phi_i).grad
     # phi_j = 0 (the phi_i are a partition of unity). r vanishes on free rows,
     # so over the fixed rows alone
-    #       sum_{outer} r_i  +  int_Omega f dOmega  +  int_Gamma q_applied ds  =  0
+    #       sum_{fixed} r_i  +  int_Omega f dOmega  +  int_Gamma q_applied ds  =  0
     # exactly, at round-off, for ANY mesh. It is not a discretisation check: it
     # fails only if the flux was applied with the wrong sign or magnitude, or
     # not applied at all — which is precisely the failure mode this side has.
@@ -399,8 +399,12 @@ def main():
         det = (x[1]-x[0])*(y[2]-y[0]) - (x[2]-x[0])*(y[1]-y[0])
         load_vol += (0.5 * abs(det)) * sum(
             n.GetSolutionStepValue(KM.HEAT_FLUX) for n in nds) / 3.0
-    react = sum(mp.Nodes[nid[(i_out, j)]].GetSolutionStepValue(KM.REACTION_FLUX)
-                for j in range(NY + 1))
+    # OVER EVERY FIXED ROW, not the outer x-column alone: with the y-edges held
+    # (FULL_OUTER_DIRICHLET) their reactions are part of the sum, and leaving them
+    # out printed a ~100 % imbalance on every correct run (measured: 1.000 / 0.997
+    # / 0.994 where the sum over all fixed rows is 5e-16).
+    react = sum(n.GetSolutionStepValue(KM.REACTION_FLUX) for n in mp.Nodes
+                if n.IsFixed(KM.TEMPERATURE))
     imb_abs = abs(react + load_vol + load_iface)
     scale = max(abs(react), abs(load_vol), abs(load_iface))
     # On iteration 1 with Q_INIT = 0 and no source there is no heat flow at all,
@@ -417,6 +421,18 @@ def main():
           f"q_applied=[{q_in.min():.6g},{q_in.max():.6g}] "
           f"T=[{T.min():.6g},{T.max():.6g}] {bal}")
     print(f"\nNDOF = {len(mp.Nodes)}")
+
+    # ── EXPORT SELF-CHECK (served) ─ keep this block. A singular system leaves NaN
+    #    behind: Kratos prints "Error zero sum" (or "Error zero in diagonal") and the
+    #    script goes on to export it. Measured on a coupled run: a Neumann side built
+    #    on its own mesh hit that four times and exported NaN each time; the NGSolve
+    #    contracts already stop here.
+    if not (np.isfinite(np.asarray(T, float)).all() and np.isfinite(np.asarray(Q, float)).all()):
+        raise SystemExit("EXPORT SELF-CHECK: non-finite interface values or fluxes -- the solve "
+                         "produced no usable field, so nothing was exported. When Kratos printed "
+                         "'Error zero sum' or 'Error zero in diagonal', the assembled system is "
+                         "singular: an element whose nodes run clockwise (negative area), a node "
+                         "that belongs to no element, or no held value anywhere.")
 
     # PER-LEVEL PERSISTENCE: this level's whole field and its interface trace
     # and flux, named by LEVEL, never overwritten by the next level (exports.json

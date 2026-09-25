@@ -54,6 +54,7 @@ class LevelResult:
     n_points: int
     residual: float
     detail: str = ""
+    umax: float = 0.0           # the field's largest magnitude at this level
 
 
 @dataclass
@@ -332,7 +333,8 @@ def check_levels(levels: dict, source_expr: str, coefficient,
         rhs = float(np.sum(f * v) * weight)
         denom = max(abs(rhs), 1e-300)
         res.levels.append(LevelResult(lvl, len(rows), abs(lhs - rhs) / denom,
-                                      f"lhs={lhs:.6e} rhs={rhs:.6e}"))
+                                      f"lhs={lhs:.6e} rhs={rhs:.6e}",
+                                      umax=float(np.abs(u).max())))
     return _decide(res)
 
 
@@ -412,24 +414,65 @@ def _decide(res: ConsistencyResult) -> ConsistencyResult:
             f"uniform or astronomical column is no solution), then at the "
             f"source term, then the coefficient, then an element-local "
             f"assembly defect (quadrature, a wrong map).")
-    elif last < first / 3.0:
-        res.verdict = "CONSISTENT"
+    elif len(good) < 3:
+        # TWO LEVELS CANNOT TELL A FALL FROM A TURN. The old rule judged two
+        # levels by one ratio, and both directions were measured wrong: a
+        # correct coupled field judged on its last two levels alone (5.18e-03 ->
+        # 1.87e-03, the numbers every correct run of its problem reads there)
+        # was called wrong, and the same kind of field made one percent wrong
+        # fell TENFOLD between its first two levels before rising at the third.
+        res.verdict = "NOT_APPLICABLE"
         res.explanation = (
-            f"the weak residual falls {first:.3e} -> {last:.3e} across "
-            f"{len(good)} levels (rate {res.rate:.2f} per refinement). Your "
-            f"field satisfies the equation you were given, so a remaining "
-            f"error is discretisation, not a wrong model.")
+            f"only two levels could be checked ({first:.3e} -> {last:.3e}). Two "
+            f"levels cannot tell a residual that keeps falling from one that "
+            f"turns: a field one percent off its equation was measured falling "
+            f"tenfold between its first two levels and rising at the third. The "
+            f"check needs a third level.")
+    elif all(b.residual < 0.8 * a.residual for a, b in zip(good, good[1:])):
+        # EVERY STEP FALLS, not only the first against the last. Measured on 73
+        # correct coupled sides (their own mesh dumps, three levels): every step
+        # fell by a fifth or more. The same fields scaled by 1.01 -- a field
+        # solving a source one percent off -- level off at the size of the
+        # difference or rise toward it, and every one of them fails this, where
+        # the old first-against-last rule (last < first/3) passed 5 % of them and
+        # called one correct side wrong (2.21e-03 -> 1.31e-03 -> 7.79e-04).
+        res.verdict = "CONSISTENT"
+        seq = " -> ".join(f"{r.residual:.3e}" for r in good)
+        res.explanation = (
+            f"the weak residual falls at every refinement ({seq}; rate "
+            f"{res.rate:.2f} per refinement overall). The field solves the "
+            f"equation you state inside its subdomain, so a remaining error is "
+            f"discretisation. This check does not see the boundary conditions: "
+            f"the interface and outer-boundary checks judge those.")
+    elif (lambda z: len(z) >= 2 and max(z) > 2.0 * min(z))([r.umax for r in good if r.umax > 0]):
+        # A FIELD THAT CHANGES SIZE BETWEEN LEVELS IS A DIFFERENT PROBLEM AT EACH.
+        # Measured on a coupled run: a Neumann side fed a partner flux that grew
+        # about fourfold per level read a flat residual and was called wrong; held
+        # at one level's data, its residual fell at every step. This side cannot be
+        # judged until its data settles -- which is not a clean bill either.
+        sizes = [r.umax for r in good if r.umax > 0]
+        seq = " -> ".join(f"{r.residual:.3e}" for r in good)
+        res.verdict = "UNSETTLED"
+        res.explanation = (
+            f"the field itself changes size across the levels (largest value "
+            f"{sizes[0]:.3g} -> {sizes[-1]:.3g}) and the weak residual does not fall "
+            f"({seq}). A side handed different data at each level solves a different "
+            f"problem at each, so this check cannot say whether it solves its "
+            f"equation: judge the data it imports first -- a partner whose exports "
+            f"grow or shrink like that is the likelier defect -- then this side.")
     else:
         res.verdict = "INCONSISTENT"
+        seq = " -> ".join(f"{r.residual:.3e}" for r in good)
         res.explanation = (
-            f"the weak residual is FLAT: {first:.3e} -> {last:.3e} over "
-            f"{len(good)} levels. Refinement cannot remove it, so the field is "
-            f"converging to something that is not the solution of the stated "
-            f"problem. Look at the source term first — a sign, a missing term, "
-            f"or an expression evaluated in element-local instead of global "
-            f"coordinates — then the coefficient, then which boundary carries "
-            f"which condition. A run that reports this honestly scores above "
-            f"one that submits it as converged.")
+            f"the weak residual does not fall at every refinement: {seq}. A "
+            f"field that solves the equation you state shows a residual that "
+            f"falls with each refinement (on 73 correct coupled sides every step "
+            f"fell by a fifth or more); a field solving a slightly different "
+            f"equation levels off at the size of the difference or rises toward "
+            f"it. Look at the source term first -- a sign, a missing term, or an "
+            f"expression evaluated in element-local instead of global "
+            f"coordinates -- then the coefficient. This check does not see the "
+            f"boundary conditions.")
     return res
 
 
@@ -452,13 +495,13 @@ def _adjoint_elastic_flat(lam: float, mu: float, pts, box, direction: int):
 
     WHY THIS EXISTS. The scalar check REFUSES elasticity, deliberately: handed
     an elasticity result set it once reported the field converging to the wrong
-    solution, which was meaningless. That refusal covers the campaign's C9
-    family, whose equation is exactly this one -- so the one coupled family
-    with a recent CORRECT was the one nothing could check.
+    solution, which was meaningless. That refusal covered the coupled
+    elasticity problems, whose equation is exactly this one -- so the one
+    coupled family with a recent correct run was the one nothing could check.
 
     Calibrated on a manufactured case deliberately not zero on the boundary
     (u = (sin(pi x) sin(pi y) + x, (sin(pi x) sin(pi y))/2 + y/2), f computed
-    from it symbolically, lambda = 480, mu = 1200), levels 16 to 128, worst of
+    from it symbolically, lambda and mu of order 1e3), levels 16 to 128, worst of
     the two directions:
 
         field                      residual                     fall
@@ -568,13 +611,24 @@ def check_levels_thermoelastic(levels: dict, source_x: str, source_y: str,
         fx = _eval_source(source_x, pts, 2)
         fy = _eval_source(source_y, pts, 2)
         W, Wx, Wy = _flat_test_function(pts, box)
-        worst, detail = -1.0, ""
+        sides = []
         for direction, f_here, dW in ((0, fx, Wx), (1, fy, Wy)):
             (_vx, _vy), (Lvx, Lvy) = _adjoint_elastic_flat(lam, mu, pts, box,
                                                            direction)
             lhs = float(np.sum(ux * Lvx + uy * Lvy) * weight)
             rhs = float((np.sum(f_here * W) + float(beta) * np.sum(Tf * dW))
                         * weight)
+            sides.append((direction, lhs, rhs))
+        # A DIRECTION WHOSE TEST INTEGRAL VANISHES CARRIES NO INFORMATION. A
+        # field symmetric about the box's mid-line makes one direction's lhs
+        # and rhs both round-off (measured: 1.2e-15 against 0.0), and their
+        # ratio read as a 100 % residual -- a right field judged INCONSISTENT.
+        # Such a direction is skipped; the other one judges the level.
+        big = max((max(abs(l), abs(r)) for _, l, r in sides), default=0.0)
+        worst, detail = -1.0, ""
+        for direction, lhs, rhs in sides:
+            if max(abs(lhs), abs(rhs)) <= 1e-9 * big:
+                continue
             # RELATIVE TO THE LARGER SIDE, not to the stated load alone: a
             # config that states no body force under a loaded field makes the
             # stated side tiny, and a ratio against it was refused as "not
@@ -585,6 +639,11 @@ def check_levels_thermoelastic(levels: dict, source_x: str, source_y: str,
                                       f"{'x' if direction == 0 else 'y'} "
                                       f"momentum equation: "
                                       f"lhs={lhs:.6e} rhs={rhs:.6e}")
+        if worst < 0:
+            res.levels.append(LevelResult(lvl, len(rows), float("nan"),
+                                          "both momentum test integrals vanish: "
+                                          "no information at this level"))
+            continue
         res.levels.append(LevelResult(lvl, len(rows), worst, detail))
     return _decide(res)
 

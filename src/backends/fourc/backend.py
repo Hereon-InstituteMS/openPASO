@@ -77,7 +77,7 @@ def _fourc_diagnostic(stdout_text: str, stderr_text: str,
     parts = []
     # A SEGFAULT IS NOT A DIAGNOSTIC, SO NAME THE CAUSE THAT PRODUCES IT.
     #
-    # Measured on one development run that was lost entirely to this. 4C dies
+    # Measured on one recorded run that was lost entirely to this. 4C dies
     # with "Signal: Segmentation fault (11) / Address code: Address not mapped"
     # and prints no error, no line number and no mention of conditions. The
     # crash lands during "Read/generate conditions", so it reads as a problem
@@ -622,7 +622,7 @@ class FourcBackend(SolverBackend):
         # problem never calls knowledge(topic='coupling') -- it has no
         # coupling. So agents on single-code tasks received nothing about how
         # to write a runnable deck, which is the same defect that killed three
-        # development runs of one coupled problem.
+        # recorded runs of one coupled problem.
         #
         # One copy, in backends/fourc/deck_grammar.py, served from both paths.
         # The interface-probe text taught why that matters: it existed in four
@@ -1689,7 +1689,7 @@ class FourcBackend(SolverBackend):
                 # agent was handed "Invalid MIT-MAGIC-COOKIE-1 key ... MPI_ABORT
                 # was invoked on rank 0" and nothing else.
                 #
-                # THE COST, MEASURED: two development runs of one coupled
+                # THE COST, MEASURED: two recorded runs of one coupled
                 # problem concluded from exactly that string that the 4C BINARY
                 # was broken on this machine, wrote a could-not-finish report
                 # with zero deliverables, and stopped at 30 and 37 tool calls

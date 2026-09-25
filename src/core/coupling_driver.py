@@ -372,6 +372,48 @@ def _residual_of(new: dict[str, np.ndarray],
     return float(np.sqrt(num / ref))
 
 
+def _repeat_probe(participants: list[Participant], last_imports: dict[str, str],
+                  raw_last: dict[str, np.ndarray]) -> list[str]:
+    """One more run of each participant on the imports its last iteration read,
+    compared with the export that iteration produced. Returns a finding per
+    participant whose answer changed; [] when every one repeats (or cannot be
+    re-run -- a failed probe says nothing)."""
+    out: list[str] = []
+    for p in participants:
+        ref = raw_last.get(p.name)
+        text = last_imports.get(p.name)
+        if ref is None or text is None:
+            continue
+        try:
+            imp = json.loads(text)
+        except (TypeError, ValueError):
+            continue
+        ifd, err = _invoke(p, imp)
+        if err or ifd is None:
+            continue
+        got = _stack(ifd)
+        if got.size != ref.size:
+            out.append(f"PARTICIPANT {p.name} IS NOT A FUNCTION OF ITS IMPORTS: run again on "
+                       f"the imports its last iteration read, it exported {got.size} numbers "
+                       f"where that iteration exported {ref.size}.")
+            continue
+        scale = max(float(np.max(np.abs(ref))) if ref.size else 0.0, 1e-300)
+        dev = float(np.max(np.abs(got - ref))) / scale if ref.size else 0.0
+        if dev > 1e-9:
+            out.append(
+                f"PARTICIPANT {p.name} IS NOT A FUNCTION OF ITS IMPORTS: run again on the "
+                f"imports its last iteration read, it returned an export {dev:.2%} off that "
+                f"iteration's (largest difference over its largest value), and no coupling "
+                f"converges below that scatter, whatever the relaxation. If it samples by "
+                f"design (a Monte-Carlo or particle method), re-run with noise_replicates>=2 "
+                f"so the driver measures that floor and judges against it. A finite-element "
+                f"solve repeats bit for bit, so there the scatter is a defect: look for state "
+                f"its inputs do not set -- memory allocated but never initialised (a mask or "
+                f"vector built at a size and only partly written), a list where a full-length "
+                f"array belongs, an unseeded random draw, a file left by an earlier run.")
+    return out
+
+
 def _measure_noise_floor(participants: list[Participant], replicates: int,
                          imports_for: dict[str, dict], where: str,
                          against: Optional[dict] = None
@@ -672,7 +714,7 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
     # relaxation state still starts at iteration 1 from the new exports, so a
     # changed point count between levels is never relaxed against. Measured on a
     # manufactured 4C+FEniCSx thermo-elastic pair: 55 iterations cold at every
-    # level; development cells reached level 2 or 3 and ran out of wall clock.
+    # level; recorded runs reached level 2 or 3 and ran out of wall clock.
     warm_seeded = []
     for p in participants:
         ep = p.work_dir / "exports.json"
@@ -692,6 +734,7 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                      f"typically the previous mesh level's); the relaxation starts fresh at iteration 1")
 
     stalled_at = None
+    raw_last: dict[str, np.ndarray] = {}
     for it in range(1, max_iter + 1):
         new_exports: dict[str, InterfaceData] = {}
         for p in participants:
@@ -806,6 +849,7 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                     warnings=warnings, notes=notes,
                     criterion_notes=criterion_notes)
 
+        raw_last = {n: _stack(e).copy() for n, e in new_exports.items()}   # before relaxation
         total_res = 0.0
         total_ref = 0.0
         # ONE theta for the whole interface state (see _aitken): Aitken is applied
@@ -935,6 +979,18 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                     exports={n: e.to_dict() for n, e in exports.items()},
                     history=history, sensitivity=sens)
 
+    # ONE MORE RUN OF EACH SIDE ON THE IMPORTS ITS LAST ITERATION READ. A finite-
+    # element solve is a function of its inputs and returns the same export bit for
+    # bit; one that does not puts a floor under the residual that no iteration can
+    # beat. Measured on one coupled round: every coupling that stalled had a side
+    # whose free-dof mask was uninitialised memory -- six runs on one imports.json,
+    # six exports 11-92 % apart -- while the pair itself converges in 5-8 iterations
+    # when that side is repeatable, and nothing served named it.
+    repeat_notes: list[str] = []
+    probe_ran = False
+    if not noise_replicates and floor is None and raw_last:
+        repeat_notes = _repeat_probe(participants, last_imports, raw_last)
+        probe_ran = True
     if stalled_at is not None:
         _it, (_early, _late) = stalled_at
         err_msg = (f"did not converge to tol={tol_eff:g}: STOPPED at iteration {_it} of "
@@ -946,7 +1002,17 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
     else:
         err_msg = (f"did not converge to tol={tol_eff:g} in {max_iter} iters "
                    f"(last residual {last:.2e}) — result is NOT trustworthy")
-    if floor is None and _stalled(history):
+    if repeat_notes:
+        err_msg += "; " + " ".join(repeat_notes)
+    elif probe_ran and stalled_at is not None:
+        # MEASURED, NOT GUESSED: every side was run again on its last imports and
+        # returned the same export, so no side is noisy and the sampled-estimator
+        # route below would only relax the criterion onto a real defect.
+        err_msg += ("; every participant returned the same export when run again on "
+                    "the imports of its last iteration, so the stall is not scatter in "
+                    "one side: look at the exchange itself -- which side imposes what, "
+                    "the sign of each exported flux, the order of the interface points")
+    if floor is None and _stalled(history) and not repeat_notes and not probe_ran:
         # The residual stopped falling rather than never having fallen. That is
         # what a sampling floor looks like from outside, and it is also what a
         # theta above the stability limit looks like; the driver cannot tell

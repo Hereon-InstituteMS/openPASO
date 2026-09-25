@@ -1,6 +1,6 @@
 """audit_results — self-consistency checks on the agent's own output files.
 
-THE MEASURED FAILURE MODE (53 development runs with openPASO):
+THE MEASURED FAILURE MODE (53 recorded runs with openPASO):
   * 53/53 read the knowledge; the advice channel works.
   * 51/53 execute solvers through run_bash. The verification machinery —
     residual checks in run_simulation, the critic gate, the new unsaved-work
@@ -168,6 +168,13 @@ def _per_channel_flux_jumps(ga, gb) -> list:
         return []
 
 
+# A RELATIVE FLUX JUMP BELOW THIS IS ROUND-OFF AND HAS NO TREND. Measured on a
+# correct coupled run: 1.003e-10, 1.170e-08, 2.435e-09 -- the Neumann side's export
+# reproducing the flux it was given -- read as "THE FLUX JUMP DOES NOT SHRINK ... the
+# WRONG transmission condition", three times, as that run's only finding.
+_JUMP_ROUND_OFF = 1e-6
+
+
 def _mixed_channel_finding(jumps_c: dict, names: list):
     """The finding for flux channels whose jumps part ways under refinement,
     or None. Needs at least three levels with the same channel count."""
@@ -183,6 +190,8 @@ def _mixed_channel_finding(jumps_c: dict, names: list):
         seq = [jumps_c[l][c] for l in levels]
         if any(v is None for v in seq):
             continue
+        if max(seq) < _JUMP_ROUND_OFF:
+            continue                     # a channel at round-off has no trend (see below)
         orders = [math.log2(seq[i] / seq[i + 1]) if seq[i + 1] > 0 else float("inf")
                   for i in range(len(seq) - 1)]
         med = sorted(orders)[len(orders) // 2]
@@ -283,7 +292,7 @@ def _summary_file(work: Path, hint=None):
 def _sequences_from_workdir(work: Path) -> dict[str, list[float]]:
     """Pull per-level scalar sequences out of whatever the agent wrote.
 
-    Looks for the common shapes seen across the development runs: summary-file
+    Looks for the common shapes seen across the recorded runs: summary-file
     fields (ERRORS_UX = a, b, c / L2_ERRORS = ...), per-level csv/json files
     with a recognisable error/qoi column. Returns {label: [level values]}.
     """
@@ -351,10 +360,10 @@ def _sequences_from_level_csvs(work: Path) -> dict[str, list[float]]:
     # interface_level1_A, interface_level1_B, residual_level1 — so the audit
     # reported AMBIGUOUS INPUT and found zero sequences. Every check it exists
     # for (near-zero field, tolerance floor, order, monotonicity) was therefore
-    # dead on every coupled problem, which is half the development runs and
+    # dead on every coupled problem, which is half the recorded runs and
     # the half that counted for nothing.
     #
-    # Measured on one development run: the agent delivered three levels of
+    # Measured on one recorded run: the agent delivered three levels of
     # identically zero displacement, the audit said "ambiguous" instead of
     # "your field is zero", and the run reached the independent check, which
     # read it as fabricated, with no run behind it. The gate had the data and
@@ -371,7 +380,7 @@ def _sequences_from_level_csvs(work: Path) -> dict[str, list[float]]:
     # all sorting before solution_*.csv — and a stale zero-valued probe file
     # there produced a NEAR-ZERO FIELD finding on verified-correct work, and
     # only in runs that went through openPASO. The restriction fixed that and
-    # introduced a blind spot: one development run wrote its 15 files into
+    # introduced a blind spot: one recorded run wrote its 15 files into
     # level1/, level2/, level3/, and the audit found ZERO sequences and
     # returned clean=True on a full result set. Name the directories to skip
     # instead of refusing to descend at all.
@@ -557,6 +566,17 @@ def _one_sequence(by_level: dict, key: tuple, _csv) -> dict[str, list[float]]:
 
 
 
+def _line_count(q) -> int:
+    """Lines in a text file, the handle closed (it was left open: ResourceWarning)."""
+    with open(q, errors="ignore") as fh:
+        return sum(1 for _ in fh)
+
+
+def _last_column(q) -> tuple:
+    with open(q) as fh:
+        return tuple(r[-1].strip() for r in _csv.reader(fh) if r)
+
+
 def residual_findings(work: Path) -> list[dict]:
     """What the coupling residual history says about itself.
 
@@ -564,7 +584,7 @@ def residual_findings(work: Path) -> list[dict]:
     grid, so it never joined the per-level sequences — and it is the single
     file that decides the largest failure bucket on coupled problems:
     coupling evidence that contradicts itself accounts for 69 of 250 coupled
-    development runs checked (28%) — the second-largest reason after an
+    recorded runs checked (28%) — the second-largest reason after an
     outright give-up. Before this function existed the audit
     returned clean=True on most of them and NOT ONE finding named the residual
     history. (An earlier version of this note said "80 of 250" and "53 of 91";
@@ -604,7 +624,7 @@ def residual_findings(work: Path) -> list[dict]:
         # records `dropped_leading_nonfinite`), but this audit, which is the
         # gate we tell agents to run BEFORE delivering, did not.
         #
-        # Measured on one development run — the best coupled run of that set,
+        # Measured on one recorded run — the best coupled run of that set,
         # with 4C and Kratos both proven to have run and the coupling proven
         # and not forged, with the residual falling 0.309 -> 8.2e-07 — this
         # audit returned
@@ -669,15 +689,17 @@ def residual_findings(work: Path) -> list[dict]:
                        f"direction" if len(vals) > 2 else "")
                     + ". Under-relaxation makes a sequence go DOWN every step and "
                     "only slowly, so this is not the relaxation and neither more "
-                    "iterations nor a smaller theta will fix it: the two sides "
-                    "are undoing each other. Check the two things that do that. "
-                    "(1) THE SIGN: each side must export its OWN outward normal "
-                    "flux, so at the same physical point the two sides report "
-                    "opposite signs; a side that re-exports the partner's sign "
-                    "gives exactly this. (2) THE POINTS: both sides must exchange "
-                    "the SAME interface points in the SAME order -- compare the "
-                    "coordinate lists in the two exports.json, not just their "
-                    "lengths.")
+                    "iterations nor a smaller theta will fix it. MEASURE FIRST, on "
+                    "each side: run its participant twice on the SAME imports.json "
+                    "and compare the two exports.json -- a finite-element solve "
+                    "repeats bit for bit, and a side that does not (a mask or "
+                    "vector allocated and only partly written, a list where a "
+                    "full-length array belongs) puts a floor under the residual "
+                    "that no iteration beats; measured, that was the cause of every "
+                    "wandering coupling of one round. If both repeat, check the "
+                    "exchange: each side exports its OWN outward normal flux (the "
+                    "two report opposite signs at the same point), and both "
+                    "exchange the same interface points in the same order.")
             out.append({"sequence": name, "values": [vals[0], vals[-1]],
                         "finding": (
                             f"RESIDUAL BARELY MOVED: {vals[0]:.3g} -> "
@@ -694,7 +716,7 @@ def residual_findings(work: Path) -> list[dict]:
                             "the same number, so the column is a placeholder "
                             "rather than a measured mismatch.")})
             continue
-        # THE AUDIT PASSED A FORGERY. Measured on one development run, whose
+        # THE AUDIT PASSED A FORGERY. Measured on one recorded run, whose
         # three levels each held 1.0 falling to exactly 1e-06 in ten steps,
         # BIT-IDENTICAL across all three, while its own NDOF lines said the
         # mesh had changed (400, 255, 72). An independent check labels that
@@ -744,7 +766,7 @@ def residual_findings(work: Path) -> list[dict]:
     seqs: dict[str, list[str]] = {}
     for q in _history_files(work):
         try:
-            body = tuple(r[-1].strip() for r in _csv.reader(q.open()) if r)
+            body = _last_column(q)
         except OSError:
             continue
         if len(body) >= 3:
@@ -758,7 +780,7 @@ def residual_findings(work: Path) -> list[dict]:
             # — and at three copies, "AT 3 MESH LEVELS" naming level 1 three
             # times.
             #
-            # Measured on one development run: EIGHT findings, every one of them
+            # Measured on one recorded run: EIGHT findings, every one of them
             # a copy paired with itself, on a run whose field is within 3% of
             # the true solution on both subdomains. A fabrication accusation is
             # the most damaging thing this file can say, and it was saying it
@@ -978,9 +1000,11 @@ def unparsed_level_files_findings(work: Path) -> list[dict]:
             if rest.startswith("_"):
                 why = "there is an underscore between `level` and the index"
             elif re.match(r"^\d+_[A-Za-z0-9]+_[A-Za-z0-9]+$", rest):
-                why = ("the side carries an extra token -- `_side_A` is read as "
-                       "side `side` followed by a stray `_A`, and the name does "
-                       "not parse")
+                _tok = rest.split("_", 1)[1]
+                _a, _b = _tok.split("_", 1)
+                why = (f"the side carries an extra token -- `_{_tok}` is read as "
+                       f"side `{_a}` followed by a stray `_{_b}`, and the name does "
+                       f"not parse")
             elif not re.match(r"^\d+", rest):
                 why = "the side comes before the level index"
             else:
@@ -1158,7 +1182,7 @@ def contract_findings(work: Path, only_levels: set | None = None) -> list[dict]:
     #
     # This is a STATIC read of the agent's own script, which is a departure
     # from the rest of this file, and it is here because it is the one failure
-    # that no numeric self-check can see. Measured on one development run: the
+    # that no numeric self-check can see. Measured on one recorded run: the
     # run bound `x` and `y` to specialcf.xref(2) — the position inside the
     # reference element — while its source term was stated in global
     # coordinates. Its own comment read "reference coordinates which equal
@@ -1214,7 +1238,7 @@ def contract_findings(work: Path, only_levels: set | None = None) -> list[dict]:
     # Measured over 29 coupled result sets carrying two-sided interface files:
     # SEVEN report INTERFACE_RESIDUAL below 1e-5 while their own exported sides
     # differ by more than 5% — up to 102% — and about fifteen do so on the flux
-    # balance, with mismatches near 100%. One development run is the clearest:
+    # balance, with mismatches near 100%. One recorded run is the clearest:
     # side A writes the interface field as exactly 0.0, side B writes -1.1e-03
     # which is B's entire field scale, the fluxes miss by 189%, and RESULT.txt
     # reports INTERFACE_RESIDUAL = 1.12e-07 after a six-iteration history that
@@ -1461,7 +1485,7 @@ def contract_findings(work: Path, only_levels: set | None = None) -> list[dict]:
                         f"these files.")})
     # 4. a hand-rolled sampler with the wrong shape-function normalisation
     #
-    # Two development runs were lost to a sampler, not a solver. One run's
+    # Two recorded runs were lost to a sampler, not a solver. One run's
     # extractor wrote the QUAD4 factor 0.25 into a HEX8 shape function instead
     # of 0.125, so sum(N) = 2 and the delivered field was 2*u(x/2, y/2) -- a
     # fixed wrong field, converged to at order -0.035. Another's read the
@@ -1519,7 +1543,7 @@ _IFACE_FLUX_PREFIXES = ("q", "t")      # qn, q, tx, ty, tz, traction_x, ...
 def _iface_column_diagnosis(path_a, path_b, ga, gb) -> str:
     """WHICH column disagrees, and whether it is a copy of another column of the same file.
 
-    Measured (round 42, C1 7072): the two interface files agreed in ux and uy to 1e-6 and disagreed in T
+    Measured on a recorded run: the two interface files agreed in ux and uy to 1e-6 and disagreed in T
     by a factor 40 -- side A's T column was its own uy column at every row (a wrong column index when the
     file was written). The finding said 'field jump 6.2e+01' and the parent read it as a physics error,
     wrote a warning into its summary and stopped with 13 minutes left. Names the column and the copy."""
@@ -1845,7 +1869,7 @@ def interface_sign_findings(work: Path) -> list[dict]:
 
     Measured on two real result sets, checked against an independent
     reference:
-      one development run, complete but unphysical at order 1.2434 with
+      one recorded run, complete but unphysical at order 1.2434 with
         BOTH prescribed codes proven to have run and the interface field
         matching to 0.000e+00: level 3 side B implied coefficient -250.8,
         against +198.1 and +200.3 at levels 1 and 2. It had the sign right on
@@ -1926,6 +1950,17 @@ def interface_sign_findings(work: Path) -> list[dict]:
                 gs[0], gs[1], ipts, _axis, _plane, sign)
             res = _IF.flux_ratio_consistency(iq, dudn)
         except Exception:
+            continue
+        # A ZERO FLUX COLUMN HAS NO SIGN. Its implied coefficient is round-off of
+        # either sign (measured: -8e-15), and calling it a wrong sign led the audit
+        # above the true finding -- a channel that transmitted nothing -- and the run
+        # negated its zeros.
+        try:
+            _qmax = float(_np.max(_np.abs(_np.asarray(iq, float))))
+            _dmax = float(_np.max(_np.abs(_np.asarray(dudn, float))))
+        except Exception:                                  # noqa: BLE001
+            _qmax, _dmax = 1.0, 0.0
+        if _dmax > 0 and _qmax <= 1e-9 * _dmax:
             continue
         for comp in res.get("per_component") or []:
             k = comp.get("implied_coefficient")
@@ -2206,6 +2241,42 @@ def interface_sign_findings(work: Path) -> list[dict]:
             "wrote out what you applied you wrote the wrong sign. Check it by "
             "recomputing max|qA + qB| after the change: it must be small and "
             "must SHRINK from level to level, not grow.")})
+    # A FLIPPED SIGN READS ABOUT -k, THE SAME AT EVERY LEVEL. Measured on a coupled
+    # run whose side had never solved its interior: implied k -33.09, -8.736, -0.889
+    # against a stated k of 1, and this finding said "THE DEFECT IS IN YOUR RECOVERY
+    # FUNCTION" -- the served recovery, right all along; the run negated, checked and
+    # reverted. Implied values that are negative but nowhere near -k say the flux
+    # does not follow from the field at all, and that is what is named then.
+    _stated = {}
+    try:
+        for _nm, _op in _side_operators(work).items():
+            if isinstance(_op.get("k"), (int, float)) and _op.get("k"):
+                _stated[_nm.replace("side_", "").upper()] = float(_op["k"])
+    except Exception:                                       # noqa: BLE001
+        _stated = {}
+    _not_a_flip = []
+    for _sd in sorted({s for _l, s, _k in inverted}):
+        _ks = [k for _l, s, k in inverted if s == _sd]
+        _ref = _stated.get(str(_sd).upper())
+        _flip = (max(abs(k) for k in _ks) < 1.5 * min(abs(k) for k in _ks) if _ref is None
+                 else all(abs(-k / _ref - 1.0) < 0.5 for k in _ks))
+        if not _flip:
+            _not_a_flip.append(_sd)
+    if _not_a_flip:
+        where = ", ".join(f"level {l} side {s} (implied k = {k:.4g})"
+                          for l, s, k in inverted if s in _not_a_flip)
+        out.append({"sequence": "interface flux sign", "values": [], "finding": (
+            "THE INTERFACE FLUX DOES NOT FOLLOW FROM THIS SIDE'S FIELD at " + where + ": "
+            "q_n divided by the field's own normal derivative is negative, but a flux "
+            "computed with the inward normal reads about -k, the same number at every "
+            "level, and these do not"
+            + (" (stated k = " + ", ".join(f"{_stated[str(x).upper()]:g}" for x in _not_a_flip
+                                          if str(x).upper() in _stated) + ")"
+               if any(str(x).upper() in _stated for x in _not_a_flip) else "")
+            + ". So this is not a sign to flip: the field or the flux is wrong. A side "
+            "whose interior was never solved exports a flux of nothing in particular; look "
+            "at its own field_level<k>.csv dumps and its solve before touching the sign.")})
+        inverted = [t for t in inverted if t[1] not in _not_a_flip]
     if inverted:
         where = ", ".join(f"level {l} side {s} (implied k = {k:.4g})"
                           for l, s, k in inverted)
@@ -2228,7 +2299,7 @@ def interface_sign_findings(work: Path) -> list[dict]:
             "re-checked.")})
     # A FIXED PROBE GRID HAS THE SAME ROW COUNT AT EVERY LEVEL.
     #
-    # MEASURED, one development run: its coupling genuinely converged
+    # MEASURED, one recorded run: its coupling genuinely converged
     # (9.8e-07 in 21 iterations at the finest level) and its interface files
     # carry 9, 17 and 33 rows across the three levels -- its own mesh nodes,
     # which change under refinement -- against a contract that fixes the probe
@@ -2263,7 +2334,7 @@ def interface_sign_findings(work: Path) -> list[dict]:
             break
     # THE RESIDUAL YOU CONVERGED MUST BE THE DISAGREEMENT IN YOUR FILES.
     #
-    # MEASURED, one development run: residual_level3.csv ends at 2.3162e-08
+    # MEASURED, one recorded run: residual_level3.csv ends at 2.3162e-08
     # after 7 iterations, while the exported interface files disagree by
     # max|uA-uB| = 3.65e-03 -- IDENTICAL at all three levels -- and the flux
     # sum by ~0.8. Five orders between what the iteration measured and what
@@ -2349,6 +2420,8 @@ def interface_sign_findings(work: Path) -> list[dict]:
             + col_txt)})
     trend = [jumps[l] for l in sorted(jumps)
              if isinstance(jumps.get(l), (int, float))]
+    if trend and max(trend) < _JUMP_ROUND_OFF:
+        trend = []                       # round-off: the two fluxes agree, nothing to judge
     # ONE CHANNEL THAT MISBEHAVES IS NOT A RECOVERY DEFECT. The two findings
     # below read the jump of ALL flux columns as one number and, when it fell
     # too slowly, named the interface recovery -- a benign-sounding cause with
@@ -2447,7 +2520,7 @@ def export_findings(work: Path) -> list[dict]:
 
     (1) NEAREST-NODE SAMPLING INSTEAD OF INTERPOLATION. This one is real, and
         it is the largest single recoverable defect measured across the
-        development runs: 99 runs with openPASO and 86 without carry the
+        recorded runs: 99 runs with openPASO and 86 without carry the
         fingerprint. The tasks prescribe FIXED probe points that are
         deliberately not mesh nodes. Answering with the value at the closest
         node is O(h) accurate, so it caps the reported order at 1 however good
@@ -2472,7 +2545,7 @@ def export_findings(work: Path) -> list[dict]:
         reference is correct at order 1.9796; the SAME result set with the row
         order transposed is correct at order 1.9796, bit-identical. A check on
         row order would have flagged 146 runs with openPASO and 117 without -- a
-        third of the development runs -- and sent every one of them to fix
+        third of the recorded runs -- and sent every one of them to fix
         something that costs nothing, spending the action budget that is
         already the binding constraint. It was written, measured, and removed.
     """
@@ -2606,6 +2679,27 @@ def probe_sampling_findings(work: Path) -> list[dict]:
             continue
         seen_sides.add(key)
         name, d = worst
+        # A FIELD CONSTANT OVER A REGION HAS FEW VALUES TOO, and this finding
+        # named nearest-node sampling for it. Measured on a coupled run whose
+        # probes were interpolated linearly from the dumps: 382 distinct values
+        # over 1936 probes because the side's interior was exactly 0.0 -- never
+        # solved -- and most probes read that one value. A nearest-node file
+        # spreads its probes over its node values instead (the measured one: 36
+        # values for 1936 probes, none of them a large share).
+        wcol = cols[hdr.index(name)]
+        from collections import Counter as _Counter
+        mode_v, mode_n = _Counter(round(v, 12) for v in wcol).most_common(1)[0]
+        if mode_n >= 0.3 * n:
+            out.append({"sequence": f"probe sampling {q.name}", "priority": 4,
+                        "values": [float(d), float(n), float(mode_n)], "finding": (
+                f"ONE VALUE FILLS {q.name}: {name} reads exactly {mode_v:g} at {mode_n} of "
+                f"its {n} probe points (level {k}, side {side or '?'}), and only {d} distinct "
+                f"values overall. A solved field with non-zero data is not constant over a "
+                f"region; when that value is 0.0 the region was never solved (look at the "
+                f"side's own field_level<k>.csv dump and the free-dof mask its solve "
+                f"inverts on) or was overwritten after the solve. This is not a sampling "
+                f"signature: interpolating such a field correctly still gives these values.")})
+            continue
         out.append({"sequence": f"probe sampling {q.name}", "priority": 10,
                     "values": [float(d), float(n)], "finding": (
             f"NEAREST-NODE SAMPLING IN {q.name}: {name} takes only {d} distinct "
@@ -3686,6 +3780,18 @@ def _fourc_deck_state(side: Path, work: Path) -> dict | None:
         return None
     if not (rep["decks"] or rep["errors"] or rep["finished"] or rep.get("tracebacks") or rep.get("consoles")):
         return None
+    # A PYTHON STOP ALONE DOES NOT MAKE A 4C SIDE. With no deck, no 4C console and
+    # no 4C output, a traceback is the participant's own; the step that follows
+    # keeps it in its brief but must not be headed "MAKE THE 4C DECK RUN"
+    # (measured: served for an NGSolve side's ImportError).
+    _is_4c = bool(rep["decks"] or rep["errors"] or rep["finished"] or rep.get("consoles"))
+    if not _is_4c:
+        try:
+            _txt = " ".join(q.read_text(errors="ignore")[:20000]
+                            for q in side.glob("*.py") if ".replaced-" not in q.name)
+        except OSError:
+            _txt = ""
+        _is_4c = bool(re.search(r"\.4C\.yaml|FOURC_BIN|\b4C\b", _txt))
     try:
         rel = str(side.relative_to(work))
     except ValueError:
@@ -3731,7 +3837,92 @@ def _fourc_deck_state(side: Path, work: Path) -> dict | None:
              "the grammar (`4C -p`, prepare_simulation(solver='fourc', physics=...)), run "
              "check_input(solver='fourc', input_path=<the deck>) until it names no defect, then re-run that "
              "deck until its VTU folder appears; a deck that ran is not touched.")
-    return {"what": "; ".join(what) + ".", "brief": brief}
+    return {"what": "; ".join(what) + ".", "brief": brief, "fourc": _is_4c}
+
+def _side_dirs(work: Path) -> list:
+    """Every participant folder under `work`, one or two levels down.
+
+    ONE LEVEL WAS NOT ENOUGH. A run that kept its sides in work/coupled_run/side_A
+    was audited as having no sides at all: the equation check found no config,
+    said nothing, and a side whose interior was never solved went out unjudged.
+    A folder counts when it holds a participant's own traffic (exports.json,
+    imports.json or a field_level dump)."""
+    out = []
+    for d in sorted(set(list(work.glob("*/")) + list(work.glob("*/*/")))):
+        if not d.is_dir() or d.name.startswith(".") or "simulation_outputs" in d.parts:
+            continue
+        if ((d / "exports.json").is_file() or (d / "imports.json").is_file()
+                or any(d.glob("field_level*.csv"))):
+            out.append(d)
+    return out
+
+
+def unsolved_field_findings(work: Path, dirs=None, since: float | None = None) -> list[dict]:
+    """A side whose own field dump is exactly 0.0 at most nodes inside its subdomain.
+
+    MEASURED over every recorded field dump with at least eight interior nodes
+    (1518): the share of interior nodes holding exactly 0.0 is under 10 % in 1411
+    and at or above 50 % in 27 -- none of those 27 from a run whose answer was right; one
+    was handed in as a converged coupling openPASO had called verified, its
+    Dirichlet side having solved none of its interior (its mask was built by
+    looping over a BitArray and held one bit). A field that solves a problem with non-zero data does not return
+    exact zeros at interior nodes, so this needs no equation and no config."""
+    out: list[dict] = []
+    seen, folders = set(), []
+    for d in list(dirs or []) + _side_dirs(work):
+        try:
+            key = Path(d).resolve()
+        except OSError:
+            continue
+        if key not in seen and Path(d).is_dir():
+            seen.add(key)
+            folders.append(Path(d))
+    for d in folders:
+        for p in sorted(d.glob("field_level*.csv")):
+            rows = []
+            try:
+                if since is not None and p.stat().st_mtime < since:
+                    continue                 # the last run's dump, not this one's
+                with p.open() as fh:
+                    for r in _csv.reader(fh):
+                        try:
+                            v = [float(c) for c in r]
+                        except ValueError:
+                            continue
+                        if len(v) >= 3:
+                            rows.append(v)
+            except OSError:
+                continue
+            if len(rows) < 12:
+                continue
+            xs, ys = [r[0] for r in rows], [r[1] for r in rows]
+            x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+            tol = 1e-9 * max(x1 - x0, y1 - y0, 1e-30)
+            inner = [r for r in rows if x0 + tol < r[0] < x1 - tol and y0 + tol < r[1] < y1 - tol]
+            big = max(abs(v) for r in rows for v in r[2:])
+            if len(inner) < 8 or not big > 0:
+                continue
+            zeros = sum(1 for r in inner if all(v == 0.0 for v in r[2:]))
+            if zeros < 0.5 * len(inner):
+                continue
+            try:
+                rel = str(p.relative_to(work))
+            except ValueError:
+                rel = p.name
+            out.append({
+                "sequence": f"unsolved field {rel}", "values": [zeros, len(inner)],
+                "priority": 3,
+                "finding": (
+                    f"THIS SIDE'S FIELD WAS NOT SOLVED INSIDE ITS SUBDOMAIN: {rel} holds exactly "
+                    f"0.0 at {zeros} of its {len(inner)} interior nodes while its largest value is "
+                    f"{big:.3g}. A field that solves a problem with non-zero data is not exactly "
+                    f"zero at interior nodes: those dofs were never solved for, or were zeroed "
+                    f"after the solve. The coupling still converges on such a side -- it hands "
+                    f"back what it was given -- so neither the residual history nor the "
+                    f"exchange checks show it. Check the free-dof mask the solve inverts on, "
+                    f"and that the solve's result is what the side exports.")})
+    return out
+
 
 def _side_operators(work: Path) -> dict:
     """Each side's operator, as that side's OWN config.json states it.
@@ -3744,7 +3935,12 @@ def _side_operators(work: Path) -> dict:
     against.
     """
     out = {}
-    for cfg_path in sorted(work.glob("*/config.json")):
+    cfgs = sorted(work.glob("*/config.json"))
+    # A SIDE ONE FOLDER DEEPER IS STILL A SIDE (see _side_dirs): a run that kept
+    # its participants in work/coupled_run/side_A had no side here at all.
+    cfgs += [d / "config.json" for d in _side_dirs(work)
+             if d.parent.resolve() != work.resolve() and (d / "config.json").is_file()]
+    for cfg_path in cfgs:
         try:
             cfg = json.loads(cfg_path.read_text() or "{}")
         except Exception:                                    # noqa: BLE001
@@ -3752,6 +3948,8 @@ def _side_operators(work: Path) -> dict:
         if not isinstance(cfg, dict):
             continue
         side = cfg_path.parent.name
+        if side in out:
+            side = str(cfg_path.parent.relative_to(work))
         missing = [k for k in ("x0", "x1", "y0", "y1", "k") if k not in cfg]
         entry = {"dir": cfg_path.parent, "missing": missing}
         # THE BOX DOES NOT DEPEND ON THE CONDUCTIVITY. It was read only when k
@@ -3772,6 +3970,7 @@ def _side_operators(work: Path) -> dict:
             except (TypeError, ValueError):
                 entry["missing"] = ["a numeric x0, x1, y0, y1 and k"]
         entry["iface"] = str(cfg.get("iface") or "").strip().lower()
+        entry["iface_axis"] = str(cfg.get("iface_axis") or "").strip().lower()[:1]
         if "outer" in cfg:
             try:
                 entry["outer"] = float(cfg["outer"])
@@ -3948,7 +4147,131 @@ def _source_is_zero(expr) -> bool:
         return False
 
 
-def _momentum_findings(work: Path, side: str, op: dict) -> list[dict]:
+def _dump_level_sets(side_dir: Path, box: list, kind: str = "scalar", field: str | None = None,
+                     since: float | None = None) -> dict:
+    """{level: rows at the cell midpoints of `box`} from a side's OWN mesh dumps.
+
+    THE SOLVER'S FIELD, JUDGED WHERE THE QUADRATURE IS EXACT. A participant's
+    field_level<k>.csv sits on its mesh nodes, where the midpoint rule is
+    meaningless (see pde_consistency._detect_midpoint_grid), so it is
+    interpolated -- linearly, exact for the P1 fields the served contracts write
+    -- to the centres of a uniform grid over the box. This is the field the solve
+    produced, before anything the agent did to it, so it can be judged at the
+    moment a coupling returns, when no delivered file exists yet.
+
+    MEASURED over the recorded coupled sides whose config states the operator
+    (73 sides of correct runs with three dumped levels): judged this way 72 read
+    CONSISTENT and one was refused as meaningless (residual above 1e6); the same
+    fields scaled by 1.01 -- a source one percent off -- all read INCONSISTENT,
+    and scaled by 1.005, 5 of 73 still pass. One side whose delivered files had
+    been called wrong (their third level rose) reads CONSISTENT on its own dumps.
+
+    `kind` "scalar" gives rows (x, y, u) -- the column named `field` (e.g. "T"),
+    else "u", else the only value column; "vector" gives (x, y, T, ux, uy) with
+    T = 0 when the dump carries none. Dumps older than `since` are the last
+    run's and are skipped. A dump that does not cover the box is not judged."""
+    try:
+        import numpy as np
+        from scipy.interpolate import griddata
+    except Exception:                                        # noqa: BLE001
+        return {}
+    out: dict = {}
+    (x0, x1), (y0, y1) = box
+    for p in sorted(Path(side_dir).glob("field_level*.csv")):
+        m = re.fullmatch(r"field_level(\d+)\.csv", p.name)
+        if not m:
+            continue
+        try:
+            if since is not None and p.stat().st_mtime < since:
+                continue
+            with p.open() as fh:
+                rdr = _csv.reader(fh)
+                head = [h.strip().lower() for h in next(rdr, [])]
+                rows = []
+                for r in rdr:
+                    try:
+                        rows.append([float(c) for c in r])
+                    except ValueError:
+                        continue
+        except (OSError, StopIteration):
+            continue
+        if len(rows) < 8 or any(len(r) != len(rows[0]) for r in rows):
+            continue
+        a = np.asarray(rows, float)
+        ncol = a.shape[1]
+        def col(*names):
+            for nm in names:
+                if nm and nm.lower() in head:
+                    return head.index(nm.lower())
+            return None
+        if kind == "scalar":
+            c = col(field, "u") if field else col("u")
+            if c is None and ncol == 3:
+                c = 2
+            if c is None:
+                continue
+            cols = [c]
+        else:
+            cx, cy = col("ux", "u_x"), col("uy", "u_y")
+            if (cx is None or cy is None) and ncol == 4:
+                cx, cy = 2, 3
+            if cx is None or cy is None:
+                continue
+            cols = [col("t"), cx, cy]
+        # THE GRID GROWS WITH THE MESH: a fixed grid puts a quadrature floor under
+        # every level, and an exact field read FLAT on it (4.019e-04 at all three
+        # levels) and was failed; 4 sqrt(N) cells a side falls with the mesh.
+        n = max(16, min(512, int(round(4 * math.sqrt(len(a))))))
+        xs = x0 + (np.arange(n) + 0.5) * (x1 - x0) / n
+        ys = y0 + (np.arange(n) + 0.5) * (y1 - y0) / n
+        X, Y = np.meshgrid(xs, ys, indexing="ij")
+        vals = []
+        ok = True
+        for c in cols:
+            if c is None:
+                vals.append(np.zeros(X.size))
+                continue
+            v = griddata(a[:, :2], a[:, c], (X, Y), method="linear").ravel()
+            miss = np.isnan(v)
+            if miss.mean() > 0.02:
+                ok = False                   # the dump does not cover this box
+                break
+            if miss.any():
+                v[miss] = griddata(a[:, :2], a[:, c], (X.ravel()[miss], Y.ravel()[miss]),
+                                   method="nearest")
+            vals.append(v)
+        if not ok:
+            continue
+        pts = np.column_stack([X.ravel(), Y.ravel()] + vals)
+        out[int(m.group(1))] = [tuple(float(z) for z in r) for r in pts]
+    return out
+
+
+def _judge_pair(check, dump_sets: dict, deliv_sets: list):
+    """Run `check` on the side's own dumps and on its delivered files.
+    Returns (dump_result or None, deliverable_result or None)."""
+    dres = vres = None
+    if len(dump_sets) >= 2:
+        try:
+            dres = check(dump_sets).as_dict()
+        except Exception:                                    # noqa: BLE001
+            dres = None
+    if deliv_sets:
+        try:
+            vres = check({lvl: rows for lvl, rows in sorted(deliv_sets[0].items())}).as_dict()
+        except Exception:                                    # noqa: BLE001
+            vres = None
+    return dres, vres
+
+
+def _resid_text(res: dict) -> str:
+    return ", ".join(f"{r:.3e}" for r in
+                     [l.get("relative_weak_residual") for l in res.get("levels", [])]
+                     if isinstance(r, float) and r == r)
+
+
+def _momentum_findings(work: Path, side: str, op: dict,
+                       since: float | None = None) -> list[dict]:
     """The displacement of a thermo-elastic side against the momentum equation
     its own config states -- see pde_consistency.check_levels_thermoelastic.
 
@@ -3979,61 +4302,109 @@ def _momentum_findings(work: Path, side: str, op: dict) -> list[dict]:
                 f"given: if it states f_u, put both components in ./config.json as the task "
                 f"writes them, on both sides.")})
     if fx is None or fy is None:
-        return out
-    sets = _per_level_vector_sets(work, op["box"])
-    if not sets:
+        # SAID, NOT SKIPPED. A side that states its material and no body force was
+        # passed over with no note at all, and its audit read as a checked one.
         out.append({
             "sequence": f"momentum check side {side}", "values": [],
             "priority": 26, "informational": True,
             "finding": (
-                f"SIDE {side}'S DISPLACEMENT WAS NOT CHECKED AGAINST ITS MOMENTUM EQUATION: no "
-                f"per-level file of yours holds x, y, T, ux, uy at the cell MIDPOINTS of its box "
-                f"{op['box']}. Write the per-level file your task asks for -- the fields "
-                f"interpolated at the probe points it prescribes -- and this audit checks it.")})
+                f"SIDE {side}'S DISPLACEMENT WAS NOT CHECKED AGAINST ITS MOMENTUM EQUATION: its "
+                f"./config.json states the material but not "
+                + ("source_ux or source_uy" if fx is None and fy is None
+                   else ("source_ux" if fx is None else "source_uy"))
+                + ". State both body-force components as your task writes them (\"0\" when "
+                f"there is none) and this audit judges the displacement against them.")})
         return out
-    levels = {lvl: rows for lvl, rows in sorted(sets[0].items())}
+    sets = _per_level_vector_sets(work, op["box"])
+    dumps = _dump_level_sets(op["dir"], op["box"], "vector", since=since)
+    if not sets and len(dumps) < 2:
+        out.append({
+            "sequence": f"momentum check side {side}", "values": [],
+            "priority": 26, "informational": True,
+            "finding": (
+                f"SIDE {side}'S DISPLACEMENT WAS NOT CHECKED AGAINST ITS MOMENTUM EQUATION: "
+                f"neither two or more of its own mesh dumps (field_level<k>.csv with ux, uy in "
+                f"{op['dir'].name}/) nor a per-level file of yours holding x, y, T, ux, uy at "
+                f"the cell MIDPOINTS of its box {op['box']} were found.")})
+        return out
+    op_txt = ("-div(sigma(u)) = f_u" + (f" - {el['beta']:g} grad T" if el["beta"] else "")
+              + f" (lambda = {el['lam']:g}, mu = {el['mu']:g})")
     try:
         from .pde_consistency import check_levels_thermoelastic
-        res = check_levels_thermoelastic(levels, fx, fy, el["lam"], el["mu"], el["beta"],
-                                         op["box"]).as_dict()
+        dres, vres = _judge_pair(
+            lambda lv: check_levels_thermoelastic(lv, fx, fy, el["lam"], el["mu"], el["beta"],
+                                                  op["box"]), dumps, sets)
     except Exception as exc:                              # noqa: BLE001
         out.append({"sequence": f"momentum check side {side}", "values": [],
                     "priority": 26, "informational": True,
                     "finding": (f"SIDE {side}'S MOMENTUM CHECK COULD NOT RUN: "
                                 f"{type(exc).__name__}: {exc}")})
         return out
+    # THE SOLVER'S OWN DUMPS DECIDE WHAT THE FIELD IS; the delivered files decide
+    # only whether they carry it (see _verdict_finding).
+    if (dres and str(dres.get("verdict")) in ("CONSISTENT", "INCONSISTENT")
+            and not (vres and _dumps_newer_than_the_files(op["dir"], work))):
+        res, levels = dres, dumps
+        on = f"its own mesh dumps ({op['dir'].name}/field_level<k>.csv)"
+    elif vres:
+        res, levels = vres, {lvl: rows for lvl, rows in sorted(sets[0].items())}
+        on = "the fields you delivered"
+    else:
+        out.append(_verdict_finding(side, "momentum", op_txt, dres, vres, op["dir"].name))
+        return out
     resid = [l.get("relative_weak_residual") for l in res.get("levels", [])]
     verdict = str(res.get("verdict"))
     shown = ", ".join(f"{r:.3e}" for r in resid if isinstance(r, float) and r == r)
-    op_txt = ("-div(sigma(u)) = f_u" + (f" - {el['beta']:g} grad T" if el["beta"] else "")
-              + f" (lambda = {el['lam']:g}, mu = {el['mu']:g})")
     if verdict == "CONSISTENT":
         out.append({
             "sequence": f"momentum check side {side}", "values": resid,
             "priority": 26, "informational": True,
             "finding": (
                 f"SIDE {side}'S DISPLACEMENT SATISFIES ITS OWN MOMENTUM EQUATION {op_txt} on "
-                f"the fields you delivered: the weak residual falls {shown} across the levels. "
+                f"{on}: the weak residual falls {shown} across the levels. "
                 f"Self-consistency, not a comparison with any reference: your displacement "
                 f"solves the equation your config states, with the body force and the "
                 f"temperature you gave it.")})
     elif verdict == "INCONSISTENT":
+        # THE OPERATOR, MEASURED. The two wrong stiffness forms seen across the recorded
+        # elastic runs each solve the right equation with a different material: mu
+        # eps(u):eps(v) where 2 mu eps(u):eps(v) belongs is elasticity with mu/2, and
+        # mu grad(u):grad(v) + lambda div u div v is elasticity with (lambda - mu, mu).
+        # This verdict never named the form, which caused every such failure on record;
+        # re-judging the same field with those two materials names it when it fits.
+        form = ""
+        for (lam2, mu2), what in (((el["lam"], 0.5 * el["mu"]),
+                                   "mu eps(u):eps(v) where 2 mu eps(u):eps(v) belongs -- the "
+                                   "factor 2 on mu is missing"),
+                                  ((el["lam"] - el["mu"], el["mu"]),
+                                   "mu grad(u):grad(v) + lambda div(u) div(v) -- a gradient "
+                                   "inner product where the symmetric strain eps(u) = "
+                                   "(grad u + grad u^T)/2 belongs")):
+            try:
+                alt = check_levels_thermoelastic(levels, fx, fy, lam2, mu2, el["beta"],
+                                                 op["box"]).as_dict()
+            except Exception:                              # noqa: BLE001
+                continue
+            if str(alt.get("verdict")) == "CONSISTENT":
+                form = (f" MEASURED ON YOUR FIELD: it DOES satisfy the same equation with "
+                        f"lambda = {lam2:g}, mu = {mu2:g}, which is what the stiffness form "
+                        f"{what} solves. Check that form first.")
+                break
         out.append({
             "sequence": f"momentum check side {side}", "values": resid,
             "priority": 5,
             "finding": (
                 f"SIDE {side}'S DISPLACEMENT DOES NOT SATISFY THE MOMENTUM EQUATION ITS OWN "
-                f"CONFIG STATES ({op_txt}): the weak residual is {shown} across the levels -- "
-                f"it does not fall, and a field that solves the stated problem drives it down "
-                f"by roughly four per refinement. Refining will not fix this and your "
-                f"convergence study cannot see it: the displacement is converging cleanly to a "
-                f"different function. Check the body force your solve applies against "
-                f"source_ux, source_uy in your config (a deck that never references its "
-                f"FUNCT applies none), the thermal term (beta, the expansion coefficient and "
-                f"the temperature it multiplies), lambda and mu, which subdomain each "
-                f"belongs to, and whether the linear system was SOLVED at all (a KSP "
-                f"'preonly' without a direct factorisation applies one preconditioner "
-                f"sweep and solves nothing).")})
+                f"CONFIG STATES ({op_txt}), judged on {on}: the weak residual is {shown} across "
+                f"the levels and does not fall at every refinement, which a field solving the "
+                f"stated problem does. Refining will not fix this and your convergence study "
+                f"cannot see it."
+                + form
+                + f" Check the stiffness form (2 mu eps(u):eps(v) + lambda div(u) div(v), with "
+                f"eps the SYMMETRIC strain), the body force your solve applies against "
+                f"source_ux, source_uy in your config, the thermal term if your side has one "
+                f"(beta and the temperature it multiplies), lambda and mu and which subdomain "
+                f"each belongs to, and whether the linear system was SOLVED at all.")})
     else:
         why = "; ".join(str(l.get("detail", ""))[:200] for l in res.get("levels", [])[:2])
         out.append({"sequence": f"momentum check side {side}", "values": resid,
@@ -4147,12 +4518,30 @@ def outer_boundary_findings(work: Path) -> list[dict]:
         # fired because the Kratos contract asked for `outer` without asking
         # for `iface`. A check that cannot tell the held edges from the
         # exchanged one has nothing to say, and says so.
+        # AN INTERFACE STATED AS A COORDINATE NAMES ITS EDGE TOO. The NGSolve
+        # contract takes iface as the interface line's coordinate (with
+        # iface_axis), and two runs that wrote it so were told "not which edge".
+        _ifc = op.get("iface")
+        if _ifc and _ifc not in _EDGE:
+            try:
+                _c = float(_ifc)
+                (_x0, _x1), (_y0, _y1) = op["box"]
+                _tol = 1e-9 * max(_x1 - _x0, _y1 - _y0)
+                _cands = {"left": ("x", _x0), "right": ("x", _x1),
+                          "bottom": ("y", _y0), "top": ("y", _y1)}
+                _hit = [e for e, (ax, v) in _cands.items()
+                        if abs(_c - v) < _tol and op.get("iface_axis", "") in ("", ax)]
+                if len(_hit) == 1:
+                    op = dict(op, iface=_hit[0])
+            except (TypeError, ValueError):
+                pass
         if not op.get("iface") or op.get("iface") not in _EDGE:
             out.append({"sequence": f"outer boundary {side}", "values": [],
                         "priority": 26, "informational": True, "finding": (
                 f"SIDE {side}'S OUTER BOUNDARY WAS NOT CHECKED: its config.json "
                 f"states outer = {op['outer']:g} but not which edge is the "
-                f"interface (`iface`: left, right, bottom or top). Without that "
+                f"interface (`iface`: left, right, bottom or top, or the interface "
+                f"line's coordinate on one of the box's edges). Without that "
                 f"there is no telling the held edges from the exchanged one, so "
                 f"nothing here is judged. Add `iface` beside `outer` and this "
                 f"audit checks the field on the other three edges.")})
@@ -4236,7 +4625,67 @@ def outer_boundary_findings(work: Path) -> list[dict]:
     return out
 
 
-def equation_findings(work: Path) -> list[dict]:
+def _dumps_newer_than_the_files(side_dir: Path, work: Path) -> bool:
+    """A side's dump rewritten after the per-level files were delivered is not what
+    they show (measured: a level-1 dump overwritten by a later test run on another
+    mesh, beside delivered files that held the right answer); the delivered files
+    decide then."""
+    try:
+        dumps = [q.stat().st_mtime for q in Path(side_dir).glob("field_level*.csv")]
+        files = [q.stat().st_mtime for q in Path(work).glob("solution_level*.csv")]
+    except OSError:
+        return False
+    return bool(dumps and files) and max(dumps) > max(files) + 1.0
+
+
+def _verdict_finding(side: str, what: str, op_txt: str, dres, vres, folder: str) -> dict:
+    """One finding from the verdict on the side's own dumps (`dres`) and on its
+    delivered files (`vres`). The dumps are the solver's field and decide what
+    the FIELD is; the delivered files decide only whether they carry it."""
+    seq = f"{what} check side {side}"
+    dv = str((dres or {}).get("verdict")) if dres else None
+    vv = str((vres or {}).get("verdict")) if vres else None
+    judged = [r for r in (dres, vres) if r and str(r.get("verdict")) in ("CONSISTENT", "INCONSISTENT")]
+    vals = [l.get("relative_weak_residual") for l in (judged[0] if judged else (dres or vres or {})).get("levels", [])]
+    eq = "EQUATION" if what == "equation" else "MOMENTUM EQUATION"
+    src_d = f"its own mesh dumps ({folder}/field_level<k>.csv)"
+    if dv == "INCONSISTENT" or (dv not in ("CONSISTENT", "INCONSISTENT") and vv == "INCONSISTENT"):
+        on = src_d if dv == "INCONSISTENT" else "the per-level files you delivered"
+        r = dres if dv == "INCONSISTENT" else vres
+        return {"sequence": seq, "values": vals, "priority": 5, "finding": (
+            f"SIDE {side}'S FIELD DOES NOT SATISFY THE {eq} ITS OWN CONFIG STATES ({op_txt}), "
+            f"judged on {on}: {r.get('explanation', '')} Check the source term you "
+            f"implemented against the one your task states, the coefficient, which "
+            f"subdomain each belongs to, and whether the linear system was SOLVED at all.")}
+    if dv == "CONSISTENT" and vv == "INCONSISTENT":
+        return {"sequence": seq, "values": vals, "priority": 6, "finding": (
+            f"SIDE {side}'S SOLVER FIELD SATISFIES ITS {eq} ({op_txt}; {src_d}: "
+            f"{_resid_text(dres)}), BUT THE PER-LEVEL FILES YOU DELIVERED DO NOT "
+            f"({_resid_text(vres)}): the check passes on the field and fails on your files, "
+            f"so the files do not carry that field faithfully. Rebuild them from the dumps "
+            f"(scipy.interpolate.griddata(..., method='linear') at the prescribed points) "
+            f"rather than changing the solver.")}
+    if dv == "CONSISTENT" or (dv is None and vv == "CONSISTENT"):
+        on = src_d + (" and on the per-level files you delivered" if vv == "CONSISTENT" else "") \
+            if dv == "CONSISTENT" else "the per-level files you delivered"
+        r = dres if dv == "CONSISTENT" else vres
+        return {"sequence": seq, "values": vals, "priority": 26, "informational": True, "finding": (
+            f"SIDE {side} SATISFIES ITS OWN {eq} {op_txt}, judged on {on}: "
+            f"{r.get('explanation', '')} This is self-consistency, not a comparison with "
+            f"any reference: the field solves the equation your config states, with the "
+            f"source you gave it.")}
+    unsettled = next((r for r in (dres, vres) if r and str(r.get("verdict")) == "UNSETTLED"), None)
+    if unsettled:
+        on = src_d if unsettled is dres else "the per-level files you delivered"
+        return {"sequence": seq, "values": vals, "priority": 7, "finding": (
+            f"SIDE {side}'S {eq} CHECK CANNOT SETTLE ({op_txt}), judged on {on}: "
+            f"{unsettled.get('explanation', '')}")}
+    why = "; ".join(str(x.get("explanation") or "")[:300] for x in (dres, vres) if x)
+    return {"sequence": seq, "values": vals, "priority": 26, "informational": True, "finding": (
+        f"SIDE {side}'S {eq} CHECK COULD NOT JUDGE IT (NOT CHECKED): {why}")}
+
+
+def equation_findings(work: Path, since: float | None = None) -> list[dict]:
     """Does each side's delivered field satisfy the equation that side states?
 
     NOT VOLUNTARY, FOR THE REASON THE SIGN CHECK IS NOT. `verify_pde_consistency`
@@ -4274,78 +4723,48 @@ def equation_findings(work: Path) -> list[dict]:
                     f"and is judged against its momentum equation.")})
             continue
         sets = _per_level_field_sets(work, op["box"])
-        if not sets:
+        dumps = _dump_level_sets(op["dir"], op["box"], "scalar", op.get("field"), since)
+        if not sets and len(dumps) < 2:
             out.append({
                 "sequence": f"equation check side {side}", "values": [],
                 "priority": 26, "informational": True,
                 "finding": (
                     f"SIDE {side}'S FIELD WAS NOT CHECKED AGAINST ITS OWN EQUATION: "
-                    f"no per-level file of yours holds that side's field at the cell "
-                    f"MIDPOINTS of its box {op['box']}. A participant's own mesh dump "
-                    f"sits on the mesh nodes, and the check's quadrature is a midpoint "
-                    f"rule, so it would measure the quadrature rather than the field. "
-                    f"Write the per-level file your task asks for -- the field "
-                    f"interpolated at the probe points it prescribes -- and this "
-                    f"audit checks it.")})
+                    f"neither two or more of its own mesh dumps (field_level<k>.csv in "
+                    f"{op['dir'].name}/) nor a per-level file of yours holding that side's "
+                    f"field at the cell MIDPOINTS of its box {op['box']} were found. The "
+                    f"served contracts write the dumps at every level run; the check "
+                    f"interpolates them to the midpoints, where its quadrature is exact.")})
             continue
-        levels = {lvl: rows for lvl, rows in sorted(sets[0].items())}
         try:
             from .pde_consistency import check_levels
-            res = check_levels(levels, op["source"], op["k"], op["box"],
-                               reaction=op["reaction"]).as_dict()
+            dres, vres = _judge_pair(
+                lambda lv: check_levels(lv, op["source"], op["k"], op["box"],
+                                        reaction=op["reaction"]), dumps, sets)
         except Exception as exc:                              # noqa: BLE001
             out.append({"sequence": f"equation check side {side}", "values": [],
                         "priority": 26, "informational": True,
                         "finding": (f"SIDE {side}'S EQUATION CHECK COULD NOT RUN: "
                                     f"{type(exc).__name__}: {exc}")})
             continue
-        resid = [l.get("relative_weak_residual") for l in res.get("levels", [])]
-        verdict = str(res.get("verdict"))
-        shown = ", ".join(f"{r:.3e}" for r in resid
-                          if isinstance(r, float) and r == r)
         op_txt = (f"-div({op['k']:g} grad u)"
                   + (f" + {op['reaction']:g} u" if op["reaction"] else "")
                   + " = f")
-        if verdict == "CONSISTENT":
-            out.append({
-                "sequence": f"equation check side {side}", "values": resid,
-                "priority": 26, "informational": True,
-                "finding": (
-                    f"SIDE {side} SATISFIES ITS OWN EQUATION {op_txt} on the field you "
-                    f"delivered: the weak residual falls {shown} across the levels, "
-                    f"which is what a field solving the stated problem does. This is "
-                    f"self-consistency, not a comparison with any reference: it says "
-                    f"your field solves the equation your config states, with the "
-                    f"source you gave it.")})
-        elif verdict == "INCONSISTENT":
-            out.append({
-                "sequence": f"equation check side {side}", "values": resid,
-                "priority": 5,
-                "finding": (
-                    f"SIDE {side}'S FIELD DOES NOT SATISFY THE EQUATION ITS OWN CONFIG "
-                    f"STATES ({op_txt}): the weak residual is {shown} across the "
-                    f"levels -- it does not fall, and a field that solves the stated "
-                    f"problem drives it down by roughly four per refinement. Refining "
-                    f"will not fix this and your convergence study cannot see it: the "
-                    f"field is converging cleanly to a different function. Check the "
-                    f"source term you implemented against the one your task states, "
-                    f"the coefficient, which subdomain each belongs to, and whether the "
-                    f"linear system was SOLVED at all (a KSP 'preonly' without a direct "
-                    f"factorisation applies one preconditioner sweep and solves nothing).")})
+        if (dres and str(dres.get("verdict")) in ("CONSISTENT", "INCONSISTENT", "UNSETTLED")
+                and not _dumps_newer_than_the_files(op["dir"], work)):
+            out.append(_verdict_finding(side, "equation", op_txt, dres, None, op["dir"].name))
         else:
-            why = "; ".join(str(l.get("detail", ""))[:200] for l in res.get("levels", [])[:2])
-            out.append({
-                "sequence": f"equation check side {side}", "values": resid,
-                "priority": 26, "informational": True,
-                "finding": (f"SIDE {side}'S EQUATION CHECK RETURNED {verdict}: {why}")})
+            out.append(_verdict_finding(side, "equation", op_txt, None if vres else dres, vres,
+                                        op["dir"].name))
+
     for side, op in sorted(_side_operators(work).items()):
-        out.extend(_momentum_findings(work, side, op))
+        out.extend(_momentum_findings(work, side, op, since))
     # A SIDE WITH NO config.json WAS PASSED OVER IN SILENCE. couple_levels hands
     # each level its keys through the environment and writes no file, so a side
     # whose problem data sit in its code has nothing here to be judged against
     # -- and a clean audit of it read as a checked one.
     stated = set(_side_operators(work))
-    for d in sorted(p for p in work.iterdir() if p.is_dir()):
+    for d in _side_dirs(work):
         if d.name in stated or not (d / "exports.json").is_file():
             continue
         out.append({
@@ -4515,7 +4934,7 @@ def coupled_ladder(work: Path) -> dict | None:
     _converged_any = False
     for q in hist:
         try:
-            if sum(1 for _ in q.open(errors="ignore")) - 1 >= 3:
+            if _line_count(q) - 1 >= 3:
                 _converged_any = True
                 break
         except OSError:
@@ -4544,6 +4963,14 @@ def coupled_ladder(work: Path) -> dict | None:
                         "./exports.json appears. CHECK: the file contains the served EXPORT SELF-CHECK block "
                         "and the script exited 0 with ./exports.json beside it.")
     dirs_with_export = {q.parent for q in exports}
+    # A SIDE THAT WROTE ITS PER-LEVEL DUMPS HAS RUN, whatever became of exports.json
+    # (the driver deletes it before every iteration, and a run that deleted it by
+    # hand was told "has not exported yet" with three levels on disk -- measured).
+    try:
+        dirs_with_export |= {d for d in _side_dirs(work)
+                             if any(d.glob("field_level*.csv")) or any(d.glob("interface_level*.csv"))}
+    except Exception:                                       # noqa: BLE001
+        pass
     unrun = [q for q in scripts if q.parent not in dirs_with_export]
     if len(dirs_with_export) < 2 and unrun:
         who = ", ".join(str(q.relative_to(work)) for q in unrun[:2])
@@ -4556,7 +4983,8 @@ def coupled_ladder(work: Path) -> dict | None:
         # section a second time). Reads only the agent's own files; writes nothing.
         deck_state = _fourc_deck_state(unrun[0].parent, work)
         if deck_state:
-            return step(2, f"MAKE THE 4C DECK RUN in {who}: {deck_state['what']}",
+            return step(2, (f"MAKE THE 4C DECK RUN in {who}: " if deck_state.get("fourc", True)
+                            else f"MAKE THE PARTICIPANT RUN in {who}: ") + deck_state['what'],
                         f"In the directory of {who}: {deck_state['brief']} Then run the participant again "
                         "with its interpreter. CHECK: ./exports.json appears beside the script with finite "
                         "values and the script exited 0.")
@@ -4573,7 +5001,7 @@ def coupled_ladder(work: Path) -> dict | None:
         if k is None:
             continue
         try:
-            n = sum(1 for _ in q.open(errors="ignore")) - 1
+            n = _line_count(q) - 1
         except OSError:
             n = 0
         rows_by_level[k] = max(rows_by_level.get(k, 0), n)
@@ -4583,7 +5011,7 @@ def coupled_ladder(work: Path) -> dict | None:
         sides_i = {_side_of(q) for q in ifaces if _level_of(q) == k}
         if len(sides_f) < 2 or len(sides_i) < 2:
             # A COUPLED LEVEL WITHOUT ITS PER-LEVEL DUMPS IS RE-RUN, NOT INTERPOLATED FROM NOTHING. Measured
-            # (round 41, C2 7123): level 1's scripts wrote no interface_level1.csv, the deliverables pass skipped
+            # (measured on a recorded run): level 1's scripts wrote no interface_level1.csv, the deliverables pass skipped
             # that level's interface files with a warning, and three second-order levels were read as no result.
             _gap = []
             for _sd in sorted({q.parent for q in scripts}):
@@ -4609,7 +5037,7 @@ def coupled_ladder(work: Path) -> dict | None:
             # block for the levels the task prescribes: the worker sees only the brief.
             nxt = max(done_levels) + 1
             # A SIDE WITHOUT LEVEL-TAGGED OUTPUT IS PRESERVED FIRST, INSIDE THE READY-MADE CALL. Measured
-            # (round 46, C1 7191; parent test 2026-09-13, 2 of 4): a warning after the one-call text did
+            # (a recorded run; parent test 2026-09-13, 2 of 4): a warning after the one-call text did
             # not move the parent; the spawn call it copies must carry the copy step itself.
             _untagged = []
             for _sd in sorted({q.parent for q in scripts}):
@@ -5049,6 +5477,7 @@ def audit(work_dir: str, claimed_order: float | None = None,
         _SUMMARY_HINT[str(work)] = summary_path
     findings: list[dict] = []
     findings.extend(_guarded("residual_findings", residual_findings, work))
+    findings.extend(_guarded("unsolved_field_findings", unsolved_field_findings, work))
     findings.extend(_guarded("completeness_findings", completeness_findings, work))
     findings.extend(_guarded("exact_ladder_findings", exact_ladder_findings, work))   # the provable one leads the band one
     findings.extend(_guarded("ndof_ladder_findings", ndof_ladder_findings, work))
@@ -5626,6 +6055,17 @@ def _stated_role(side_dir: Path) -> str | None:
             continue
         if m:
             return m[-1]
+        # A CONTRACT THAT IS ONE ROLE BY CONSTRUCTION says so in its first line
+        # and carries no SIDE: the served Kratos Neumann contract was read as
+        # role-unknown and told it imposes a trace (measured; one run spent six
+        # minutes replacing a working side).
+        try:
+            head = q.read_text(errors="ignore")[:400]
+        except OSError:
+            continue
+        hm = re.search(r"\((NEUMANN|DIRICHLET) side\)", head, re.I)
+        if hm:
+            return hm.group(1).lower()
     return None
 
 
@@ -5639,10 +6079,10 @@ def _imported_trace_not_held(work: Path) -> list[dict]:
     the two subdomains are answering different problems -- while the iteration
     still converges, because each side is self-consistent.
 
-    FOUND BY ASKING WHAT SEPARATES C9 8631 (CORRECT) FROM 8632 (UNPHYSICAL).
+    FOUND BY ASKING WHAT SEPARATES A CORRECT RUN FROM A PHYSICALLY WRONG ONE.
     Same problem, same two codes, same recovery method, the same 44 interface
-    points in the same order, three coupled levels each. 8631's side B exports
-    exactly what it imported (0.00%); 8632's differs by 127%. Five other
+    points in the same order, three coupled levels each. The correct run's side B
+    exports exactly what it imported (0.00%); the wrong run's differs by 127%. Five other
     hypotheses were ruled out first -- point correspondence, corner handling,
     the constrained dof set, the values array indexing, and whether
     skfem's solve(*condense(...)) restores constrained values (it does).
@@ -5687,7 +6127,10 @@ def _imported_trace_not_held(work: Path) -> list[dict]:
             scale = float(abs(iv).max())
             if scale == 0.0:
                 continue
-            oi = _np.argsort(ic[:, 0]); oe = _np.argsort(ec[:, 0])
+            # ALONG THE INTERFACE: sorting by x on a vertical interface sorts by a
+            # constant, and the pairing was whatever order argsort left.
+            _ax = int(_np.argmax(_np.var(ic, axis=0))) if ic.ndim == 2 and ic.shape[0] > 1 else 0
+            oi = _np.argsort(ic[:, _ax], kind="stable"); oe = _np.argsort(ec[:, _ax], kind="stable")
             rel = float(abs(iv[oi] - ev[oe]).max() / scale)
             if rel < 0.01:
                 continue

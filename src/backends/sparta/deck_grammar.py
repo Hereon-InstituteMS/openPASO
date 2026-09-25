@@ -9,7 +9,7 @@ leaves the agent with nothing to start from.
 MEASURED on the payload a single-code SPARTA agent received for `heat`: 1,084
 characters in total, with no `fix` and no `run` — the two commands without which
 the binary does nothing at all. The same shape of gap was measured for 4C (where
-it cost three development runs of one coupled problem their whole attempt) and
+it cost three recorded runs of one coupled problem their whole attempt) and
 for FEBio.
 
 WHAT IS SERVED IS THE GRAMMAR, NOT A SOLVE. Every number is an arbitrary

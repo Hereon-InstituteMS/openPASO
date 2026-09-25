@@ -57,6 +57,59 @@ _SOLVE_ELIDED = """\
 # ─────────────────────────────────────────────────────────────────────────"""
 
 
+# THE BANNER SAYS WHICH HOLE IS WHICH. One text sat in every hole, and it
+# ended "At this point you are expected to have produced the discrete
+# solution ... with the partner's interface data applied" -- in the FIRST hole
+# too, which comes before the served lines that apply that data. Measured: a
+# worker solved in hole 1 of 3, the imported load never entered, and the
+# side had to be rewritten. Each hole now says whether it comes before the
+# solve, is the solve, or comes after it; a contract whose solve hole cannot
+# be told from its code keeps the one text above.
+_SOLVE_HEAD = "# THE SOLVE ITSELF IS YOURS AND IS NOT SERVED HERE."
+_SOLVE_RULE = "# " + "─" * 73
+_SOLVE_CALL = __import__("re").compile(
+    r"Inverse\(|\.solve\(|\bsolve\(|spsolve|LinearProblem\(|\.Solve\(|linalg\.solve|"
+    r"galerkin\(|subprocess\.run\(")
+
+
+def _code_lines(text: str) -> str:
+    import re
+    return "\n".join(re.sub(r"\s#.*$", "", ln) for ln in text.splitlines()
+                     if ln.strip() and not ln.strip().startswith("#"))
+
+
+def _hole_banner(k: int, n: int, m: int | None) -> str:
+    """The banner for hole k of n when hole m holds the solve (None: unknown)."""
+    if m is None:
+        return _SOLVE_ELIDED
+    if k == m:
+        text = _SOLVE_ELIDED.replace(
+            _SOLVE_HEAD + "\n",
+            _SOLVE_HEAD + f"\n# HOLE {k} OF {n}: THE SOLVE GOES HERE, after everything the served lines\n"
+            "# above have put in place.\n", 1)
+        if n > 1:
+            # ONLY THE SOLVE BELONGS HERE when an earlier hole set the system up:
+            # this banner told the solve hole to "build the mesh, the function
+            # space, the weak form" too (measured, in the NGSolve contract).
+            text = text.replace(
+                "# Build the mesh, the function space, the weak form and the linear solve for\n"
+                "# the problem you were given, in this backend, however you judge best. That is\n",
+                "# Assemble and solve here the system the earlier hole set up -- the linear\n"
+                "# solve itself -- however you judge best. That is\n", 1)
+        return text
+    if k < m:
+        return (f"{_SOLVE_RULE}\n{_SOLVE_HEAD}\n"
+                f"# HOLE {k} OF {n} COMES BEFORE THE SOLVE (hole {m}). Set up here what the served\n"
+                "# lines after it use -- the names listed at the end of this file -- and do NOT\n"
+                "# solve yet: whatever those served lines add (the partner's interface data, a\n"
+                "# boundary condition) must be in place before the solve sees the system.\n"
+                f"{_SOLVE_RULE}")
+    return (f"{_SOLVE_RULE}\n{_SOLVE_HEAD}\n"
+            f"# HOLE {k} OF {n} COMES AFTER THE SOLVE (hole {m}): the solution exists; define\n"
+            "# here what the served lines after it use (the names listed at the end of this file).\n"
+            f"{_SOLVE_RULE}")
+
+
 def _script(name: str) -> str:
     """Return the participant CONTRACT shipped with openPASO: the file with its marked SOLVE regions elided.
 
@@ -66,7 +119,7 @@ def _script(name: str) -> str:
 
     The old serving path cut out every mesh/form/solve region while calling the
     result a "complete participant". Measured consequence: 73% of the coupled
-    runs that gave up never exchanged data once, and one development run spent
+    runs that gave up never exchanged data once, and one recorded run spent
     74 tool calls rebuilding syntax already present in these executed files
     before delivering a false two-step convergence. Generic, parameterised
     solver templates are an openPASO capability just like the complete single-code
@@ -151,7 +204,7 @@ def _serve_participant(p: Path) -> str:
     #
     # The proof that elision happened is the elision marker in the output, and
     # that the marked source region is gone from it.
-    _cut_ok = _SOLVE_ELIDED in served
+    _cut_ok = _SOLVE_HEAD in served
     if _cut_ok:
         _a = text.find(_SOLVE_BEGIN) + len(_SOLVE_BEGIN)
         _b = text.find(_SOLVE_END, _a)
@@ -232,22 +285,30 @@ def _elide_solve(text: str) -> str:
     second route while the first was clean. The mechanism has to sit where
     every door passes through it, not where the first one did.
     """
-    out, i = [], 0
+    spans, i = [], 0
     while True:
         a = text.find(_SOLVE_BEGIN, i)
         if a < 0:
-            out.append(text[i:])
             break
         b = text.find(_SOLVE_END, a)
+        spans.append((a, b))
         if b < 0:                       # unterminated marker: serve nothing after
-            out.append(text[i:a])
-            out.append(_SOLVE_ELIDED + "\n")
             break
+        i = b + len(_SOLVE_END)
+    solving = [k for k, (a, b) in enumerate(spans, 1)
+               if b > a and _SOLVE_CALL.search(_code_lines(text[a:b]))]
+    m = solving[0] if len(solving) == 1 else None
+    out, i = [], 0
+    for k, (a, b) in enumerate(spans, 1):
         out.append(text[i:a])
-        out.append(_SOLVE_ELIDED + "\n")
+        out.append(_hole_banner(k, len(spans), m) + "\n")
+        if b < 0:
+            i = len(text)
+            break
         i = b + len(_SOLVE_END)
         if i < len(text) and text[i] == "\n":
             i += 1
+    out.append(text[i:])
     return _append_reconstruction_contract("".join(out), text)
 
 
@@ -544,7 +605,7 @@ that counts and a wasted one.
 
 ## 3a. THE ONE BUG THAT CONVERGES TO THE WRONG ANSWER
 
-Measured over the development runs: agents wrote 260 participant scripts
+Measured over the recorded runs: agents wrote 260 participant scripts
 and the same defect kept coming back — exporting the raw traction instead of
 the NEGATED outward normal flux. That flips the sign the partner applies, and
 the coupling then converges, smoothly, with a clean residual history, to the
@@ -564,7 +625,7 @@ solve itself is yours.
 ## 3b. FROM A CONVERGED COUPLING TO A DELIVERED ANSWER
 
 Getting the iteration to converge is the hard part and it is not the last
-part. Among the development runs, six produced converged two-code couplings
+part. Among the recorded runs, six produced converged two-code couplings
 — residuals to 1e-7 and better, both participants responsive — and every one
 of them counted for nothing. None of them lost on physics. They lost on the
 four points below, none of which was written down anywhere.
@@ -1444,8 +1505,16 @@ BitArray, not indices, so turn it into indices yourself:
     iface_dofs = [i for i, b in enumerate(bits) if b]
 
 Name your boundaries when you build the geometry (`AddRectangle(...,
-bcs=["bot","right","top","left"])`) -- without names there is nothing for
-Boundaries() to select and you are back to comparing coordinates by hand.
+bcs=[<bottom>, <right>, <top>, <left>])`, YOUR names in that edge order; the
+served contracts integrate over ds("interface"), so the interface edge carries
+that name) -- without names there is nothing for Boundaries() to select.
+
+A MASK YOU BUILD YOURSELF STARTS AS RANDOM MEMORY. BitArray(n) is not zeroed
+(measured: 49, 14, 46 and 17 of 200 bits set in four constructions): call
+.Clear() or .Set() before writing single bits, or start from fes.FreeDofs() and
+clear only the dofs you fix. BitArray(<list>) takes one BOOLEAN per dof, not dof
+numbers. A mask with random bits makes the solve differ from run to run on the
+same inputs, and a coupling built on it never converges.
 """
 
 
@@ -2249,7 +2318,7 @@ def _role_block(script_name: str) -> str:
     A backend's payload used to carry exactly one script. Where that script
     implements only one side — Kratos shipped the Dirichlet side and nothing
     else — an agent handed the opposite role got prose and had to write the
-    participant itself. Two coupled problems in the development runs needed
+    participant itself. Two coupled problems in the recorded runs needed
     Kratos on the Neumann side; both failed.
     """
     p = _PARTICIPANT_DIR / f"participant_{script_name}_neumann.py"
@@ -2274,7 +2343,7 @@ def _vector_block(script_name: str) -> str:
     payload only ever carried the scalar heat script, so an agent asked to
     couple ELASTICITY was handed a temperature participant and one line of
     prose ("replace temperature with displacement, flux with traction"). Four
-    coupled problems in the development runs were vector problems; the agents
+    coupled problems in the recorded runs were vector problems; the agents
     rewrote from scratch and ran out of budget.
 
     Appended automatically wherever the file exists, so adding a backend's
@@ -4783,7 +4852,7 @@ def _dealii_sources() -> str:
     THE FAILURE THIS MUST NOT REINTRODUCE. Ten passages once promised the
     sources were "in the same directory the payload came from". A payload comes
     from a tool call; there is no directory, and no tool returned the source.
-    Measured in one development run's transcript: the agent hunted the
+    Measured in one recorded run's transcript: the agent hunted the
     filesystem, found a scalar solver, discovered it could not do its
     anisotropic case, hand-wrote a replacement, segfaulted and spent the
     session there. So this says plainly that writing the solver is the agent's

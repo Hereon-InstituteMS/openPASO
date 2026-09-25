@@ -426,7 +426,7 @@ def _double_star_in_functions(text: str) -> list[str]:
 def _dirichlet_pins_every_node(text: str) -> list[str]:
     """Dirichlet conditions that reach EVERY node of a field leave nothing to solve: 4C's predictor prints
     'res-norm 0', the solver converges at iteration 0 and the field is the prescribed data (zero where the
-    data is zero). Measured (round 45, C1 7172): a TSI deck whose 'outer' surface held 90 of 108 slab nodes and
+    data is zero). Measured on a recorded run: a TSI deck whose 'outer' surface held 90 of 108 slab nodes and
     whose interface points held the other 18 -- both fields pinned everywhere, both volume loads gone, 85
     shell calls spent on a '4C limitation'. Counted per field and per in-plane component (a u_z = 0 pin on
     the whole slab is plane strain, not a defect), only when the coverage is complete."""
@@ -646,7 +646,7 @@ def _flux_calc_off_the_interface(text: str) -> list[str]:
 def _yaml_parse_error(text: str) -> list[str]:
     """The deck as YAML: 4C's reader is a YAML parser, and a structural slip (an entry's keys indented
     unevenly, a bare token where a mapping was open) stops it with 'ERROR: parse error <line>:<col>'
-    (measured, round 42 C1 7073: `NUMDOF: 3` at 109:13 under a DESIGN POINT DIRICH entry). PyYAML names
+    (measured on a recorded run: `NUMDOF: 3` at 109:13 under a DESIGN POINT DIRICH entry). PyYAML names
     the same place before any run; the offending line is quoted."""
     try:
         import yaml  # noqa: PLC0415
@@ -668,7 +668,7 @@ def _yaml_parse_error(text: str) -> list[str]:
 
 
 def _elements_with_unknown_nodes(text: str) -> list[str]:
-    """Element rows naming node ids that NODE COORDS does not define (measured, round 42 C1 7073: 'Element 17
+    """Element rows naming node ids that NODE COORDS does not define (measured on a recorded run: 'Element 17
     cannot find node 27' -- 4C stops in its element reader; a lint sees it before the run)."""
     ids = {int(a) for a in re.findall(r'"NODE\s+(\d+)\s+COORD\b', text)}
     if not ids:

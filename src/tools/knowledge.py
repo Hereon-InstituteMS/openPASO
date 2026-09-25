@@ -274,7 +274,7 @@ def _find_reference_test_files(solver: str, physics: str) -> str:
 # This first went into the generic capture recipe, which lives in the full
 # block on the topic="physics" path — and coupled agents call topic="coupling".
 # Measured right after writing it: the physics reply carried it, the coupling
-# reply did not, the exact defect class the development runs keep hitting.
+# reply did not, the exact defect class the recorded runs keep hitting.
 _PER_SIDE_NAMING = """ON A COUPLED TASK THE NAME CARRIES THE SIDE: one run log per participant per
 level, named for its side, each holding THAT participant's own solver output.
 Two codes writing into one file cannot be told apart, and a result set whose
@@ -537,7 +537,7 @@ def _physics_tail() -> str:
 # MEASURED, and this is why this constant exists. `_UNIVERSAL` was appended on
 # exactly ONE of the 31 return paths of tools.consolidated.knowledge() — the
 # topic="physics" path. Across 995 measured knowledge calls from 193
-# development runs, topic="pitfalls" was 66.3% and topic="physics" only 11.5%,
+# recorded runs, topic="pitfalls" was 66.3% and topic="physics" only 11.5%,
 # so 75.6% OF THOSE RUNS RECEIVED NONE OF IT. Every universal rule added
 # during development — the deliverable's location, the input-language warning,
 # the do-not-declare-the-solver-broken rule, the refinement ladder — reached at
@@ -1145,7 +1145,7 @@ the ingredient.
 # test_what_we_write_is_what_agents_see (1, covering four rules x nine
 # backends), test_served_text_is_not_self_referential (4).
 #
-# The cost was paid. One development run spent its budget on a 4C abort whose
+# The cost was paid. One recorded run spent its budget on a 4C abort whose
 # whole record is an empty stdout plus MPI boilerplate, concluded "the 4C
 # binary requires specific MPI environment configuration", and delivered
 # nothing; the two sections that speak to precisely that were not in the reply

@@ -803,13 +803,17 @@ def _coupling_setup_text(**kwargs) -> str:
             if isinstance(_parsed, list):
                 import os as _os
                 _cell = _os.environ.get("OPENPASO_CELL_WORKDIR")
-                if _cell:
-                    for _spec in _parsed:
-                        if not isinstance(_spec, dict):
-                            continue
-                        _wd = str(_spec.get("work_dir", "") or "")
-                        if _wd and not Path(_wd).is_absolute():
-                            _spec["work_dir"] = str(Path(_cell) / _wd)
+                for _spec in _parsed:
+                    if not isinstance(_spec, dict):
+                        continue
+                    # A TIME LIMIT DOES NOT CHANGE WHAT IS SOLVED. Measured: a
+                    # review submitted with "timeout" in each spec and a ladder
+                    # called without it were two setups, and the ladder was told
+                    # no review of it was on record.
+                    _spec.pop("timeout", None)
+                    _wd = str(_spec.get("work_dir", "") or "")
+                    if _cell and _wd and not Path(_wd).is_absolute():
+                        _spec["work_dir"] = str(Path(_cell) / _wd)
             payload["participants"] = json.dumps(_parsed, sort_keys=True,
                                                  separators=(",", ":"))
         except (TypeError, ValueError):
@@ -1185,6 +1189,64 @@ def _couple_failure_reason(r, checks_ok: bool) -> str:
         "not assumed.")
 
 
+def _interface_profile_trend(out_levels: list, shrink: float = 0.6):
+    """(faults, notes, excused_levels) from the per-level POINT-BY-POINT flux
+    mismatch, judged as the balance is (see _interface_balance_trend).
+
+    MEASURED on a correct vector Dirichlet-Neumann ladder: the pointwise mismatch
+    read 11.1% / 15.2% at level 1, 7.2% / 7.8% at level 2 and 5.8% / 3.9% at level
+    3 -- the Neumann side's consistent recovery smoothing the flux it was given by
+    the boundary mass matrix -- and the level-1 finding alone made the correct
+    ladder NOT VERIFIED. A mismatch that shrinks, or ends inside tolerance, is
+    that smoothing; one that does not is a mis-mapped exchange. Neither says
+    anything about the operator: the equation check does.
+    """
+    return _interface_numbers_trend(out_levels, "interface_profile",
+                                    "pointwise interface flux mismatch", shrink)
+
+
+def _interface_numbers_trend(out_levels: list, key: str, what: str, shrink: float = 0.6):
+    rows = []
+    for x in out_levels:
+        b = x.get(key) if isinstance(x, dict) else None
+        if isinstance(b, dict) and b.get("rel") and not b.get("tautology"):
+            try:
+                rows.append((int(x.get("level")), [float(v) for v in b["rel"]],
+                             float(b.get("rtol", 0.10))))
+            except (TypeError, ValueError):
+                continue
+    if len(rows) < 2:
+        return [], [], set()
+    ncomp = min(len(r) for _, r, _ in rows)
+    faults, notes, excused, held = [], [], set(), set()
+    for c in range(ncomp):
+        seq = [(k, r[c]) for k, r, _ in rows]
+        rtol = rows[0][2]
+        fired = [k for k, v in seq if v == v and v > rtol]
+        if not fired:
+            continue
+        vals = [v for _, v in seq]
+        ratios = [vals[i + 1] / vals[i] if vals[i] > 0 else 1.0
+                  for i in range(len(vals) - 1)]
+        name = f"flux component {c}" + (" (the only one)" if ncomp == 1 else "")
+        path = " -> ".join(f"{v:.1%}" for v in vals)
+        lv = ", ".join(str(k) for k, _ in seq)
+        if all(r <= shrink for r in ratios) or vals[-1] <= rtol:
+            notes.append(
+                f"The {what} of {name}: {path} over levels {lv}, shrinking under "
+                f"refinement or ending inside tolerance -- discretisation, and the "
+                f"coarse-level caveat is not held against the ladder.")
+            excused.update(fired)
+        else:
+            held.update(fired)
+            faults.append(
+                f"the {what} of {name} does NOT shrink under refinement ({path} over "
+                f"levels {lv}): a mismatch that stays or grows is a mis-mapped or "
+                f"inconsistent exchange of that component, and refinement will not "
+                f"cure it")
+    return faults, notes, excused - held
+
+
 def _interface_balance_trend(out_levels: list, shrink: float = 0.6):
     """(faults, notes, excused_levels) from the per-level interface balance.
 
@@ -1314,7 +1376,7 @@ def _stamp_verification(result: dict, *, evidence_ok: bool, reason: str = "",
         # a result"). The agent obeys the imperative it is holding.
         # ROUTE ON THE PROPERTY, NOT ON THREE WORDS. The first router
         # recognised a converged-with-caveat run only when the reason contained
-        # balance/conserv/flux. One development run's caveat read "the
+        # balance/conserv/flux. One recorded run's caveat read "the
         # coupling CONVERGED, and then failed one of openPASO's silent-wrong
         # checks ... report the numbers and the caveat" -- no listed word -- so
         # it fell to the else-branch, and the agent received both "report the
@@ -2446,7 +2508,7 @@ def _make_input_snapshot(input_content: str, solver: str = "",
 def _unsaved_work_notice(work_dir, out_files) -> str | None:
     """Warn, at the moment a solve SUCCEEDS, that nothing is written down yet.
 
-    Measured over the development runs: the runs that fail most often are
+    Measured over the recorded runs: the runs that fail most often are
     not the ones that fail to solve. They solve, keep working, and end with
     nothing a reader can find — three of the five failing single-code runs in
     one batch made 85-107 tool calls, produced solver output, and wrote no
@@ -2533,12 +2595,16 @@ _PREPARED_SOLVERS: dict = {}
 # the agent needs for its own work. One server process is one session, so a
 # module flag is the session; `register_consolidated_tools` resets it.
 _MUST_READ_STATE: dict = {"served": False}
+# TRUE FOR A SUB-AGENT TOO. A sub-agent shares this server process but not its
+# parent's context, and "was served earlier in this session" told one it had read
+# a page it never saw (measured: a critic sub-agent then fetched the 75 kB page and
+# its next reply ran to the output cap).
 _MUST_READ_POINTER = (
     "THE COUPLED MUST-READ (the couple() call recipe, history_path, the "
     "fields-vs-evidence rule, the measured-not-modelled history rule, the "
-    "sign convention, the rho budget, the silent no-flux trap) was served "
-    "earlier in this session and is not repeated here, to leave you the "
-    "context for your own work. To see it again: "
+    "sign convention, the rho budget, the silent no-flux trap) was served to "
+    "this session -- to you, or to the agent that started you -- and is not "
+    "repeated here. If your own conversation lacks it: "
     "knowledge(topic='coupling', signal='must-read').\n\n")
 
 
@@ -2784,7 +2850,7 @@ def _deciding_block(solver: str, physics: str) -> str:
     return head + body + "\n\n" + "-" * 70 + "\n\n"
 
 
-# EVERY KNOWLEDGE REPLY IS BOUNDED. Measured on coupled development runs
+# EVERY KNOWLEDGE REPLY IS BOUNDED. Measured on coupled recorded runs
 # with a small model: single knowledge replies of 55-145k characters, ten of
 # them per run, 1-9 million input tokens per run, and the run gave up
 # citing the size of the job. The coupling door already caps its head at
@@ -2846,7 +2912,7 @@ def _probe_recipe_span(text: str) -> tuple:
     THE RECIPE EXISTS BECAUSE OF THE BIGGEST FAILURE BUCKET, AND THE CAP ATE IT.
     deal.II's backend adds a `probe_recipe` to every knowledge branch because a
     solve that worked and was never read back at the prescribed points is the
-    largest single way a run is lost -- 60 development runs, 12.9 %. The
+    largest single way a run is lost -- 60 recorded runs, 12.9 %. The
     backend comment says adding it to one branch would leave the other three
     silent. It was added to all four, and then the 48,000-character cap cut it
     off every one of them: measured on
@@ -3024,7 +3090,7 @@ def _level_not_a_coupled_result(rep: dict) -> str:
     """Why this level's own evidence is not a coupling, or "" when it is one.
 
     THE SUMMARY AND THE LEVEL SAID DIFFERENT THINGS, AND THE LOUDER ONE WAS
-    WRONG. Measured 2026-09-17 on a coupled development run: one couple_levels
+    WRONG. Measured 2026-09-17 on a coupled recorded run: one couple_levels
     call returned `"all_levels_converged": true` with `"iterations": 2`,
     `"residual": 0.0` and a history of ONE row at every level, and its
     next_step read "EVERY REQUESTED LEVEL CONVERGED ... write the task's
@@ -3066,7 +3132,7 @@ def _level_field_peak(specs: list, k: int) -> dict:
     """How big is the field each side just wrote for this level?
 
     WHY THIS IS REPORTED RATHER THAN OFFERED. `couple_levels` already ended by
-    telling the agent to call audit_results. Measured over the campaign's graded
+    telling the agent to call audit_results. Measured over the graded
     coupled record, a self-check tool was called in 40 of 217 cells with files,
     and a live full-task run here wrote a field of LITERAL ZERO at all three
     levels, reported an interface residual of 6.8e-11 as evidence of success,
@@ -3391,7 +3457,7 @@ def register_consolidated_tools(mcp: FastMCP):
             # FUZZY MATCH HERE TOO — the pairing was exactly inverted.
             # prepare_simulation has a seven-stage matcher and this had none,
             # so the tool WITH the matcher lacked the universal block and the
-            # tool WITH the block dead-ended. Measured over 98 development runs:
+            # tool WITH the block dead-ended. Measured over 98 recorded runs:
             # knowledge(topic='physics', solver='fenics', physics='nonlinear')
             # returned 38 characters, 16 times across 13 runs, while
             # 'nonlinear' matches nonlinear_pde — the generator that builds
@@ -4524,7 +4590,7 @@ def register_consolidated_tools(mcp: FastMCP):
         JSON object for `couple` / `couple_precice` / `coupled_solve`. Passing
         neither — or both — is refused, and the refusal comes AFTER you have
         written the review, so the review is wasted. Measured over the
-        development runs, half of all reviews handed in were rejected this way.
+        recorded runs, half of all reviews handed in were rejected this way.
 
         openPASO's critic requirement is enforced, not requested. The run and
         coupling tools do not take your word for it: they look up whether THIS
@@ -4660,6 +4726,23 @@ def register_consolidated_tools(mcp: FastMCP):
             setup_text = _coupling_setup_text(**parsed)
         else:
             setup_text = setup
+        # A REVIEW THAT REJECTS THE SETUP IS NOT A REVIEW OF RECORD FOR IT. Measured
+        # on one set of coupled runs: two orchestrators filed their critics' verdicts
+        # "REJECTED" and "NOT APPROVED", both were accepted, and both runs used the
+        # token to verify what their own critics had turned down. The last verdict
+        # stated in the text decides, so a review that approves after fixes passes.
+        _verdicts = list(re.finditer(
+            r"\b(?:VERDICT|DECISION|CONCLUSION|RESULT)\b[^\n\w]{0,6}\**\s*"
+            r"(NOT[\s_-]+APPROVED|REJECTED|REJECT|DO[\s_-]+NOT[\s_-]+(?:RUN|PROCEED)|APPROVED)",
+            str(findings), re.I))
+        if _verdicts and not _verdicts[-1].group(1).upper().startswith("APPROVED"):
+            return json.dumps({
+                "accepted": False,
+                "error": (f"THE REVIEW YOU FILED SAYS \"{_verdicts[-1].group(0).strip()}\": a setup its "
+                          f"own critic turned down is not a reviewed setup, and no token is issued "
+                          f"for it. Fix what the critic named, have it review the fixed setup, "
+                          f"and file that review."),
+                "findings_were_not_lost": True}, indent=2)
         try:
             rec = _CRITIC_REGISTRY.submit_review(
                 solver=solver, findings=findings,
@@ -5263,8 +5346,8 @@ def register_consolidated_tools(mcp: FastMCP):
         # manufactured case the exact field falls 64.8x while a 3 % error in
         # ONE component stays flat.
         #
-        # This matters beyond tidiness. The campaign family this refusal
-        # covered, C9, is the one with the only recent CORRECT cell -- so the
+        # This matters beyond tidiness. The problem family this refusal
+        # covered, coupled elasticity, is the one with the only recent correct run -- so the
         # single coupled problem that had started working was the one nothing
         # could check.
         _ELASTIC = _re.compile(
@@ -5391,7 +5474,7 @@ def register_consolidated_tools(mcp: FastMCP):
 
         THIS EXISTED ONLY INSIDE AN INDEPENDENT CHECK UNTIL NOW, which is why
         it is here. The check below is the one that decided one coupled
-        development run: a result set whose two codes both genuinely ran,
+        recorded run: a result set whose two codes both genuinely ran,
         whose coupling genuinely iterated over three mesh levels, and whose
         interface FIELD matched to 0.000e+00 across the seam, was still
         complete but unphysical — because one side reported its flux with the
@@ -5608,6 +5691,28 @@ def register_consolidated_tools(mcp: FastMCP):
                     res = {"verdict": "NOT_ASSESSED",
                            "detail": f"{type(exc).__name__}: {exc}"}
                 res.update({"level": lvl, "side": side})
+                # A CONSTANT RATIO IS NOT THE STATED COEFFICIENT. The ratio was
+                # judged for spread and sign only, and a side whose implied
+                # coefficient was 8.742 against a stated k of 1 read CONSISTENT
+                # (measured, on a side that had never solved its interior).
+                try:
+                    from tools.result_audit import _side_operators as _sops
+                    _wk = _RawPath(str(_under_cell(_split(interface_files)[0]))).parent
+                    _op = next((o for n, o in _sops(_wk).items()
+                                if n.replace("side_", "").upper() == str(side).upper()), None)
+                    _ks = float(_op["k"]) if _op and isinstance(_op.get("k"), (int, float)) else None
+                    _ki = [c.get("implied_coefficient") for c in res.get("per_component") or []
+                           if isinstance(c.get("implied_coefficient"), (int, float))]
+                    if _ks and _ki and any(abs(k / _ks - 1.0) > 0.3 for k in _ki if k > 0):
+                        res["stated_coefficient"] = _ks
+                        res["coefficient_check"] = (
+                            f"THE IMPLIED COEFFICIENT ({', '.join(f'{k:.4g}' for k in _ki)}) IS NOT "
+                            f"THE k YOUR CONFIG STATES ({_ks:g}): a flux computed as -k du/dn from "
+                            f"this field would read about {_ks:g}. The sign test passes, but the flux "
+                            f"does not follow from this field with this k -- check the field itself "
+                            f"(was its interior solved?) and the coefficient the recovery used.")
+                except Exception:                            # noqa: BLE001
+                    pass
                 out["per_side"].append(res)
 
         # ---- check 2: the two-sided jump and its trend
@@ -5640,7 +5745,13 @@ def register_consolidated_tools(mcp: FastMCP):
         out["per_level"] = per_level
         jq = [p.get("jump_q_rel") for p in per_level
               if isinstance(p.get("jump_q_rel"), (int, float))]
-        if len(jq) >= 2:
+        if len(jq) >= 2 and max(jq) < 1e-6:
+            # the audit's floor (result_audit._JUMP_ROUND_OFF): no trend at round-off
+            out["flux_jump_trend"] = {
+                "values": jq, "shrinking": None,
+                "detail": ("the flux jump is at round-off at every level: the two fluxes "
+                           "agree to solver precision, and there is no trend to read")}
+        elif len(jq) >= 2:
             shrinking = all(jq[i + 1] < jq[i] for i in range(len(jq) - 1))
             out["flux_jump_trend"] = {
                 "values": jq,
@@ -6145,7 +6256,7 @@ def register_consolidated_tools(mcp: FastMCP):
 
         iface_level: optional level number stamped into the suggested_filename of the interface_csv blocks the reply carries on convergence (each participant's own final interface data, ready to save verbatim).
 
-        pde_check: THE ONE CHECK THAT SEPARATES A RIGHT ANSWER FROM A CONVERGED WRONG ONE, run for you on every converged level. JSON keyed by participant name: {"A": {"solution_files": "<this side's per-level field files, comma-separated, in level order>", "equation": "<your task's EQUATION line, verbatim>", "source": "<that side's source, as your task wrote it>", "coefficient": "<that side's coefficient>", "domain": "[[x0,x1],[y0,y1]]"}, "B": {...}}. The files must be on the PROBE GRID your task prescribes, not your mesh nodes: the test is a midpoint quadrature and on a scatter it reports nothing rather than a misleading number. You name them; openPASO guesses no filename and opens no task file. Give it once and openPASO puts each side's own field back into that side's own equation at every level from the second on, and reports CONSISTENT or INCONSISTENT in `pde_consistency`. A refinement study cannot do this: a field that converges cleanly to the WRONG function is indistinguishable in one -- measured on three development cells whose every self-consistency measure reported a converging run while the answer was wrong. Nothing here is read from any task file; these are YOUR strings, and openPASO neither stores nor supplies them. A side whose operator this check does not model is refused by name and the rest still run.
+        pde_check: THE ONE CHECK THAT SEPARATES A RIGHT ANSWER FROM A CONVERGED WRONG ONE, run for you on every converged level. JSON keyed by participant name: {"A": {"solution_files": "<this side's per-level field files, comma-separated, in level order>", "equation": "<your task's EQUATION line, verbatim>", "source": "<that side's source, as your task wrote it>", "coefficient": "<that side's coefficient>", "domain": "[[x0,x1],[y0,y1]]"}, "B": {...}}. The files must be on the PROBE GRID your task prescribes, not your mesh nodes: the test is a midpoint quadrature and on a scatter it reports nothing rather than a misleading number. You name them; openPASO guesses no filename and opens no task file. Give it once and openPASO puts each side's own field back into that side's own equation at every level from the second on, and reports CONSISTENT or INCONSISTENT in `pde_consistency`. A refinement study cannot do this: a field that converges cleanly to the WRONG function is indistinguishable in one -- measured on three recorded coupled runs whose every self-consistency measure reported a converging run while the answer was wrong. Nothing here is read from any task file; these are YOUR strings, and openPASO neither stores nor supplies them. A side whose operator this check does not model is refused by name and the rest still run.
 
         pde_sources: OPTIONAL, public-only. JSON {"A": {"source": "<the forcing/coefficient you actually implemented>", "task_source": "<the task's stated source, verbatim>"}, "B": {...}}. When supplied, openPASO compares the two PUBLIC strings and flags a mismatch — a silent wrong forcing (right shape, wrong function) converges cleanly to a different answer and no self-consistency check can see it. Never required; openPASO reads no reference solution and never supplies the equation for you.
 
@@ -6387,6 +6498,18 @@ def register_consolidated_tools(mcp: FastMCP):
                             for iteration, value in enumerate(r.history, 1)
                             if _math.isfinite(float(value))]
                     destination.parent.mkdir(parents=True, exist_ok=True)
+                    # A RUN THAT PRODUCED NO RESIDUAL DOES NOT ERASE ONE THAT DID.
+                    # A coupling that died at iteration 1 wrote a header-only file
+                    # over the previous run's history (measured: 30 rows lost). The
+                    # earlier file is kept beside it before an empty one replaces it.
+                    if not rows and destination.is_file():
+                        try:
+                            _old_rows = len(destination.read_text().splitlines()) - 1
+                        except OSError:
+                            _old_rows = 0
+                        if _old_rows > 0:
+                            destination.replace(destination.with_name(
+                                destination.stem + ".previous" + destination.suffix))
                     tmp = destination.with_suffix(destination.suffix + ".tmp")
                     tmp.write_text(
                         "iteration,interface_residual\n" +
@@ -6409,7 +6532,7 @@ def register_consolidated_tools(mcp: FastMCP):
                         "error": f"{type(exc).__name__}: {exc}"}
 
         # YOUR OWN VALIDATED INTERFACE DATA, RETURNED READY TO SAVE.
-        # Twelve development iterations measured the same terminal failure:
+        # Twelve rounds of recorded runs measured the same terminal failure:
         # the coupling converges (proven to have run at every level) and the
         # agent then RE-DERIVES its interface files by hand -- first-order
         # recoveries, self-chosen probe coordinates, negated echoes -- and the
@@ -6638,12 +6761,14 @@ def register_consolidated_tools(mcp: FastMCP):
             val += f; not_run += n
         names = list(r.exports)
         _bal_numbers: dict = {}
+        _prof_numbers: dict = {}
         if len(names) == 2:
             a, b = r.exports[names[0]], r.exports[names[1]]
             f, n = check_interfaces_are_the_same_surface(a, b, names[0], names[1])
             val += f; not_run += n
             f, n = check_interface_meshes(a, b, names[0], names[1]); val += f; not_run += n
-            f, n = check_interface_flux_profile(a, b, names[0], names[1])
+            f, n = check_interface_flux_profile(a, b, names[0], names[1],
+                                                numbers=_prof_numbers)
             val += f; not_run += n
             if a.get("normal_fluxes") is None or b.get("normal_fluxes") is None:
                 not_run.append(
@@ -6773,6 +6898,7 @@ def register_consolidated_tools(mcp: FastMCP):
                   "validation": val, "checks_not_run": not_run,
                   # the balance numbers travel so a ladder can state their trend
                   "interface_balance": _bal_numbers or None,
+                  "interface_profile": _prof_numbers or None,
                   "error": r.error,
                   "converged": r.converged, "iterations": r.iterations,
                   "residual": r.residual, "history": r.history,
@@ -6881,7 +7007,7 @@ def register_consolidated_tools(mcp: FastMCP):
         # THE EXCHANGE POINTS ARE NOT THE REPORT POINTS, SAID WHERE THE AGENT
         # IS HOLDING THEM.
         #
-        # MEASURED across every coupled development run: 11 result sets held an
+        # MEASURED across every coupled recorded run: 11 result sets held an
         # interface file containing a point the task explicitly excludes, and 10
         # of the 11 were runs with these tools — 13.7% of coupled runs with the
         # tools against 1.2% of runs without them. Nine of them wrote exactly 9
@@ -7099,11 +7225,13 @@ def register_consolidated_tools(mcp: FastMCP):
             _not_yet = (f"{_lvl_txt} IS NOT A COUPLED RESULT YET: the iteration stopped after {_n_hist} step(s)"
                         + (f"; participant(s) {', '.join(_unresp)} exported byte-identical data while their imports changed" if _unresp else "")
                         + (f"; {_probe_hits[0][:220]}" if _probe_hits else "")
-                        + ". A fixed point reached at once means the exchanged data never changed between iterations: each "
-                          "participant must read ./imports.json on EVERY run and its export must depend on it, and a stale "
-                          "exports.json left by a standalone test run is re-read as this iteration's answer -- delete it "
-                          "before coupling. Then couple() again. Do not write this level's deliverables from this run: a "
-                          "history under 3 rows shows no coupling to anyone who reads it.")
+                        + ". A fixed point reached at once means the exchanged data never changed between iterations. "
+                          "Two ways are on record: a participant that does not read ./imports.json on every run, and one "
+                          "that reads it but never lets the values reach its solve -- written into a vector the solve then "
+                          "replaces, or onto dofs the solve is free to move -- so it exports the same answer whatever it "
+                          "is sent. (The driver deletes exports.json before every run, so no old file stands in for this "
+                          "one.) Fix that side, then couple() again. Do not write this level's deliverables from this run: "
+                          "a history under 3 rows shows no coupling to anyone who reads it.")
             # LEVELS FIRST, DELIVERABLES ONCE. Measured (round 40, C3 6041): after level 1 the
             # parent spent ~30 calls on that level's deliverables (a worker, eleven read_file
             # calls into the dumps, six write-and-run scripts), coupled level 2 with couple()
@@ -7113,8 +7241,8 @@ def register_consolidated_tools(mcp: FastMCP):
             # (the write check) and here (the deliverable findings), so the order that lost
             # rounds 29-33 is safe again: every remaining level in ONE couple_levels call, then
             # one script that writes every level's files from the per-level dumps.
-            # THE PER-LEVEL DUMPS MUST EXIST BEFORE ANY DELIVERABLE IS WRITTEN FROM THEM. Measured (round 41,
-            # C2 7123): level 1 ran with a script version that wrote no interface_level1.csv; the parent
+            # THE PER-LEVEL DUMPS MUST EXIST BEFORE ANY DELIVERABLE IS WRITTEN FROM THEM. Measured on a
+            # recorded run: level 1 ran with a script version that wrote no interface_level1.csv; the parent
             # edited the scripts, coupled levels 2 and 3, and the deliverables script skipped level 1's
             # interface files with a warning -- three second-order levels graded as no result for one
             # missing pair. The dumps are checked here, the moment the level converged.
@@ -7129,12 +7257,12 @@ def register_consolidated_tools(mcp: FastMCP):
                     except OSError:
                         _carries, _tagged = False, ["?"]
                     if _carries:
-                        # the served dump block, or the agent's suffixed variant (round 44 C2 7163: field_level1_A.csv)
+                        # the served dump block, or the agent's suffixed variant (a recorded run: field_level1_A.csv)
                         for _stem in (f"field_level{_lvl_for_log}", f"interface_level{_lvl_for_log}"):
                             if not any(_wd.glob(f"{_stem}*.csv")):
                                 _dump_gap.append(f"side {_p.name}: {_stem}*.csv")
                     elif not _tagged:
-                        # A HAND-WRITTEN SIDE THAT KEEPS NO LEVEL-TAGGED OUTPUT. Measured (round 46, C1 7191): side A's
+                        # A HAND-WRITTEN SIDE THAT KEEPS NO LEVEL-TAGGED OUTPUT. Measured on a recorded run: side A's
                         # 4C runs reused one output prefix, level 2 overwrote level 1's VTUs, side A's three solution
                         # files came out identical and no interface file could be written for it -- on the first C1
                         # cell whose fields were right. Named here, while this level's outputs are still on disk.
@@ -7266,9 +7394,9 @@ def register_consolidated_tools(mcp: FastMCP):
                     "coefficient>\", \"domain\": \"[[x0,x1],[y0,y1]]\"}, ...} on your next couple "
                     "call and every level from the second on is checked automatically. This is the "
                     "only check that separates a right answer from one that converged cleanly to the "
-                    "WRONG function -- measured on three development cells whose every "
+                    "WRONG function -- measured on three recorded coupled runs whose every "
                     "self-consistency measure reported a converging run while the answer was wrong, "
-                    "one of them with a true error ninety times its own field magnitude. It needs no "
+                    "one of them wrong by ninety times its own field magnitude. It needs no "
                     "reference answer, and openPASO neither stores your strings nor reads any task "
                     "file. ")
             _one_call = (_not_yet if _trivial else
@@ -7396,13 +7524,15 @@ def register_consolidated_tools(mcp: FastMCP):
                          + ", ".join(_bad)
                          + ": the weak residual does not fall as the mesh refines, which is what a "
                          "field solving the stated problem does and what a field solving a different "
-                         "one does not. Fix that side -- its source first, then its coefficient, "
-                         "then which boundary carries which condition -- BEFORE spending budget on "
+                         "one does not. Fix that side -- its source first, then its coefficient "
+                         "(the identity cannot see boundary conditions) -- BEFORE spending budget on "
                          "further levels, because everything built on this one inherits it. "
-                         "Measured on recorded runs: this verdict lands on 28 sides that are "
-                         "wrong and on NONE that are right. The reverse is not true -- a CONSISTENT "
-                         "side is not a clean bill of health, because 62 wrong sides also read "
-                         "CONSISTENT; this identity cannot see a wrong condition on a face.\n"
+                         "Measured on the recorded coupled runs: this verdict lands on 25 sides "
+                         "of runs whose answer was wrong and on none of the 118 judged sides of "
+                         "runs whose answer was right. The reverse is not true -- a CONSISTENT "
+                         "side is not a clean bill of health: 113 sides of wrong runs also read "
+                         "CONSISTENT, because this identity cannot see a wrong condition on a "
+                         "face and the wrong side of a run can be its partner.\n"
                          + (_lead or ""))
         if _lead:
             result = {"what_to_fix_next": _lead,
@@ -7417,7 +7547,7 @@ def register_consolidated_tools(mcp: FastMCP):
         """EVERY PRESCRIBED MESH LEVEL IN ONE CALL -- the same partitioned coupling as
         `couple`, run once per level of a task's mesh sequence.
 
-        Measured over three development rounds: six couplings that were proven at
+        Measured over three rounds of recorded runs: six couplings that were proven at
         level 1 (both codes ran, the iteration converged) never reached level 3,
         because every level cost the agent ten more tool calls -- edit both
         config.json files, call couple, save the history, write the deliverables --
@@ -7458,6 +7588,8 @@ def register_consolidated_tools(mcp: FastMCP):
         "accelerator": ..., "theta": ..., "probe": ...} exactly as passed here>),
         then critic_approved=True; openPASO looks that review up for every level.
         """
+        import time as _t_ladder
+        _ladder_t0 = _t_ladder.time()   # the deliverables judged below must be newer than this
         try:
             lv = json.loads(levels)
         except json.JSONDecodeError as e:
@@ -7546,7 +7678,7 @@ def register_consolidated_tools(mcp: FastMCP):
             compact = {"level": k}
             for key in ("converged", "iterations", "residual", "error", "history_file",
                         "interface_csv", "captured_solver_logs", "validation", "relaxation",
-                        "responsiveness", "interface_balance"):
+                        "responsiveness", "interface_balance", "interface_profile"):
                 if key in rep and rep[key] is not None:
                     compact[key] = rep[key]
             # THE VERDICT TRAVELLED NOWHERE. couple() stamps the gate's verdict on
@@ -7559,7 +7691,7 @@ def register_consolidated_tools(mcp: FastMCP):
             # The BOOLEAN on every level; the PROSE only where it does work. The
             # verification text is 700-1500 characters, and three copies of it
             # would add ~4.5k to a reply the parent reads in full -- the same
-            # budget that has twice cut material this campaign needed.
+            # budget that has twice cut material the runs needed.
             #
             # THE LEVEL ANSWERS FOR ITS NUMBERS; THE REVIEW IS THE LADDER'S. A
             # level's own couple() reply can never say `trustworthy_result: true`
@@ -7595,10 +7727,12 @@ def register_consolidated_tools(mcp: FastMCP):
             _not_coupled = _level_not_a_coupled_result(rep) if rep.get("converged") else ""
             if _not_coupled:
                 compact["coupled_evidence"] = (
-                    f"LEVEL {k} IS NOT A COUPLED RESULT YET: {_not_coupled}. Each "
-                    f"participant must read ./imports.json on EVERY run and its export "
-                    f"must depend on it (the driver deletes exports.json before each run, "
-                    f"so what it reads is that run's own). Do not write this level's "
+                    f"LEVEL {k} IS NOT A COUPLED RESULT YET: {_not_coupled}. Two ways "
+                    f"are on record: a participant that does not read ./imports.json on "
+                    f"every run, and one that reads it but never lets the values reach "
+                    f"its solve (written into a vector the solve replaces, or onto dofs "
+                    f"it is free to move). The driver deletes exports.json before each "
+                    f"run, so what it reads is that run's own. Do not write this level's "
                     f"deliverables from this run: a "
                     f"history under 3 rows shows no coupling to anyone who reads it.")
             _healed = _heal_missing_interface_dump(level_specs, k)
@@ -7672,16 +7806,17 @@ def register_consolidated_tools(mcp: FastMCP):
             nxt = (f"LEVEL {bad} DID NOT CONVERGE (or errored): read its what_to_fix_next and the "
                    f"participant logs, fix the cause, then call couple_levels again with the levels "
                    f"from {bad} on -- the earlier levels' files and histories stay.")
-        # THE EQUATION VERDICT, FROM THE FILES THAT EXIST NOW. The audit on
-        # delivery computes this too; here it reaches the agent at the moment it
-        # can still act, and only when the per-level deliverables are already on
-        # disk. It reads each side's own config.json for the operator, never a
-        # task file or a key, and it judges nothing when the files are the
-        # participants' mesh dumps -- see result_audit.equation_findings.
+        # THE EQUATION VERDICT, FROM THE FILES THIS LADDER WROTE. Each side's own
+        # mesh dumps from this ladder (field_level<k>.csv, interpolated to cell
+        # midpoints -- see result_audit._dump_level_sets) decide what the field
+        # is; delivered per-level files, where they exist, are judged too, and
+        # only for whether they carry that field. The audit on delivery computes
+        # this again; here it reaches the agent while it can still act. It reads
+        # each side's own config.json for the operator, never a task file or a key.
         _eq = []
         try:
             from .result_audit import equation_findings as _eqf
-            _all_eq = list(_eqf(Path(history_dir)))
+            _all_eq = list(_eqf(Path(history_dir), since=_ladder_t0))
             _eq = [f["finding"] for f in _all_eq
                    if "NOT CHECKED" not in f.get("finding", "")]
             # THE GAP IS NAMED, IN ONE LINE. This filtered every NOT CHECKED
@@ -7693,7 +7828,19 @@ def register_consolidated_tools(mcp: FastMCP):
             # is 300 characters.
             _eq_gaps = [str(f["finding"])[:300] for f in _all_eq
                         if "NOT CHECKED" in f.get("finding", "")]
+            # FILES OLDER THAN THIS LADDER ARE THE LAST RUN'S. After a re-run the
+            # per-level deliverables on disk are still the previous ladder's until
+            # they are rewritten, and this verdict was computed from them without
+            # a word (measured on a second ladder whose files were the first's).
+            _stale = sorted(q.name for q in Path(history_dir).glob("solution_level*.csv")
+                            if q.is_file() and q.stat().st_mtime < _ladder_t0)
+            if (_eq or _eq_gaps) and _stale:
+                _eq.insert(0, f"THE EQUATION VERDICT BELOW WAS TAKEN FROM FILES WRITTEN BEFORE THIS "
+                              f"LADDER STARTED ({', '.join(_stale[:4])}{' ...' if len(_stale) > 4 else ''}): "
+                              f"it describes the previous run until you rewrite them from this "
+                              f"ladder's dumps.")
         except Exception:                                    # noqa: BLE001
+            _all_eq = []
             _eq = []
             _eq_gaps = []
         # THE LADDER'S OWN VERDICT, under the key names couple() uses so a reader
@@ -7720,13 +7867,21 @@ def register_consolidated_tools(mcp: FastMCP):
         # with its numbers.
         _bal_faults, _bal_notes, _bal_excused = _interface_balance_trend(out_levels)
         _ladder_faults.extend(_bal_faults)
+        _prof_faults, _prof_notes, _prof_excused = _interface_profile_trend(out_levels)
+        _ladder_faults.extend(_prof_faults)
+        _bal_notes = _bal_notes + _prof_notes
+
+        def _excused_finding(level: int, v) -> bool:
+            v = str(v)
+            return ((v.startswith("Interface flux NOT balanced") and level in _bal_excused)
+                    or ("does NOT match POINT BY POINT" in v and level in _prof_excused))
         _tautology = any(isinstance(x.get("interface_balance"), dict)
                          and x["interface_balance"].get("tautology")
                          for x in out_levels)
         _unverified = [x["level"] for x in out_levels
                        if not x.get("trustworthy_result")
-                       and not (x["level"] in _bal_excused
-                                and all(str(v).startswith("Interface flux NOT balanced")
+                       and not ((x["level"] in _bal_excused or x["level"] in _prof_excused)
+                                and all(_excused_finding(x["level"], v)
                                         for v in (x.get("validation") or []))
                                 and x.get("converged") and not x.get("coupled_evidence")
                                 and _reviewed)]
@@ -7745,6 +7900,46 @@ def register_consolidated_tools(mcp: FastMCP):
                     _ladder_faults.append(str(_f.get("finding", ""))[:600])
             except Exception:                                # noqa: BLE001
                 pass
+        # TWO FAULTS NO EXCHANGE CHECK CAN SEE. Measured on a coupled run: a
+        # Dirichlet side solved none of its interior (its mask was built by looping
+        # over a BitArray and held one bit), exported the imported trace over a zero interior, converged
+        # in ten iterations with every exchange check passing -- and this verdict
+        # read VERIFIED LADDER, trustworthy_result: true, because nothing here
+        # looked at either side's own field. A side that never solved its interior,
+        # and a side whose field does not satisfy its own equation, now sink the
+        # ladder by name.
+        _part_dirs = []
+        for _sp in specs:
+            _wd = _sp.get("work_dir") if isinstance(_sp, dict) else None
+            if _wd and _sp.get("name") != "__monolithic__":
+                _pd = Path(str(_wd))
+                _part_dirs.append(_pd if _pd.is_absolute() else Path(history_dir) / _pd)
+        try:
+            from .result_audit import unsolved_field_findings as _unsolved
+            for _f in _unsolved(Path(history_dir), dirs=_part_dirs, since=_ladder_t0):
+                _ladder_faults.append(str(_f.get("finding", ""))[:500])
+        except Exception:                                    # noqa: BLE001
+            pass
+        for _t in _eq:
+            if "DOES NOT SATISFY" in str(_t):
+                _ladder_faults.append(str(_t)[:600])
+        # VERIFIED MEANS EACH SIDE'S OWN EQUATION WAS CHECKED AND HOLDS, not only
+        # that the two sides agree with each other. The equation findings are
+        # keyed by the side's folder name; a participant with none is unchecked.
+        _eq_by_side: dict = {}
+        for _f in _all_eq:
+            _sq = str(_f.get("sequence", ""))
+            if " check side " in _sq:
+                _eq_by_side.setdefault(_sq.split(" check side ", 1)[1], []).append(str(_f.get("finding", "")))
+        _unchecked = []
+        for _pd in _part_dirs:
+            _texts = _eq_by_side.get(_pd.name) or []
+            # "SOLVER FIELD SATISFIES ... FILES DO NOT" is a verdict on the delivered
+            # files, not on this ladder's field: the field is what the ladder answers for
+            if not _texts or not all(("SATISFIES" in _t and "DOES NOT SATISFY" not in _t)
+                                     for _t in _texts):
+                _unchecked.append((_pd.name, next((_t for _t in _texts if "SATISFIES" not in _t),
+                                                  _texts[0] if _texts else "")))
         _covers = (
             " The critic review this verdict rests on is a review of the SETUP, and "
             "couple_levels resolves it once for the whole call because every level "
@@ -7769,12 +7964,29 @@ def register_consolidated_tools(mcp: FastMCP):
                       "transmitted nothing, or a mesh that did not refine, makes "
                       "the ladder worthless however good the other levels are."
                       + _covers)
+        elif all_ok and _unchecked:
+            _trust = False
+            _first_side, _why = _unchecked[0]
+            _verif = ("CONVERGED LADDER, NOT VERIFIED: every level converged, exchanged "
+                      "data and refined, but the check of each side's field against its "
+                      "own equation has not passed on " + ", ".join(n for n, _ in _unchecked)
+                      + ". " + (f"{_first_side}: {_why[:400]} " if _why else
+                                f"{_first_side}: no equation finding was produced for that "
+                                "folder. ")
+                      + "Two sides that agree with each other are not two sides that each "
+                      "solve their own problem: a side that never solved its interior "
+                      "converges just as cleanly (measured). Once the check can run -- "
+                      "the side's config.json states its box, coefficient and source, and "
+                      "its field_level<k>.csv dumps are on disk -- audit_results(work_dir) "
+                      "judges the dumps this ladder wrote; no new coupling run is needed."
+                      + _covers)
         elif all_ok:
             _trust = True
             _verif = ("VERIFIED LADDER -- every requested level passed openPASO's "
-                      "verification gate, each level's exchange carried data, and "
-                      "the mesh refined between levels. This is verification, not "
-                      "validation: confirm physical validity yourself." + _covers)
+                      "verification gate, each level's exchange carried data, the mesh "
+                      "refined between levels, and each side's field satisfies its own "
+                      "equation. This is verification, not validation: confirm physical "
+                      "validity yourself." + _covers)
         else:
             _trust = False
             _verif = ("THIS LADDER IS NOT VERIFIED: it did not run every requested "
@@ -8369,7 +8581,7 @@ def register_consolidated_tools(mcp: FastMCP):
 
         # A SECOND prepare_simulation WITH A DIFFERENT SOLVER IS A COUPLING.
         #
-        # Measured over three coupled development runs: two of the three
+        # Measured over three coupled recorded runs: two of the three
         # called prepare_simulation twice -- once per prescribed
         # code -- and NEVER opened a knowledge door, so the coupled must-read
         # (the couple() recipe, the fields-vs-evidence hierarchy, the
@@ -8629,7 +8841,7 @@ def register_consolidated_tools(mcp: FastMCP):
         #
         # server.py tells the agent "Always do this first" about
         # prepare_simulation, and the block was attached only to
-        # knowledge(topic='physics'). Measured over 98 development runs with
+        # knowledge(topic='physics'). Measured over 98 recorded runs with
         # these tools: 108 prepare_simulation calls, 95 resolving
         # knowledge(topic='physics') calls, and 43 runs (44%) that received
         # the block NEVER. It is the only text that carries the wiring table
@@ -8651,7 +8863,7 @@ def register_consolidated_tools(mcp: FastMCP):
         # must-read, the template, and 0 of the 7 pitfalls (46 bullets) this
         # door serves for 4C/heat, because the previous trim kept the template
         # and pointed at "the rest", and the pitfalls were the rest. On one
-        # development run set the two runs that made this call were the two
+        # recorded run set the two runs that made this call were the two
         # that failed on the 4C side, and no run that got it right had made
         # it -- two of two is a lead, not a rate, which is why the fix names
         # the rule rather than the run set.
@@ -8728,7 +8940,7 @@ def register_consolidated_tools(mcp: FastMCP):
         # room, and the end of the must-read is the run-log contract, the
         # subprocess-capture rule and the per-side naming rule -- the evidence
         # rules a reader judges a coupled result by first, and the family that
-        # lost the most coupled development runs after the physics itself. So
+        # lost the most coupled recorded runs after the physics itself. So
         # the must-read, the deciding facts, every pitfall, every warning and
         # the universal rules are fixed; only the corpus yields, least valuable
         # first, until the reply fits, and what remains is served in its own
@@ -9926,7 +10138,7 @@ def _re_words(text: str) -> list:
 # Measured: the generic coupling payload is 65,601 chars, and a coupled run
 # typically reads it plus two solver payloads (dune 76,831, kratos 72,115,
 # fenics 72,993) -- about 214,547 chars of prose before a solver runs. 220 of
-# 224 coupled development runs read all three.
+# 224 coupled recorded runs read all three.
 #
 # The consequence is not that the text is unread; it is that the agent runs out
 # of ACTIONS. Median tool calls: 39 with these tools, 95 without. Median input

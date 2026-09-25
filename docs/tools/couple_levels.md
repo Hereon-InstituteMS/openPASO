@@ -29,7 +29,7 @@ The text below is the tool's own description, exactly as the AI model receives i
     EVERY PRESCRIBED MESH LEVEL IN ONE CALL -- the same partitioned coupling as
     `couple`, run once per level of a task's mesh sequence.
     
-    Measured over three development rounds: six couplings that were proven at
+    Measured over three rounds of recorded runs: six couplings that were proven at
     level 1 (both codes ran, the iteration converged) never reached level 3,
     because every level cost the agent ten more tool calls -- edit both
     config.json files, call couple, save the history, write the deliverables --

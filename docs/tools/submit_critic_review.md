@@ -30,7 +30,7 @@ The text below is the tool's own description, exactly as the AI model receives i
     JSON object for `couple` / `couple_precice` / `coupled_solve`. Passing
     neither — or both — is refused, and the refusal comes AFTER you have
     written the review, so the review is wasted. Measured over the
-    development runs, half of all reviews handed in were rejected this way.
+    recorded runs, half of all reviews handed in were rejected this way.
     
     openPASO's critic requirement is enforced, not requested. The run and
     coupling tools do not take your word for it: they look up whether THIS

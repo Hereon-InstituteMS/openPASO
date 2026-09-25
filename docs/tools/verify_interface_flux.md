@@ -25,7 +25,7 @@ The text below is the tool's own description, exactly as the AI model receives i
     
     THIS EXISTED ONLY INSIDE AN INDEPENDENT CHECK UNTIL NOW, which is why
     it is here. The check below is the one that decided one coupled
-    development run: a result set whose two codes both genuinely ran,
+    recorded run: a result set whose two codes both genuinely ran,
     whose coupling genuinely iterated over three mesh levels, and whose
     interface FIELD matched to 0.000e+00 across the seam, was still
     complete but unphysical — because one side reported its flux with the

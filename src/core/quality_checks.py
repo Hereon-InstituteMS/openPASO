@@ -943,11 +943,10 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
                             numbers: dict | None = None) -> list[str]:
     """The conservation check of `_interface_balance_core`, plus one diagnosis.
 
-    AN IMBALANCE THAT SITS AT THE TWO ENDS OF THE INTERFACE IS NOT A TRANSMISSION
-    ERROR. Where the interface meets the outer boundary, a Dirichlet node's
-    reaction mixes the interface traction with the outer condition's, and a side
-    that left its corner nodes out of its outer boundary recovers a corner
-    traction that belongs to neither. Measured on a correct vector coupling: the
+    AN IMBALANCE THAT SITS AT THE TWO ENDS OF THE INTERFACE IS NAMED AS SUCH, and
+    no cause is asserted for it: a served cause ("a corner reaction mixes the
+    outer condition in") was false on a later round whose end rows were copies
+    of their neighbours. Measured on a correct vector coupling: the
     ladder was told "NOT VERIFIED ... a wrong sign, scaling or missing term" for
     21.6% -> 20.0% -> 17.4%, all of it at two corner rows; on the interior points
     the two exports agreed to 6e-8..4e-7. So when the whole interface fails, the
@@ -973,14 +972,14 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
     whole = "; ".join(str(m).replace("Interface flux NOT balanced: ", "").split(" — ")[0]
                       for m in w if str(m).startswith("Interface flux NOT balanced"))[:300]
     return [f"{ENDS_ONLY_MARK}: the whole interface reads {whole}, but on the interior points the two "
-            f"sides agree. The two end points are where the interface meets the outer boundary; "
-            f"where that boundary is held, a node's reaction there mixes the interface traction "
-            f"with the outer condition's. The interior says the transmission holds -- check how "
-            f"each side treats its two end nodes."] + list(w2)
+            f"sides agree, so the imbalance sits at the two end points. That is all this measures: "
+            f"on a Dirichlet-Neumann pair the interior agreement holds by construction and says "
+            f"nothing about the fields, which the equation check judges. At the ends, look at how "
+            f"each side treats the two nodes where the interface meets the outer boundary."] + list(w2)
 
 
 def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
-                                 rtol: float = 0.10
+                                 rtol: float = 0.10, numbers: dict | None = None
                                  ) -> tuple[list[str], list[str]]:
     """Does the flux match POINT BY POINT, not only in total?
 
@@ -1022,6 +1021,18 @@ def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
     s = fa + fb                       # anti-parallel normals -> should cancel
     if not _np.all(_np.isfinite(s)):
         return findings, []
+    # THE TWO END POINTS ARE LEFT OUT. Where the interface meets the outer
+    # boundary the served contracts treat the flux differently by design -- one
+    # copies the nearest interior value, another zeroes a corner that mixes the
+    # outer reaction -- so the end rows measured the convention, not the
+    # exchange (measured: they alone drove a "does NOT shrink" verdict whose
+    # interior read 6.2 / 11.7 / 5.3 %). The ends are named by the balance check.
+    _c = _np.atleast_2d(ca)
+    if len(fa) >= 4 and _c.shape[0] == len(fa):
+        _ax = int(_np.argmax(_np.var(_c, axis=0)))
+        _lo, _hi = int(_np.argmin(_c[:, _ax])), int(_np.argmax(_c[:, _ax]))
+        _keep = [i for i in range(len(fa)) if i not in (_lo, _hi)]
+        fa, fb = fa[_keep], fb[_keep]
     # PER COMPONENT, for a vector interface flux. One scale taken over the whole
     # array is set by the largest component, so a tangential traction that is
     # two orders of magnitude below the normal one can be 100% wrong and read as
@@ -1034,11 +1045,13 @@ def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
     B = fb.reshape(len(fb), -1) if fb.ndim >= 2 else fb.reshape(-1, 1)
     S = A + B
     everywhere = max(float(_np.max(_np.abs(A))), float(_np.max(_np.abs(B))))
+    worsts = []
     for c in range(S.shape[1]):
         scale = max(float(_np.max(_np.abs(A[:, c]))),
                     float(_np.max(_np.abs(B[:, c]))),
                     1e-9 * everywhere, 1e-30)
         worst = float(_np.max(_np.abs(S[:, c]))) / scale
+        worsts.append(worst)
         if worst <= rtol:
             continue
         i = int(_np.argmax(_np.abs(S[:, c])))
@@ -1048,9 +1061,13 @@ def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
             f"#{i} with {label_a}={A[i, c]:.4g} and {label_b}={B[i, c]:.4g} "
             f"(they should cancel), off by {worst:.1%} of that component's own "
             f"interface scale > {rtol:.0%}. The TOTALS may still balance — a "
-            "redistribution along the interface cancels in the sum — so this is "
-            "a non-conservative or mis-mapped exchange that the net balance "
-            "cannot see.")
+            "redistribution along the interface cancels in the sum. At one level "
+            "this cannot tell discretisation from a mis-mapped exchange: on a "
+            "Dirichlet-Neumann pair the Neumann side's consistent recovery "
+            "smooths the flux it was given by the boundary mass matrix, which "
+            "shrinks under refinement, while a mis-mapped exchange does not.")
+    if numbers is not None:
+        numbers.update({"rel": worsts, "rtol": rtol})
     return findings, []
 
 

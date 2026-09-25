@@ -7,7 +7,7 @@ driver's: it cannot be guessed, and no solve happens without it. openPASO elides
 
 MEASURED. The coupling payload for solver='fourc' contained no PROBLEM TYPE, no
 MATERIALS, no SCALAR TRANSPORT DYNAMIC, no DESIGN LINE DIRICH, no NODE COORDS and
-no NUMDOF; three development runs of one coupled problem all died on the 4C
+no NUMDOF; three recorded runs of one coupled problem all died on the 4C
 side, and one of them named the cause itself ("4C scalar transport module
 requires specific topology definitions"). Single-code 4C runs were worse off
 still: they never call knowledge(topic='coupling'), so they received none of it.

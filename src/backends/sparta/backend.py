@@ -346,7 +346,7 @@ scatter, and that scatter does not shrink when you refine the grid — it shrink
 when you average over more samples, or more particles. So a refinement study
 that compares one number per level is comparing mesh error PLUS noise, and if
 the noise is the larger of the two the study answers nothing. Measured across
-the development runs: two runs completed a clean three-level sequence and
+the recorded runs: two runs completed a clean three-level sequence and
 then reported their own result as NOT CONVERGED at 7.4% and 24% level-to-level
 change, while another run of the SAME problem reached 0.2%. That spread is
 sampling, not physics.
@@ -462,7 +462,7 @@ class SpartaBackend(SolverBackend):
         # Measured on the `heat` payload: 1,084 characters in total, with no
         # `fix` and no `run` -- the two commands without which the binary does
         # nothing at all. Same shape of gap as 4C, where it cost three
-        # development runs of one coupled problem their whole attempt, and as
+        # recorded runs of one coupled problem their whole attempt, and as
         # FEBio.
         #
         # It is attached to the unknown-physics reply too: that is exactly when

@@ -37,7 +37,7 @@ interface state, and the optimal theta is 1/(1+rho) with rho the ratio of the
 two subdomains' interface stiffnesses. For a VECTOR interface rho is a matrix,
 so u_x and u_y generally want DIFFERENT thetas and the single theta must be
 chosen for the WORST component: (1-theta)^2 + rho_c*theta^2 < 1 has to hold for
-every component c, so theta < 2/(1+max_c rho_c). Measured on this problem with
+every component c, so theta < 2/(1+max_c rho_c). Measured on a coupled pair with
 traction-free y-faces: rho_x ~ 0.4 while rho_y ~ 1.8, and theta = 1/(1+rho_x)
 diverges on the y component while the x component converges — a
 half-converging coupling that a single global residual reports only as "did
@@ -363,7 +363,10 @@ if (y_if.size != len(iface_n) or y_if.size < 2 or np.any(np.diff(y_if) <= 0)
     raise SystemExit(f"INTERFACE NODES: y_if must hold the coordinate ALONG the interface ({'xy'[AL]}), "
                      f"one per node of iface_n in the same order, strictly increasing from {ALO:g} to "
                      f"{AHI:g}; it holds {y_if.size} value(s) for {len(iface_n)} node(s)"
-                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else ""))
+                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else "")
+                     + (f"; only {np.unique(np.round(y_if, 12)).size} of them distinct -- a node "
+                        f"listed once per edge it touches is listed twice"
+                        if 0 < np.unique(np.round(y_if, 12)).size < y_if.size else ""))
 _ends = (np.abs(y_if - ALO) <= TOL) | (np.abs(y_if - AHI) <= TOL)   # the interface's two ends
 if not np.array_equal(np.asarray(nd), np.asarray(basis.nodal_dofs)):
     raise SystemExit("NODE DOFS: nd must be basis.nodal_dofs, shape (2, number of nodes): row 0 holds "
@@ -519,8 +522,12 @@ except Exception as _ndof_exc:
 
 # PER-LEVEL PERSISTENCE: this level's whole field, and its interface trace and
 # traction, named by LEVEL. exports.json is overwritten by the next level;
-# these files are not.
-# the probe points your task names -- never a file the next level overwrites.
+# these files are not: interpolate THESE onto the probe points your task names.
+# THE qx, qy COLUMNS ARE THIS SIDE'S EXPORT, q_out = -(sigma . n_own) (the sign
+# convention at the top of this file). A task that asks for the traction
+# sigma . n wants their negative, and one that fixes a single normal for both
+# sides flips the side whose own normal points the other way: map the columns
+# to your task's definition when you write its files.
 # A DUMP DEFECT MUST NOT COST YOU THE SOLVE. exports.json is the driver's
 # proof that this participant succeeded, and it is written after these files,
 # so an exception here would throw away a coupling iteration that worked.

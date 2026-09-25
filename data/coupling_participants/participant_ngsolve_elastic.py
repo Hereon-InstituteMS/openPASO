@@ -336,7 +336,10 @@ if (y_if.size != len(iface_v) or y_if.size < 2 or np.any(np.diff(y_if) <= 0)
     raise SystemExit(f"INTERFACE NODES: y_if must hold the coordinate ALONG the interface ({'xy'[AL]}), "
                      f"one per node of iface_v in the same order, strictly increasing from {ALO:g} to "
                      f"{AHI:g}; it holds {y_if.size} value(s) for {len(iface_v)} node(s)"
-                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else ""))
+                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else "")
+                     + (f"; only {np.unique(np.round(y_if, 12)).size} of them distinct -- a node "
+                        f"listed once per edge it touches is listed twice"
+                        if 0 < np.unique(np.round(y_if, 12)).size < y_if.size else ""))
 _ends = (np.abs(y_if - ALO) <= TOL) | (np.abs(y_if - AHI) <= TOL)   # the interface's two ends
 _if_pts = np.array([mesh[_n].point for _el in mesh.Elements(BND) if _el.mat == "interface"
                     for _n in _el.vertices], float).reshape(-1, 2)
@@ -512,8 +515,12 @@ except Exception as _ndof_exc:
 
 # PER-LEVEL PERSISTENCE: this level's whole field, and its interface trace and
 # traction, named by LEVEL. exports.json is overwritten by the next level;
-# these files are not.
-# the probe points your task names -- never a file the next level overwrites.
+# these files are not: interpolate THESE onto the probe points your task names.
+# THE qx, qy COLUMNS ARE THIS SIDE'S EXPORT, q_out = -(sigma . n_own) (the sign
+# convention at the top of this file). A task that asks for the traction
+# sigma . n wants their negative, and one that fixes a single normal for both
+# sides flips the side whose own normal points the other way: map the columns
+# to your task's definition when you write its files.
 # A DUMP DEFECT MUST NOT COST YOU THE SOLVE. exports.json is the driver's
 # proof that this participant succeeded, and it is written after these files,
 # so an exception here would throw away a coupling iteration that worked.
@@ -581,6 +588,43 @@ if SIDE == "dirichlet" and _chk_qin.shape == _chk_flux.shape and _chk_flux.size 
     raise SystemExit("EXPORT SELF-CHECK: the exported traction is the partner's "
                      "array negated, bit for bit: a copy, not a recovery from "
                      "this side's own assembled system")
+# THE SOLVE ANSWERS FOR ITS OWN SYSTEM. On every dof that fes.FreeDofs() leaves
+# free and that is off the interface, a solved system leaves r = A u - f at
+# round-off. Measured on a coupled run: a Dirichlet side built its solve mask by
+# looping over a BitArray, which yields True/False rather than dof numbers; the
+# mask held one bit, its solve moved nothing, it exported the imported trace over
+# a zero interior, and
+# its coupling converged in ten iterations with every exchange check passing. A
+# correction applied to the load alone, instead of to the residual of the values
+# already in gfu, fails here the same way.
+_chk_fd = fes.FreeDofs()
+_chk_on = fes.GetDofs(mesh.Boundaries("interface"))
+_chk_in = np.array([d for d in range(fes.ndof) if _chk_fd[d] and not _chk_on[d]], int)
+try:                                   # the scale is |A| |u|, not |A u|: a constant
+    _chk_i, _chk_j, _chk_v = a.mat.COO()     # field has A u ~ 1e-13 and is solved all the same
+    _chk_rows = np.bincount(np.asarray(_chk_i, int), weights=np.abs(np.asarray(_chk_v, float)),
+                            minlength=fes.ndof)
+except Exception:                      # noqa: BLE001 -- no entries to read: no check
+    _chk_rows = None
+if _chk_in.size and _chk_rows is not None and not getattr(a, "condense", False):
+    _chk_Au = f.vec.CreateVector()
+    _chk_Au.data = a.mat * gfu.vec
+    _chk_A = np.asarray(_chk_Au.FV().NumPy(), float)
+    _chk_F = np.asarray(f.vec.FV().NumPy(), float)
+    _chk_U = np.abs(np.asarray(gfu.vec.FV().NumPy(), float)).max()
+    _chk_r = np.abs(_chk_A - _chk_F)[_chk_in]
+    _chk_sc = max(float(np.abs(_chk_F).max()), float(_chk_rows.max()) * float(_chk_U))
+    if _chk_sc > 0 and _chk_r.max() > 1e-6 * _chk_sc:
+        raise SystemExit(
+            f"SOLVE SELF-CHECK: off the interface, on the dofs fes.FreeDofs() leaves free, "
+            f"r = A u - f reaches {_chk_r.max():.2e} against a system scale of {_chk_sc:.2e} "
+            f"({int((_chk_r > 1e-6 * _chk_sc).sum())} of {_chk_in.size} dofs); a solved "
+            f"system leaves round-off there. The field was not solved for those dofs from "
+            f"this a and f. Two ways measured to get here: a mask whose bits are not the "
+            f"free dofs (a loop over a BitArray yields True/False, not dof numbers), or a "
+            f"correction applied to the load alone instead of to the residual that the "
+            f"values already in gfu leave. The flux recovery above reads the same a.mat, "
+            f"so nothing was exported.")
 
 Path("exports.json").write_text(json.dumps({
     "field_name": "displacement",
