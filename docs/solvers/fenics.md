@@ -18,7 +18,7 @@ python check_install.py
 
 ## What openPASO knows for FEniCSx (dolfinx)
 
-25 kinds of problem. Ask for any of them in plain words; the names below are what the model uses internally.
+26 kinds of problem. Ask for any of them in plain words; the names below are what the model uses internally.
 
 | Physics | Description | Dimensions | Templates |
 |---|---|---|---|
@@ -28,6 +28,7 @@ python check_install.py
 | `convection_diffusion` | Convection-diffusion (SUPG stabilized) | 2-D | `2d` |
 | `dg_methods` | Discontinuous Galerkin for advection-dominated diffusion (upwind flux, interior penalty) | 2-D | `2d` |
 | `eigenvalue` | Eigenvalue problems (Laplace) via SLEPc | 2-D | `2d` |
+| `element_survey` | Element survey: builds every basix element family this FEniCSx install declares and checks each one (its quadrature integrates the reference cell, its mass matrix is SPD, and the space reproduces a constant -- measured on a richer rule than the one that built the matrix). Answers 'which families does this install actually have, and how does each behave' without guessing. | 2-D | `default` |
 | `fracture` | Phase-field fracture mechanics. Coupled displacement / damage formulation with a diffuse crack representation (no remeshing). Extensions: PhaseFieldX library. | 2-D, 3-D | `2d` |
 | `heat` | Heat conduction (steady / transient) | 2-D, 3-D | `2d_steady`, `2d_transient`, `rectangle` |
 | `helmholtz` | Helmholtz equation: -laplacian(u) - k^2*u = f. Acoustic / optical wave propagation. Indefinite system — GMRES or direct, NOT CG. May be complex-valued; needs PETSc compiled with --with-scalar-type=complex. | 2-D, 3-D | `2d` |
