@@ -239,6 +239,34 @@ sol[outer_dofs] = T_OUTER
 D = outer_dofs
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
 
+# ── THE INTERFACE DOFS ARE THE INTERFACE NODES' OWN (served) ─ keep this block.
+#    Every served line below writes the partner's data, reads the flux and
+#    exports the values THROUGH iface_dofs, so a list naming other dofs puts the
+#    data on other nodes and exports their values under the interface's
+#    coordinates -- and a check reading the same list agrees with it (measured on
+#    another backend: the dofs of the mesh's first vertices, the interface at
+#    0.0, a converged coupling passing every exchange check).
+_dl = np.asarray(basis.doflocs, float)               # (2, ndofs): where each dof sits
+_yv = np.asarray(y_if, float)
+_straight = _yv.ndim == 1                            # a bent interface is matched by arc instead
+_on = np.where(np.abs(_dl[AX] - IFACE_X) <= TOL)[0] if _straight else np.zeros(0, int)
+_ids = np.asarray(iface_dofs).astype(int).ravel()
+_bad = [k for k, d in enumerate(_ids)
+        if k >= _yv.size or not (0 <= d < _dl.shape[1])
+        or abs(_dl[AX, d] - IFACE_X) > TOL or abs(_dl[AL, d] - _yv[k]) > TOL] if _straight else []
+_missed = len(set(_on.tolist()) - set(_ids.tolist()))
+if _straight and (_bad or _missed or len(_ids) != _yv.size):
+    _k = _bad[0] if _bad else None
+    raise SystemExit(
+        f"INTERFACE DOFS: iface_dofs[k] must be the dof on the interface line at y_if[k], one "
+        f"per node; iface_dofs has {len(_ids)} entries for {_yv.size} nodes"
+        + (f", and {len(_bad)} of them are not (the first: iface_dofs[{_k}] = {_ids[_k]}"
+           + (f", a dof at ({_dl[0, _ids[_k]]:g}, {_dl[1, _ids[_k]]:g})"
+              if 0 <= _ids[_k] < _dl.shape[1] else ", no dof of this basis")
+           + ")" if _bad else "")
+        + (f"; {_missed} of the {len(_on)} dofs on the interface line have no entry" if _missed else "")
+        + ". basis.doflocs gives each dof's position; basis.nodal_dofs maps a node to its dof.")
+
 if SIDE == "dirichlet":
     T_if = sample(imp, "values", T_INIT, y_if)
     sol[iface_dofs] = T_if
@@ -255,6 +283,22 @@ else:
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ begin
 sol = solve(*condense(A, b, x=sol, D=D))
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
+
+# ── DID THE PARTNER'S TRACE ENTER THE SOLVE? (served) ─ keep this block. On the
+#    Dirichlet side the partner's values must be in the solution at the interface's
+#    own dofs (read from the basis, never through the list the values were written
+#    through). The two end nodes are left out -- the outer boundary may hold them.
+if SIDE == "dirichlet" and _straight:
+    _inner = _on[(np.abs(_dl[AL, _on] - ALO) > TOL) & (np.abs(_dl[AL, _on] - AHI) > TOL)]
+    if _inner.size:
+        _want = sample(imp, "values", T_INIT, _dl[AL, _inner])
+        _gap = float(np.abs(np.asarray(sol)[_inner] - _want).max())
+        if _gap > 1e-9 * max(1.0, float(np.abs(_want).max())):
+            raise SystemExit(f"EXPORT SELF-CHECK: the partner's temperature is not in the solution at "
+                             f"the interface nodes (largest gap {_gap:.3e}): on the Dirichlet side the "
+                             f"interface dofs must be in the condensed set D with the partner's values "
+                             f"in x, and the solve must keep them. A solve that frees them returns this "
+                             f"side's own answer and couples to nothing.")
 
 # Outward normal flux density q = -(k grad T).n on the interface.
 #
@@ -324,7 +368,9 @@ Q[ok] = -r[iface_dofs][ok] / wgt[iface_dofs][ok]
 # the OUTER reaction as well, so its residual is not this interface's flux.
 # Take the nearest interior interface node rather than exporting a corner
 # value that is physically a different quantity. This holds on both sides.
-suspect = np.isin(iface_dofs, outer_dofs) | ~ok
+# outer_dofs AS DOF NUMBERS: np.isin reads a Python set as ONE object and matches
+# nothing (measured: the corner values went out unreplaced).
+suspect = np.isin(iface_dofs, sorted(outer_dofs) if isinstance(outer_dofs, (set, frozenset)) else outer_dofs) | ~ok
 good = np.where(~suspect)[0]
 if len(good):
     for i in np.where(suspect)[0]:
@@ -361,8 +407,8 @@ if SIDE == "dirichlet" and _chk_qin.shape == _chk_flux.shape and _chk_flux.size 
                      "this side's own assembled system")
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-# The audit and the hand-in read that exact shape, and they read it PER
-# LEVEL: it is how a grader tells a refined mesh from the same mesh run
+# The audit reads that exact shape, and they read it PER
+# LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
 # three times. The LEADING NEWLINE is deliberate -- a program that writes
 # without a trailing newline glues its text onto the front of the next
 # line, and an X11 warning has done exactly that here, turning a correct

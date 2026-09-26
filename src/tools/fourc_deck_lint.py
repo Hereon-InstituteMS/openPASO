@@ -298,6 +298,19 @@ def lint_deck(text: str) -> list[str]:
     if "Scalar_Transport" in text:
         if "THERMAL DYNAMIC:" in text and "SCALAR TRANSPORT DYNAMIC:" not in text:
             why.append("Scalar_Transport needs `SCALAR TRANSPORT DYNAMIC`, not `THERMAL DYNAMIC`")
+        # Dirichlet data filed under the THERMO family in a scalar-transport deck: the scalar field
+        # never reads THERMO DIRICH (it belongs to the Thermo/TSI field), so the deck has no Dirichlet
+        # condition at all, the stationary solve is singular and 4C returns a uniform field of order
+        # 1e13 while reporting 'finished normally'. Measured on a served thermo-elastic participant's
+        # deck: phi_1 = 7.5e12 at every node; the same deck with the two families renamed to DIRICH
+        # gave the expected field. Two runs of one round lost their thermal side to exactly this.
+        if (re.search(r"^DESIGN (POINT|LINE|SURF|VOL) THERMO DIRICH CONDITIONS:\s*$", text, re.M)
+                and not re.search(r"^DESIGN (POINT|LINE|SURF|VOL) DIRICH CONDITIONS:\s*$", text, re.M)):
+            why.append("every Dirichlet datum of this Scalar_Transport deck sits in a THERMO DIRICH family, which "
+                       "the scalar field never reads (it belongs to the Thermo/TSI field): the deck has NO Dirichlet "
+                       "condition, the stationary solve is singular, and 4C returns a uniform field of order 1e13 "
+                       "while reporting 'finished normally'. Put the outer datum and the interface values in "
+                       "DESIGN LINE / POINT DIRICH CONDITIONS (NUMDOF 1)")
         if "CALCFLUX_BOUNDARY" not in text or "FLUX CALC" not in text:
             why.append('a consistent boundary flux needs CALCFLUX_BOUNDARY "diffusive" AND a `SCATRA FLUX CALC LINE CONDITIONS` entry on the interface line')
         if re.search(r"^IO:\s*$", text, re.M):
@@ -334,6 +347,10 @@ def lint_deck(text: str) -> list[str]:
     why += _unquoted_table_rows(text)
     why += _elements_with_unknown_nodes(text)
     why += _dirichlet_pins_every_node(text)
+    why += _dirichlet_releases_a_pinned_dof(text)
+    why += _two_conditions_on_one_entity(text)
+    why += _coupvariable_in_the_wrong_section(text)
+    why += _flux_calc_off_the_interface(text)
     why += _bad_hex8_slabs(text)
     why += _interior_lines(text)
     why += _double_star_in_functions(text)
@@ -409,7 +426,7 @@ def _double_star_in_functions(text: str) -> list[str]:
 def _dirichlet_pins_every_node(text: str) -> list[str]:
     """Dirichlet conditions that reach EVERY node of a field leave nothing to solve: 4C's predictor prints
     'res-norm 0', the solver converges at iteration 0 and the field is the prescribed data (zero where the
-    data is zero). Measured (round 45, C1 7172): a TSI deck whose 'outer' surface held 90 of 108 slab nodes and
+    data is zero). Measured on a recorded run: a TSI deck whose 'outer' surface held 90 of 108 slab nodes and
     whose interface points held the other 18 -- both fields pinned everywhere, both volume loads gone, 85
     shell calls spent on a '4C limitation'. Counted per field and per in-plane component (a u_z = 0 pin on
     the whole slab is plane strain, not a defect), only when the coverage is complete."""
@@ -429,7 +446,7 @@ def _dirichlet_pins_every_node(text: str) -> list[str]:
         kw = re.search(r"\b(POINT|LINE|SURF|VOL)\b", head)
         if not kw:
             continue
-        fam = "temperature" if "THERMO" in head or "TRANSPORT" in head else "displacement"
+        fam = "temperature" if ("THERMO" in head or "TRANSPORT" in head or "Scalar_Transport" in text) else "displacement"
         for entry in re.split(r"^\s*-\s", b, flags=re.M)[1:]:
             e = re.search(r"\bE:\s*(\d+)", entry)
             on = re.search(r"ONOFF:\s*\[([^\]]*)\]", entry)
@@ -459,10 +476,177 @@ def _dirichlet_pins_every_node(text: str) -> list[str]:
     return out
 
 
+_DBC_RANK = {"DVOL": 0, "DSURFACE": 1, "DLINE": 2, "DNODE": 3}
+
+
+def _dirichlet_releases_a_pinned_dof(text: str) -> list[str]:
+    """A lower-dimensional Dirichlet entry RESETS the toggles on its nodes. 4C applies the families in the order
+    VOL, SURF, LINE, POINT and, for every dof an entry lists with ONOFF 0, sets the toggle to zero and drops the
+    dof from the Dirichlet set -- whatever an earlier family had pinned there (4C_fem_discretization_utils_dbc.cpp,
+    do_dirichlet_condition: "the dof at geometry of lower hierarchical order can reset the toggle value").
+    Measured on a TSI slab: the volume pinned u_z (ONOFF [0, 0, 1]), the interface points carried the partner's
+    (ux, uy) with ONOFF [1, 1, 0], and u_z came free on every interface node of both layers -- the slab left plane
+    strain there (|u_z| of the same order as the in-plane displacement in 4C's own VTU; zero with ONOFF [1, 1, 1]), the
+    reactions read as tractions were first order and the displacement of both coupled sides with them."""
+    topo: dict = {}
+    for n, kind, e in re.findall(r'"NODE\s+(\d+)\s+(DNODE|DLINE|DSURFACE|DVOL)\s+(\d+)"', text):
+        topo.setdefault((kind, int(e)), set()).add(int(n))
+    if not topo:
+        return []
+    kmap = {"POINT": "DNODE", "LINE": "DLINE", "SURF": "DSURFACE", "VOL": "DVOL"}
+    entries: list = []                       # (family, rank, geometry word, E id, flags, nodes)
+    for b in re.split(r"^(?=[A-Z][A-Z0-9 _/.:-]*?:\s*$)", text, flags=re.M):
+        head = b.split(":", 1)[0].strip()
+        if "DIRICH" not in head or not head.endswith("CONDITIONS"):
+            continue
+        kw = re.search(r"\b(POINT|LINE|SURF|VOL)\b", head)
+        if not kw:
+            continue
+        fam = re.sub(r"\b(POINT|LINE|SURF|VOL)\s+", "", head)
+        for entry in re.split(r"^\s*-\s", b, flags=re.M)[1:]:
+            e = re.search(r"\bE:\s*(\d+)", entry)
+            on = re.search(r"ONOFF:\s*\[([^\]]*)\]", entry)
+            if not e or not on:
+                continue
+            ns = topo.get((kmap[kw.group(1)], int(e.group(1))), set())
+            if ns:
+                entries.append((fam, _DBC_RANK[kmap[kw.group(1)]], kw.group(1), int(e.group(1)),
+                                [x.strip() for x in on.group(1).split(",")], ns))
+    freed: dict = {}
+    for fam, rank, geo, eid, flags, ns in entries:
+        for j, fl in enumerate(flags):
+            if fl != "0":
+                continue
+            by = [(g2, e2, n2 & ns) for f2, r2, g2, e2, fl2, n2 in entries
+                  if f2 == fam and r2 < rank and j < len(fl2) and fl2[j] == "1" and (n2 & ns)]
+            if not by:
+                continue
+            over = ", ".join(dict.fromkeys(f"{g2} E {e2}" for g2, e2, _n in by))
+            acc = freed.setdefault((fam, geo, j + 1, over), [0, set(), []])
+            acc[0] += 1
+            for _g, _e, n in by:
+                acc[1].update(n)
+            acc[2].append(str(eid))
+    out = []
+    for (fam, geo, dof, over), (cnt, nodes, ids) in sorted(freed.items()):
+        out.append(f"DIRICHLET TOGGLE RELEASED: {cnt} {geo} entr{'y' if cnt == 1 else 'ies'} of {fam} "
+                   f"(E {', '.join(ids[:5])}{', ...' if cnt > 5 else ''}) list dof {dof} as ONOFF 0 on {len(nodes)} node(s) "
+                   f"that {over} pins. 4C applies VOL, SURF, LINE, POINT in that order and an entry's 0 RESETS the toggle "
+                   f"on its nodes, so dof {dof} is FREE there -- on a plane-strain slab that is u_z released where the entry "
+                   f"sits, the slab leaves plane strain, and the reactions, tractions and displacement come out first "
+                   f"order. Repeat the pin in the lower-dimensional entry: ONOFF 1 for that dof with VAL 0 "
+                   f"(interface points: ONOFF [1, 1, 1], VAL [ux, uy, 0])")
+    return out
+
+
+def _two_conditions_on_one_entity(text: str) -> list[str]:
+    """Two entries of one Dirichlet family that name the same design entity with different data.
+
+    MEASURED: a TSI deck numbered its outer point entities 1.. and its interface point entities
+    from 100, and at the finest level the outer ids reached 146 -- 45 of the 62 interface
+    displacement entries also pinned outer nodes, or the outer zero landed on interface nodes.
+    4C applies the entries of a family in order and the last one wins on the shared nodes; the
+    coupling wandered for 149 iterations at that level alone while the two coarser levels, whose
+    ids did not collide, converged in 14. The deck says which it is: one E id, two different
+    VAL/ONOFF lines, in one family."""
+    out = []
+    for b in re.split(r"^(?=[A-Z][A-Z0-9 _/.:-]*?:\s*$)", text, flags=re.M):
+        head = b.split(":", 1)[0].strip()
+        if not head.endswith("CONDITIONS") or not re.search(r"\b(POINT|LINE|SURF|VOL)\b", head):
+            continue
+        seen: dict = {}
+        for entry in re.split(r"^\s*-\s", b, flags=re.M)[1:]:
+            e = re.search(r"\bE:\s*(\d+)", entry)
+            if not e:
+                continue
+            on = re.search(r"ONOFF:\s*\[([^\]]*)\]", entry)
+            val = re.search(r"VAL:\s*\[([^\]]*)\]", entry)
+            data = (on.group(1).replace(" ", "") if on else "", val.group(1).replace(" ", "") if val else "")
+            prev = seen.setdefault(int(e.group(1)), data)
+            if prev != data:
+                out.append(f"{head} names E {e.group(1)} twice with different data (ONOFF/VAL {prev} and {data}): "
+                           f"4C applies a family's entries in order and the LAST wins on the shared nodes, so one "
+                           f"of the two conditions is silently lost there. Measured: outer and interface point ids "
+                           f"that overlapped at the finest level only made that level's coupling wander for 149 "
+                           f"iterations. Give every design entity ONE id range (outer ids never reaching the "
+                           f"interface's) and check the finest level's counts, not the coarsest's")
+                break
+    return out
+
+
+def _coupvariable_in_the_wrong_section(text: str) -> list[str]:
+    """COUPVARIABLE outside TSI DYNAMIC/PARTITIONED is ignored by 4C, and the thermal strain is zero.
+
+    MEASURED: a run put `COUPVARIABLE: "Temperature"` under THERMAL DYNAMIC and lost its first
+    twenty minutes to a deck the grammar refused; the key and its section were served
+    correctly. check_input names it from the binary's grammar; this names it at write time."""
+    out = []
+    section = ""
+    for line in text.splitlines():
+        m = re.match(r"^([A-Z][A-Z0-9 _/.:-]*?):\s*$", line)
+        if m:
+            section = m.group(1).strip()
+            continue
+        if re.match(r"^\s+COUPVARIABLE\s*:", line) and section and section != "TSI DYNAMIC/PARTITIONED":
+            out.append(f"COUPVARIABLE sits under `{section}`; 4C reads it only in `TSI DYNAMIC/PARTITIONED` "
+                       f"(COUPVARIABLE: \"Temperature\"), anywhere else the grammar refuses the deck or the "
+                       f"thermal strain stays zero. Move the key")
+            break
+    return out
+
+
+def _flux_calc_off_the_interface(text: str) -> list[str]:
+    """A SCATRA FLUX CALC line that shares no node with the interface's point conditions.
+
+    MEASURED: a Dirichlet-side scalar deck carried the partner's temperatures as
+    DESIGN POINT DIRICH entries on the interface nodes and named DLINE 2 -- the
+    bottom edge -- in its SCATRA FLUX CALC LINE CONDITIONS; no interface line was
+    defined at all. 4C computed the boundary flux on the bottom edge, the
+    exported heat flux was 0 at every interface node at every level, and the
+    coupled temperature converged cleanly to a function 13 % off. The deck says
+    it: the flux line and the nodes that carry the imported values are disjoint."""
+    if "Scalar_Transport" not in text or "SCATRA FLUX CALC" not in text:
+        return []
+    topo: dict = {}
+    for n, kind, e in re.findall(r'"NODE\s+(\d+)\s+(DNODE|DLINE|DSURFACE|DVOL)\s+(\d+)"', text):
+        topo.setdefault((kind, int(e)), set()).add(int(n))
+    blocks = {b.split(":", 1)[0].strip(): b for b in re.split(r"^(?=[A-Z][A-Z0-9 _/.:-]*?:\s*$)", text, flags=re.M)}
+    flux = blocks.get("SCATRA FLUX CALC LINE CONDITIONS", "")
+    pdir = blocks.get("DESIGN POINT DIRICH CONDITIONS", "")
+    fl_nodes = set()
+    for e in re.findall(r"\bE:\s*(\d+)", flux):
+        fl_nodes |= topo.get(("DLINE", int(e)), set())
+    pd_nodes = set()
+    for e in re.findall(r"\bE:\s*(\d+)", pdir):
+        pd_nodes |= topo.get(("DNODE", int(e)), set())
+    # a corner node is shared by an outer edge and the interface, so the test is
+    # the SHARE of the flux line that carries imported values, not any overlap
+    if not fl_nodes or len(pd_nodes) < 3 or len(fl_nodes & pd_nodes) >= 0.5 * len(fl_nodes):
+        return []
+    coords = {int(n): (float(x), float(y)) for n, x, y in
+              re.findall(r'"NODE\s+(\d+)\s+COORD\s+(\S+)\s+(\S+)', text)}
+    def _where(ns):
+        pts = [coords[n] for n in ns if n in coords]
+        if len(pts) < 2:
+            return ""
+        xs = {round(p[0], 9) for p in pts}; ys = {round(p[1], 9) for p in pts}
+        if len(xs) == 1:
+            return f" (x = {next(iter(xs)):g})"
+        if len(ys) == 1:
+            return f" (y = {next(iter(ys)):g})"
+        return ""
+    return [f"SCATRA FLUX CALC LINE sits OFF the interface: of its {len(fl_nodes)} nodes{_where(fl_nodes)} only "
+            f"{len(fl_nodes & pd_nodes)} carry the partner's values (the {len(pd_nodes)} DESIGN POINT DIRICH "
+            f"nodes{_where(pd_nodes)}). 4C "
+            f"computes the boundary flux on the line you name, so the exported flux would be that of another "
+            f"edge (zero at the interface). Name the DLINE whose nodes lie ON the interface, and define it in "
+            f"DLINE-NODE TOPOLOGY"]
+
+
 def _yaml_parse_error(text: str) -> list[str]:
     """The deck as YAML: 4C's reader is a YAML parser, and a structural slip (an entry's keys indented
     unevenly, a bare token where a mapping was open) stops it with 'ERROR: parse error <line>:<col>'
-    (measured, round 42 C1 7073: `NUMDOF: 3` at 109:13 under a DESIGN POINT DIRICH entry). PyYAML names
+    (measured on a recorded run: `NUMDOF: 3` at 109:13 under a DESIGN POINT DIRICH entry). PyYAML names
     the same place before any run; the offending line is quoted."""
     try:
         import yaml  # noqa: PLC0415
@@ -484,7 +668,7 @@ def _yaml_parse_error(text: str) -> list[str]:
 
 
 def _elements_with_unknown_nodes(text: str) -> list[str]:
-    """Element rows naming node ids that NODE COORDS does not define (measured, round 42 C1 7073: 'Element 17
+    """Element rows naming node ids that NODE COORDS does not define (measured on a recorded run: 'Element 17
     cannot find node 27' -- 4C stops in its element reader; a lint sees it before the run)."""
     ids = {int(a) for a in re.findall(r'"NODE\s+(\d+)\s+COORD\b', text)}
     if not ids:

@@ -475,7 +475,7 @@ class FebioBackend(SolverBackend):
         # no `<MeshDomains`, no `<Boundary`, no `<node id=`, no `fix=`. The
         # corpus is rich on material models and pitfalls and silent on the
         # document that carries them, so an agent cannot begin. Same shape of
-        # gap as 4C, where it cost three development runs of one coupled
+        # gap as 4C, where it cost three recorded runs of one coupled
         # problem their whole attempt.
         #
         # It is attached even when there is no per-physics entry: an unknown

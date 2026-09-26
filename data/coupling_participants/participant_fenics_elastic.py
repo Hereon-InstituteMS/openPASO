@@ -252,6 +252,40 @@ tags = dmesh.meshtags(domain, fdim, np.sort(facets),
 ds_if = ufl.Measure("ds", domain=domain, subdomain_data=tags)(7)
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
 
+# ── WHAT THE SERVED LINES BELOW RELY ON, CHECKED (served) ─ keep this block.
+#    y_if is the coordinate ALONG the interface: x on a horizontal one (the
+#    name is the vertical case's). iface_bc_n is iface_n without its two end
+#    nodes, in the same order. And ds_if must measure the interface line: a
+#    measure over facets tagged nowhere integrates over NOTHING, with no error,
+#    so the Neumann load and the traction weights come out zero.
+_TOL_IF = 1e-9 * max(X1 - X0, Y1 - Y0)
+y_if = np.asarray(y_if, float)
+if (y_if.size != len(iface_n) or y_if.size < 2 or np.any(np.diff(y_if) <= 0)
+        or abs(y_if[0] - ALO) > _TOL_IF or abs(y_if[-1] - AHI) > _TOL_IF):
+    raise SystemExit(f"INTERFACE NODES: y_if must hold the coordinate ALONG the interface ({'xy'[AL]}), "
+                     f"one per node of iface_n in the same order, strictly increasing from {ALO:g} to "
+                     f"{AHI:g}; it holds {y_if.size} value(s) for {len(iface_n)} node(s)"
+                     + (f", from {y_if.min():g} to {y_if.max():g}" if y_if.size else "")
+                     + (f"; only {np.unique(np.round(y_if, 12)).size} of them distinct -- a node "
+                        f"listed once per edge it touches is listed twice"
+                        if 0 < np.unique(np.round(y_if, 12)).size < y_if.size else ""))
+_ends = (np.abs(y_if - ALO) <= _TOL_IF) | (np.abs(y_if - AHI) <= _TOL_IF)   # the interface's two ends
+if not np.array_equal(np.asarray(iface_bc_n), np.asarray(iface_n)[~_ends]):
+    raise SystemExit("INTERFACE NODES: iface_bc_n must be iface_n without the interface's two end "
+                     "nodes, in the same order: the Dirichlet branch below imposes the partner's "
+                     "values on exactly those")
+_xc = ufl.SpatialCoordinate(domain)
+_len = float(fem.assemble_scalar(fem.form(fem.Constant(domain, default_scalar_type(1.0)) * ds_if)))
+_off = float(fem.assemble_scalar(fem.form((_xc[AX] - IFACE_X) ** 2 * ds_if)))
+if abs(_len - (AHI - ALO)) > 1e-9 * (AHI - ALO) or _off > 1e-12 * (AHI - ALO) * (HI - LO) ** 2:
+    raise SystemExit("INTERFACE MEASURE: two served lines integrate over ds_if, and "
+                     + ("it measures nothing: no facet carries its tag" if _len == 0.0 else
+                        f"it measures a boundary of length {_len:g} that is not exactly the interface "
+                        f"line (length {AHI - ALO:g})")
+                     + f". Tag the facets of the line {'xy'[AX]} = {IFACE_X:g}, and only those: "
+                     f"locate_entities_boundary hands its marker the coordinates x, with x[0] = x and "
+                     f"x[1] = y.")
+
 if SIDE == "dirichlet":
     g = fem.Function(V)
     g.x.array[:] = 0.0
@@ -273,6 +307,18 @@ uh = LinearProblem(a, L, bcs=bcs, petsc_options_prefix="cpl",
                    petsc_options={"ksp_type": "preonly",
                                   "pc_type": "lu"}).solve()
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
+
+# ── DID THE PARTNER'S DISPLACEMENT ENTER THE SOLVE? (served) ─ keep this block.
+#    A Dirichlet side whose solve lost the interface condition returns its own
+#    answer and the coupling "converges" to two fields that disagree there.
+if SIDE == "dirichlet" and len(iface_bc_n):
+    _ib = np.asarray(iface_bc_n, int)
+    _gap = float(max(np.abs(uh.x.array[2 * _ib] - g.x.array[2 * _ib]).max(),
+                     np.abs(uh.x.array[2 * _ib + 1] - g.x.array[2 * _ib + 1]).max()))
+    if _gap > 1e-9 * max(1.0, float(np.abs(g.x.array).max())):
+        raise SystemExit("EXPORT SELF-CHECK: the partner's displacement is not in the solution at the "
+                         "interface nodes: the solve must carry the interface Dirichlet condition in its "
+                         "bcs; a solve without it returns this side's own answer and couples to nothing")
 
 # Interface traction export q_out = -(sigma . n_own).
 #
@@ -375,12 +421,14 @@ Q = np.zeros_like(wi)
 ok = np.abs(wi) > 1e-14
 Q[ok] = -r.array[idx][ok] / wi[ok]
 
-# THE TWO INTERFACE CORNERS ARE ON THE OUTER DIRICHLET BOUNDARY (a y-face), so
-# their rows carry the OUTER reaction too and their residual is not this
-# interface's traction. Take the nearest interior interface node rather than
-# exporting a corner value that is physically a different quantity. This holds
-# on BOTH sides: the corners are outer-Dirichlet in both subproblems.
-suspect = np.isin(iface_n, outer_n) | ~ok.all(axis=1)
+# THE TWO INTERFACE CORNERS ARE ON THE OUTER DIRICHLET BOUNDARY (the faces the
+# interface ends on), so their rows carry the OUTER reaction too and their
+# residual is not this interface's traction. Take the nearest interior
+# interface node rather than exporting a corner value that is physically a
+# different quantity. This holds on BOTH sides: the corners are outer-Dirichlet
+# in both subproblems. They are found by position (_ends), so an outer_n that
+# leaves them out does not let them through.
+suspect = _ends | np.isin(iface_n, outer_n) | ~ok.all(axis=1)
 good = np.where(~suspect)[0]
 if len(good):
     for i in np.where(suspect)[0]:
@@ -394,8 +442,8 @@ print(f"[fenics {SIDE}] interface n={len(U)} "
       f"ty=[{Q[:,1].min():.6g},{Q[:,1].max():.6g}]")
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-# The audit and the hand-in read that exact shape, and they read it PER
-# LEVEL: it is how a grader tells a refined mesh from the same mesh run
+# The audit reads that exact shape, and they read it PER
+# LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
 # three times. The LEADING NEWLINE is deliberate -- a program that writes
 # without a trailing newline glues its text onto the front of the next
 # line, and an X11 warning has done exactly that here, turning a correct
@@ -415,6 +463,11 @@ except Exception as _ndof_exc:
 # traction, named by LEVEL, never overwritten by the next level (exports.json is).
 # Interpolate THESE onto the probe points your task names. A file the next
 # level overwrites cannot carry a mesh study.
+# THE qx, qy COLUMNS ARE THIS SIDE'S EXPORT, q_out = -(sigma . n_own) (the sign
+# convention at the top of this file). A task that asks for the traction
+# sigma . n wants their negative, and one that fixes a single normal for both
+# sides flips the side whose own normal points the other way: map the columns
+# to your task's definition when you write its files.
 # A DUMP DEFECT MUST NOT COST YOU THE SOLVE. exports.json is the driver's
 # proof that this participant succeeded, and it is written after these files,
 # so an exception here would throw away a coupling iteration that worked.

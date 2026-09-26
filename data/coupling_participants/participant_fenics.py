@@ -287,6 +287,46 @@ uh = LinearProblem(a, L, bcs=bcs, petsc_options_prefix="cpl",
 p_, w_ = ufl.TrialFunction(V), ufl.TestFunction(V)
 
 # ── SOLVE ─ openPASO DOES NOT SERVE THIS ─ end
+# ── THE INTERFACE DOFS ARE THE INTERFACE NODES' OWN (served) ─ keep this block.
+#    Every served line below reads the flux, and writes the values, THROUGH
+#    iface_dofs, so a list naming other dofs exports their values under the
+#    interface's coordinates -- and a check reading the same list agrees with it
+#    (measured on another backend: the dofs of the mesh's first vertices, the
+#    interface at 0.0, a converged coupling passing every exchange check). And
+#    on the Dirichlet side the partner's values must be in the solution at the
+#    interface's own dofs, read from the mesh, never through the list.
+_xy_all = uh.function_space.tabulate_dof_coordinates()
+_yv = np.asarray(y_if, float)
+if _yv.ndim == 1:                                    # a straight interface (a bent one is matched by arc)
+    _on = np.where(np.abs(_xy_all[:, AX] - IFACE_X) <= TOL_IF)[0]
+    _ids = np.asarray(iface_dofs).astype(int).ravel()
+    _bad = [k for k, d in enumerate(_ids)
+            if k >= _yv.size or not (0 <= d < len(_xy_all))
+            or abs(_xy_all[d, AX] - IFACE_X) > TOL_IF or abs(_xy_all[d, AL] - _yv[k]) > TOL_IF]
+    _missed = len(set(_on.tolist()) - set(_ids.tolist()))
+    if _bad or _missed or len(_ids) != _yv.size:
+        _k = _bad[0] if _bad else None
+        sys.exit(
+            f"INTERFACE DOFS: iface_dofs[k] must be the dof on the interface line at y_if[k], one "
+            f"per node; iface_dofs has {len(_ids)} entries for {_yv.size} nodes"
+            + (f", and {len(_bad)} of them are not (the first: iface_dofs[{_k}] = {_ids[_k]}"
+               + (f", a dof at ({_xy_all[_ids[_k], 0]:g}, {_xy_all[_ids[_k], 1]:g})"
+                  if 0 <= _ids[_k] < len(_xy_all) else ", no dof of this space")
+               + ")" if _bad else "")
+            + (f"; {_missed} of the {len(_on)} dofs on the interface line have no entry"
+               if _missed else "")
+            + ". Take them from V.tabulate_dof_coordinates() of the space the solution lives in.")
+    if SIDE == "dirichlet":
+        _inner = _on[(np.abs(_xy_all[_on, AL] - ALO) > TOL_IF) & (np.abs(_xy_all[_on, AL] - AHI) > TOL_IF)]
+        if _inner.size:
+            _want = sample(imp, "values", T_INIT, _xy_all[_inner, AL])
+            _gap = float(np.abs(np.asarray(uh.x.array)[_inner] - _want).max())
+            if _gap > 1e-9 * max(1.0, float(np.abs(_want).max())):
+                sys.exit(f"EXPORT SELF-CHECK: the partner's temperature is not in the solution at "
+                         f"the interface nodes (largest gap {_gap:.3e}): on the Dirichlet side the "
+                         f"interface must be held -- a dirichletbc on the interface dofs, with the "
+                         f"partner's values -- and the solve must keep it. A solve that frees them "
+                         f"returns this side's own answer and couples to nothing.")
 # ONE FORMULA, BOTH SIDES. An earlier version of this file used the reaction
 # only on the Dirichlet side and an L2-projected gradient on the Neumann side,
 # on the reasoning that the Neumann interface DOFs are free, so the discrete
@@ -357,7 +397,9 @@ Q[ok] = -r.array[iface_dofs][ok] / wi[ok]
 # (measured 9.4e-02 there against 2.1e-02 on the interface proper). Take
 # the nearest interior interface node rather than exporting a corner value
 # that is physically a different quantity. This holds on both sides.
-suspect = np.isin(iface_dofs, outer_dofs) | ~ok
+# outer_dofs AS DOF NUMBERS: np.isin reads a Python set as ONE object and matches
+# nothing (measured: the corner values went out unreplaced).
+suspect = np.isin(iface_dofs, sorted(outer_dofs) if isinstance(outer_dofs, (set, frozenset)) else outer_dofs) | ~ok
 good = np.where(~suspect)[0]
 if len(good):
     for i in np.where(suspect)[0]:
@@ -422,8 +464,8 @@ if SIDE == "dirichlet" and _chk_qin.shape == _chk_flux.shape and _chk_flux.size 
                      "this side's own assembled system")
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-# The audit and the hand-in read that exact shape, and they read it PER
-# LEVEL: it is how a grader tells a refined mesh from the same mesh run
+# The audit reads that exact shape, and they read it PER
+# LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
 # three times. The LEADING NEWLINE is deliberate -- a program that writes
 # without a trailing newline glues its text onto the front of the next
 # line, and an X11 warning has done exactly that here, turning a correct

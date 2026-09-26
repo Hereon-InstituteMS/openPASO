@@ -381,7 +381,7 @@ def main():
     fy = fem.assemble_scalar(fem.form(-ufl.dot(sigma, n)[1] * ds(4)))
 
     # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN, printed
-    # PER LEVEL. It is how a grader tells a refined mesh from the same mesh run
+    # PER LEVEL. It is how anyone checking the result tells a refined mesh from the same mesh run
     # three times. The LEADING NEWLINE is deliberate: a program that writes without
     # a trailing newline glues its text onto the front of the next line.
     try:

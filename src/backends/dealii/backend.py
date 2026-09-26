@@ -586,7 +586,7 @@ class DealiiBackend(SolverBackend):
         # only one whose payload told an agent no way to read its solution at a
         # point that is not a mesh node — and "the solve worked and was never
         # read back" is the largest single failure bucket across the
-        # development runs, 60 runs at 12.9%. Adding the recipe to one branch
+        # recorded runs, 60 runs at 12.9%. Adding the recipe to one branch
         # would have left the other three silent, which is the defect class
         # this file has already been repaired for twice.
         k = self._get_knowledge_inner(physics)

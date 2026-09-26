@@ -474,7 +474,7 @@ def main():
     t_applied = np.column_stack([eval_expr(exprs[0], ux), eval_expr(exprs[1], ux)])
 
     # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN, printed
-    # PER LEVEL. It is how a grader tells a refined mesh from the same mesh run
+    # PER LEVEL. It is how anyone checking the result tells a refined mesh from the same mesh run
     # three times. The LEADING NEWLINE is deliberate: a program that writes without
     # a trailing newline glues its text onto the front of the next line.
     try:

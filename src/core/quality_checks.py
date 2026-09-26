@@ -487,8 +487,50 @@ def interface_nodal_weights(coords) -> tuple:
                   f"area {area.sum():.6g}")
 
 
-def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
-                            rtol: float = 0.05, floor: float = 0.0) -> list[str]:
+def _common_support(ca, cb, decimals: int = 9):
+    """Row indices (ia, ib) of the interface points the two sides SHARE, when
+    one side's points are a subset of the other's; None otherwise (two
+    genuinely different samplings, or fewer than two shared points)."""
+    def _key(row):
+        try:
+            return tuple(round(float(x), decimals) for x in _np.atleast_1d(row))
+        except (TypeError, ValueError):
+            return None
+    ka, kb = {}, {}
+    for i, r in enumerate(ca):
+        k = _key(r)
+        if k is not None:
+            ka.setdefault(k, i)
+    for j, r in enumerate(cb):
+        k = _key(r)
+        if k is not None:
+            kb.setdefault(k, j)
+    shared = [k for k in ka if k in kb]
+    if len(shared) < 2 or len(shared) < min(len(ka), len(kb)):
+        return None
+    return [ka[k] for k in shared], [kb[k] for k in shared]
+
+
+def _restrict_export(e, idx):
+    """A copy of an export dict with coordinates/values/normal_fluxes cut to
+    the rows `idx`; keys whose length does not match the points are left out."""
+    out = {}
+    for k in ("coordinates", "normal_fluxes", "values"):
+        v = e.get(k) if isinstance(e, dict) else getattr(e, k, None)
+        if v is None:
+            continue
+        try:
+            arr = _np.asarray(v, float)
+        except (TypeError, ValueError):
+            continue
+        if arr.ndim >= 1 and len(arr) > max(idx):
+            out[k] = arr[idx].tolist()
+    return out
+
+
+def _interface_balance_core(export_a, export_b, label_a="A", label_b="B",
+                            rtol: float = 0.05, floor: float = 0.0,
+                            numbers: dict | None = None) -> list[str]:
     """Conservation across a coupling interface: the net flux leaving A should equal
     the net flux entering B (global balance). Pure arithmetic on the exchanged
     normal_fluxes — no physics. `export_*` are InterfaceData-like dicts/objects.
@@ -547,7 +589,97 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
     ca, cb = _co(export_a), _co(export_b)
     _same_sampling = (ca is not None and cb is not None and ca.shape == cb.shape
                       and _np.allclose(ca, cb, rtol=1e-9, atol=1e-12))
+    # THE COMMON SUPPORT, BEFORE ANY INTEGRAL. The shape the shipped participant
+    # pairs actually produce is not two samplings of one interface but ONE
+    # sampling seen through two windows: a 4C side exports the interface nodes
+    # WITHOUT the two endpoints (outer nodes that keep the outer datum), its
+    # partner exports every node including them. Each side integrated over its
+    # own extent then sets an integral over the whole interface against one over
+    # the interior segments, and the difference is the flux through the two end
+    # segments -- a number fixed by the export windows, not by the physics.
+    # Measured on a correct thermo-mechanical coupling: the two nets read 8-11%
+    # apart at the coarsest level and cancelled to 1e-3 at the finest -- the
+    # shrinking-with-h signature of a discretisation error, which is what the
+    # verdict then called it, on the correct run AND on a wrong one, because at
+    # level 1 the check could not tell them apart. When one side's points are a
+    # subset of the other's, both sides are cut to the shared points and compared
+    # there under one rule, so the extents agree by construction. The integral
+    # path stays for two genuinely different samplings.
+    _support_note = ""
+    _support_kind = "same" if _same_sampling else "sums"
+    _shared = (_common_support(ca, cb)
+               if (ca is not None and cb is not None and not _same_sampling)
+               else None)
+    if _shared is not None:
+        _ia, _ib = _shared
+        _n_a, _n_b = len(ca), len(cb)
+        _ra, _rb = _restrict_export(export_a, _ia), _restrict_export(export_b, _ib)
+        _wts, _dim, _detail = interface_nodal_weights(ca[_ia])
+        if _dim is not None and _dim >= 3:
+            # a shared point set that fills a volume is not an interface; say so
+            # rather than summing over it (the integral path says the same)
+            return [f"Interface flux balance could NOT be evaluated: {_detail}. "
+                    f"Conservation is unchecked."]
+        if "normal_fluxes" in _ra and "normal_fluxes" in _rb:
+            export_a, export_b = _ra, _rb
+            ca, cb = ca[_ia], cb[_ib]
+            _same_sampling = True
+            _support_kind = "common"
+            if len(_ia) < max(_n_a, _n_b):
+                _support_note = (
+                    f" (compared on the {len(_ia)} interface points both sides "
+                    f"export; {label_a} exports {_n_a}, {label_b} {_n_b}, and "
+                    f"the points one side alone exports are outside the "
+                    f"comparison)")
     _integrate = ca is not None and cb is not None and not _same_sampling
+    if _integrate:
+        _support_kind = "integrated"
+    # A NEUMANN SIDE'S CONSISTENT FLUX IS THE FLUX IT WAS GIVEN. On a
+    # Dirichlet-Neumann pair the Neumann side applies the partner's flux as its
+    # natural boundary condition, and a consistent recovery of that side's own
+    # boundary flux returns the applied datum to solver precision -- so at the
+    # shared points the two exports are exact opposites BY CONSTRUCTION, on a
+    # correct coupling and on a wrong one alike (measured on three recorded
+    # runs of one round, one correct, two wrong: 0.0% at every level once the
+    # extents matched). Two copies of one number cannot disagree, so a pass
+    # here would be no conservation evidence, and it must not be read as one.
+    # Conservation is judged on the flux each side recovers from its OWN field
+    # at the task's interface points -- the per-level interface deliverables,
+    # which the audit compares channel by channel and level by level.
+    if _same_sampling and ca is not None:
+        try:
+            _fa = _np.asarray(export_a.get("normal_fluxes") if isinstance(export_a, dict)
+                              else getattr(export_a, "normal_fluxes", None), float)
+            _fb = _np.asarray(export_b.get("normal_fluxes") if isinstance(export_b, dict)
+                              else getattr(export_b, "normal_fluxes", None), float)
+            _fa = _fa.reshape(len(ca), -1) if _fa.size == len(ca) * max(1, _fa.size // max(len(ca), 1)) else None
+            _fb = _fb.reshape(len(cb), -1) if _fb is not None and _fb.size == len(cb) * max(1, _fb.size // max(len(cb), 1)) else None
+        except (TypeError, ValueError, AttributeError):
+            _fa = _fb = None
+        if (_fa is not None and _fb is not None and _fa.shape == _fb.shape and _fa.size
+                and _np.all(_np.isfinite(_fa)) and _np.all(_np.isfinite(_fb))):
+            _sc = max(float(_np.max(_np.abs(_fa))), float(_np.max(_np.abs(_fb))))
+            if _sc > 0:
+                _pw = float(_np.max(_np.abs(_fa + _fb))) / _sc
+                if _pw <= 1e-6:
+                    if numbers is not None:
+                        numbers.update({"rel": [0.0] * int(_fa.shape[1]),
+                                        "rtol": float(rtol), "support": _support_kind,
+                                        "n_points": int(len(ca)), "tautology": True,
+                                        "pointwise_agreement": _pw})
+                    return [
+                        f"Interface flux balance NOT CHECKED (the two exports cannot "
+                        f"disagree): at every one of the {len(ca)} shared interface "
+                        f"points the two exported fluxes are exact opposites, to "
+                        f"{_pw:.1e} relative -- closer than two independent solutions "
+                        f"ever agree. That is the shape of a Neumann side whose "
+                        f"consistent flux recovery returns the flux it was given (or "
+                        f"of a re-export), so it is no conservation evidence either "
+                        f"way. Conservation across this interface is judged on the "
+                        f"flux each side recovers from its OWN field at the task's "
+                        f"interface points -- the per-level interface deliverables, "
+                        f"which audit_results compares channel by channel and level "
+                        f"by level."]
 
     def _flux(e, co):
         f = e.get("normal_fluxes") if isinstance(e, dict) else getattr(e, "normal_fluxes", None)
@@ -560,19 +692,32 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
         # that conserves nothing.
         v = (a.reshape(-1, a.shape[-1]) if a.ndim >= 2 and a.shape[-1] > 1
              else a.reshape(-1, 1))
+        # THE SCALE OF A COMPONENT IS THE FLUX IT CARRIES, NOT ITS NET. A
+        # tangential traction that changes sign along the interface (a
+        # shear that is antisymmetric about the mid-point, measured on a
+        # thermo-mechanical pair) sums to ~0 on both sides, and a ratio of
+        # two nets that are both noise read 100% on a coupling that was
+        # right. Each component's L1 magnitude rides along and becomes the
+        # floor its net imbalance is judged against.
         if not _integrate:
+            _l1[id(e)] = _np.abs(v).sum(axis=0)
             return v.sum(axis=0), None
         if co is None or len(co) != len(v):
+            _l1[id(e)] = _np.abs(v).sum(axis=0)
             return (v.sum(axis=0),
                     "the two sides sample the interface differently and there "
                     "are no usable coordinates to integrate against")
         wts, dim, detail = interface_nodal_weights(co)
         if wts is None:
+            _l1[id(e)] = _np.abs(v).sum(axis=0)
             return v.sum(axis=0), detail
+        _l1[id(e)] = (wts[:, None] * _np.abs(v)).sum(axis=0)
         return (wts[:, None] * v).sum(axis=0), None
 
+    _l1: dict = {}
     va, na = _flux(export_a, ca)
     vb, nb = _flux(export_b, cb)
+    _l1a, _l1b = _l1.get(id(export_a)), _l1.get(id(export_b))
     if va is None or vb is None:
         # NOT CHECKED IS NOT PASSED.
         #
@@ -663,13 +808,32 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
                                 float(_np.max(_np.abs(vb[_np.isfinite(vb)])))
                                 if _np.any(_np.isfinite(vb)) else 0.0,
                                 floor)
+        if _l1a is not None and _l1b is not None:
+            # the whole-interface floor also rides on the largest L1 magnitude,
+            # so a component that is dead on both sides is still judged against
+            # the flux the interface actually carries
+            comp_floor = max(comp_floor, 1e-6 * float(max(_np.max(_l1a), _np.max(_l1b))))
         out = []
+        rels = []
         for c in range(va.size):
-            out += check_interface_balance(
-                {"normal_fluxes": [float(va[c])]}, {"normal_fluxes": [float(vb[c])]},
-                f"{label_a}[{c}]", f"{label_b}[{c}]", rtol, comp_floor)
+            _nc: dict = {}
+            _fl = comp_floor
+            if _l1a is not None and _l1b is not None and c < len(_l1a) and c < len(_l1b):
+                _fl = max(comp_floor, float(_l1a[c]), float(_l1b[c]))
+            out += [m + (_support_note if m.startswith("Interface flux NOT balanced") else "")
+                    for m in _interface_balance_core(
+                        {"normal_fluxes": [float(va[c])]}, {"normal_fluxes": [float(vb[c])]},
+                        f"{label_a}[{c}]", f"{label_b}[{c}]", rtol, _fl,
+                        numbers=_nc)]
+            rels.append(float(_nc.get("rel", [float("nan")])[0]))
+        if numbers is not None:
+            numbers.update({"rel": rels, "rtol": float(rtol),
+                            "support": _support_kind,
+                            "n_points": int(len(ca)) if ca is not None else None})
         return out
     fa, fb = float(va[0]), float(vb[0])
+    if _l1a is not None and _l1b is not None and len(_l1a) == 1 and len(_l1b) == 1:
+        floor = max(floor, float(_l1a[0]), float(_l1b[0]))
     # A non-finite net flux makes every comparison below False (nan > rtol is
     # False), so without this the check would report nothing at all on the most
     # broken data it can be handed.
@@ -679,6 +843,11 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
                 "is unchecked and the exchanged data is invalid."]
     denom = max(abs(fa), abs(fb), floor, 1e-30)
     rel = abs(fa + fb) / denom            # A exports +flux, B imports -flux → sum≈0
+    if numbers is not None:
+        numbers.update({"rel": [float(rel)], "rtol": float(rtol),
+                        "support": _support_kind,
+                        "n_points": int(len(ca)) if ca is not None else None,
+                        "net": [[fa, fb]]})
     if rel > rtol:
         # Name the convention. The most common cause of this warning is not a
         # non-conservative coupling but both sides exporting their flux with
@@ -727,13 +896,97 @@ def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
         w.append(
             f"Interface flux NOT balanced: net({label_a})={fa:.4g}, net({label_b})={fb:.4g}, "
             f"imbalance {rel:.1%} > {rtol:.0%} — coupling may be non-conservative (silent error)."
-            + hint
+            + _support_note + hint
         )
     return w
 
 
+ENDS_ONLY_MARK = "Interface flux imbalance at the interface ENDS only"
+
+
+def _interface_without_ends(export_a, export_b):
+    """(interior_a, interior_b): both exports on their aligned points minus the
+    two extreme points along the interface; None when the two sides are not
+    aligned point for point or hold fewer than four shared points."""
+    def _co(e):
+        c = e.get("coordinates") if isinstance(e, dict) else getattr(e, "coordinates", None)
+        try:
+            a = _np.asarray(c, float)
+        except (TypeError, ValueError):
+            return None
+        return _np.atleast_2d(a) if c is not None and a.ndim >= 1 else None
+    ca, cb = _co(export_a), _co(export_b)
+    if ca is None or cb is None:
+        return None
+    if ca.shape == cb.shape and _np.allclose(ca, cb, rtol=1e-9, atol=1e-12):
+        ia = ib = list(range(len(ca)))
+    else:
+        shared = _common_support(ca, cb)
+        if shared is None:
+            return None
+        ia, ib = shared
+    if len(ia) < 4:
+        return None
+    pts = ca[ia]
+    ax = int(_np.argmax(_np.var(pts, axis=0)))
+    lo, hi = int(_np.argmin(pts[:, ax])), int(_np.argmax(pts[:, ax]))
+    keep = [k for k in range(len(ia)) if k not in (lo, hi)]
+    ra = _restrict_export(export_a, [ia[k] for k in keep])
+    rb = _restrict_export(export_b, [ib[k] for k in keep])
+    if "normal_fluxes" not in ra or "normal_fluxes" not in rb:
+        return None
+    return ra, rb
+
+
+def check_interface_balance(export_a, export_b, label_a="A", label_b="B",
+                            rtol: float = 0.05, floor: float = 0.0,
+                            numbers: dict | None = None) -> list[str]:
+    """The conservation check of `_interface_balance_core`, plus one diagnosis.
+
+    AN IMBALANCE THAT SITS AT THE TWO ENDS OF THE INTERFACE IS NAMED AS SUCH, and
+    no cause is asserted for it: a served cause ("a corner reaction mixes the
+    outer condition in") was false on a later round whose end rows were copies
+    of their neighbours. Measured on a correct vector coupling: the
+    ladder was told "NOT VERIFIED ... a wrong sign, scaling or missing term" for
+    21.6% -> 20.0% -> 17.4%, all of it at two corner rows; on the interior points
+    the two exports agreed to 6e-8..4e-7. So when the whole interface fails, the
+    interior is judged alone: if it holds (or is the Dirichlet-Neumann tautology),
+    the finding names the ends and goes to the coverage channel, and the interior's
+    numbers are what the ladder reads. The ends are never dropped from a balance
+    that holds -- a correct coupling can carry real flux through its end nodes.
+    """
+    w = _interface_balance_core(export_a, export_b, label_a, label_b, rtol, floor, numbers)
+    if not any(str(m).startswith("Interface flux NOT balanced") for m in w):
+        return w
+    inner = _interface_without_ends(export_a, export_b)
+    if inner is None:
+        return w
+    n2: dict = {}
+    w2 = _interface_balance_core(inner[0], inner[1], label_a, label_b, rtol, floor, n2)
+    if any(str(m).startswith("Interface flux NOT balanced") for m in w2):
+        return w
+    if numbers is not None:
+        numbers.clear()
+        numbers.update(n2)
+        numbers["ends_only"] = True
+    whole = "; ".join(str(m).replace("Interface flux NOT balanced: ", "").split(" — ")[0]
+                      for m in w if str(m).startswith("Interface flux NOT balanced"))[:300]
+    # "WHICH THE EQUATION CHECK JUDGES" WAS FALSE OF A WRONG FIELD. Measured: a side
+    # whose interface nodes held 0.0 while its exports carried the partner's trace
+    # read this note at all three levels, passed the equation check (which judges the
+    # interior only), and handed in "the flux mismatch is likely the corner handling".
+    return [f"{ENDS_ONLY_MARK}: the whole interface reads {whole}, but on the interior points the two "
+            f"sides' EXPORTS agree, so the imbalance in the exports sits at the two end points. That "
+            f"is all this measures. On a Dirichlet-Neumann pair the interior agreement of the exports "
+            f"holds by construction and says nothing about the fields themselves: whether a side's "
+            f"field carries what it exports is judged by the checks that read the fields (its own "
+            f"field dump against its interface file, its flux against its own field). Where those "
+            f"hold, look at how each side treats the two nodes where the interface meets the outer "
+            f"boundary."] + list(w2)
+
+
 def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
-                                 rtol: float = 0.10
+                                 rtol: float = 0.10, numbers: dict | None = None
                                  ) -> tuple[list[str], list[str]]:
     """Does the flux match POINT BY POINT, not only in total?
 
@@ -775,6 +1028,18 @@ def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
     s = fa + fb                       # anti-parallel normals -> should cancel
     if not _np.all(_np.isfinite(s)):
         return findings, []
+    # THE TWO END POINTS ARE LEFT OUT. Where the interface meets the outer
+    # boundary the served contracts treat the flux differently by design -- one
+    # copies the nearest interior value, another zeroes a corner that mixes the
+    # outer reaction -- so the end rows measured the convention, not the
+    # exchange (measured: they alone drove a "does NOT shrink" verdict whose
+    # interior read 6.2 / 11.7 / 5.3 %). The ends are named by the balance check.
+    _c = _np.atleast_2d(ca)
+    if len(fa) >= 4 and _c.shape[0] == len(fa):
+        _ax = int(_np.argmax(_np.var(_c, axis=0)))
+        _lo, _hi = int(_np.argmin(_c[:, _ax])), int(_np.argmax(_c[:, _ax]))
+        _keep = [i for i in range(len(fa)) if i not in (_lo, _hi)]
+        fa, fb = fa[_keep], fb[_keep]
     # PER COMPONENT, for a vector interface flux. One scale taken over the whole
     # array is set by the largest component, so a tangential traction that is
     # two orders of magnitude below the normal one can be 100% wrong and read as
@@ -787,11 +1052,13 @@ def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
     B = fb.reshape(len(fb), -1) if fb.ndim >= 2 else fb.reshape(-1, 1)
     S = A + B
     everywhere = max(float(_np.max(_np.abs(A))), float(_np.max(_np.abs(B))))
+    worsts = []
     for c in range(S.shape[1]):
         scale = max(float(_np.max(_np.abs(A[:, c]))),
                     float(_np.max(_np.abs(B[:, c]))),
                     1e-9 * everywhere, 1e-30)
         worst = float(_np.max(_np.abs(S[:, c]))) / scale
+        worsts.append(worst)
         if worst <= rtol:
             continue
         i = int(_np.argmax(_np.abs(S[:, c])))
@@ -801,9 +1068,13 @@ def check_interface_flux_profile(export_a, export_b, label_a="A", label_b="B",
             f"#{i} with {label_a}={A[i, c]:.4g} and {label_b}={B[i, c]:.4g} "
             f"(they should cancel), off by {worst:.1%} of that component's own "
             f"interface scale > {rtol:.0%}. The TOTALS may still balance — a "
-            "redistribution along the interface cancels in the sum — so this is "
-            "a non-conservative or mis-mapped exchange that the net balance "
-            "cannot see.")
+            "redistribution along the interface cancels in the sum. At one level "
+            "this cannot tell discretisation from a mis-mapped exchange: on a "
+            "Dirichlet-Neumann pair the Neumann side's consistent recovery "
+            "smooths the flux it was given by the boundary mass matrix, which "
+            "shrinks under refinement, while a mis-mapped exchange does not.")
+    if numbers is not None:
+        numbers.update({"rel": worsts, "rtol": rtol})
     return findings, []
 
 
@@ -979,7 +1250,26 @@ def check_coupling_directionality(graph: dict, max_iter: int = 0
     return findings, not_checked
 
 
-def check_participant_responsiveness(responsiveness: dict) -> tuple[list[str], list[str]]:
+def unresponsive_clause(name: str, detail: dict | None) -> str:
+    """'' unless the driver saw `name`'s imports change only in some columns: then what
+    the export's byte-identity does and does not say, in the columns' own names."""
+    d = (detail or {}).get(name) or {}
+    changed, same = list(d.get("changed") or []), list(d.get("unchanged") or [])
+    if not changed and same:
+        return (f"{name}'s imports changed only at round-off of their own scale "
+                f"({', '.join(same)}): nothing it was given moved, so its byte-identical "
+                f"export says nothing about whether it reads them")
+    if not (changed and same):
+        return ""
+    return (f"{name}'s export stayed byte-identical while its imports changed only in "
+            f"{', '.join(changed)}; {', '.join(same)} arrived the same at every one of those "
+            f"iterations. A side applies one of them (a Neumann side its partner's "
+            f"normal_fluxes, a Dirichlet side its values): if {name} applies an unchanged one, "
+            f"what it applied never changed, and the partner's export is where to look")
+
+
+def check_participant_responsiveness(responsiveness: dict,
+                                     detail: dict | None = None) -> tuple[list[str], list[str]]:
     """Did every participant's answer actually depend on what it was given?
 
     This is the check for the participant that exits 0 having done nothing: it
@@ -1004,9 +1294,16 @@ def check_participant_responsiveness(responsiveness: dict) -> tuple[list[str], l
                           "could not be ruled out"]
     dead = [n for n, s in responsiveness.items() if s == "unresponsive"]
     frozen = [n for n, s in responsiveness.items() if s == "imports never changed"]
-    if dead:
+    partial = [n for n in dead if unresponsive_clause(n, detail)]
+    whole = [n for n in dead if n not in partial]
+    if partial:
         findings.append(
-            f"Participant(s) {dead} produced byte-identical output while the data "
+            "; ".join(unresponsive_clause(n, detail) for n in partial)
+            + ". Any convergence reported here is the coupling standing still, not a "
+            "solution.")
+    if whole:
+        findings.append(
+            f"Participant(s) {whole} produced byte-identical output while the data "
             "handed to them CHANGED — their answer does not depend on their "
             "imports. Either the script never reads imports.json, or it re-serves "
             "a cached/initial result. Any convergence reported here is the "
@@ -1070,7 +1367,9 @@ def check_interface_meshes(export_a, export_b, label_a="A", label_b="B",
 
 
 def check_residual_blocks(block_residuals: dict, tol: float,
-                          slack: float = 10.0) -> tuple[list[str], list[str]]:
+                          slack: float = 10.0,
+                          fixed_point: dict | None = None,
+                          distance: dict | None = None) -> tuple[list[str], list[str]]:
     """Is the reported global residual actually representative?
 
     The driver converges on ONE relative norm over every participant's stacked
@@ -1093,6 +1392,16 @@ def check_residual_blocks(block_residuals: dict, tol: float,
                           "non-finite or unavailable"]
     limit = tol * slack
     bad = {k: v for k, v in finite.items() if v > limit}
+    # A LAST STEP IS NOT A DISTANCE. Under an accelerator a block can move a lot on its
+    # last step and land on the fixed point; where the driver measured the block's own
+    # fixed-point residual (raw output against the relaxed input), or estimated the
+    # distance left from how fast its last two steps shrank, and either is inside the
+    # limit, the block has converged whatever its last step was. With no relaxation the
+    # fixed-point residual IS the last step, and only the distance can clear it.
+    for est in (fixed_point, distance):
+        if est:
+            bad = {k: v for k, v in bad.items()
+                   if not (isinstance(est.get(k), float) and est[k] == est[k] and est[k] <= limit)}
     if bad:
         worst = max(bad.items(), key=lambda kv: kv[1])
         findings.append(

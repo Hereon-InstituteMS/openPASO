@@ -29,16 +29,17 @@ The text below is the tool's own description, exactly as the AI model receives i
     EVERY PRESCRIBED MESH LEVEL IN ONE CALL -- the same partitioned coupling as
     `couple`, run once per level of a task's mesh sequence.
     
-    Measured over three development rounds: six couplings that were proven at
+    Measured over three rounds of recorded runs: six couplings that were proven at
     level 1 (both codes ran, the iteration converged) never reached level 3,
     because every level cost the agent ten more tool calls -- edit both
     config.json files, call couple, save the history, write the deliverables --
     and the wall clock ran out. This call does the per-level plumbing itself:
     
-      * `levels` is a JSON list, one entry per level, e.g.
-            [{"level": 1, "A": {"nx": 5, "ny": 8},  "B": {"nx": 7, "ny": 8}},
-             {"level": 2, "A": {"nx": 10, "ny": 16}, "B": {"nx": 14, "ny": 16}},
-             {"level": 3, "A": {"nx": 20, "ny": 32}, "B": {"nx": 28, "ny": 32}}]
+      * `levels` is a JSON list, one entry per level, with each side's mesh
+        keys under that side's NAME, e.g. (your task's own numbers go here)
+            [{"level": 1, "A": {"nx": <nA>, "ny": <mA>},  "B": {"nx": <nB>, "ny": <mB>}},
+             {"level": 2, "A": {"nx": <2*nA>, "ny": <2*mA>}, "B": {"nx": <2*nB>, "ny": <2*mB>}},
+             {"level": 3, "A": {"nx": <4*nA>, "ny": <4*mA>}, "B": {"nx": <4*nB>, "ny": <4*mB>}}]
         where the keys under each participant's NAME, plus "level", are
         handed to that participant's PROCESS in the environment variable
         OPENPASO_CONFIG_JSON (a JSON object; OPENPASO_LEVEL carries the level

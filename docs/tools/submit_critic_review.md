@@ -30,7 +30,7 @@ The text below is the tool's own description, exactly as the AI model receives i
     JSON object for `couple` / `couple_precice` / `coupled_solve`. Passing
     neither — or both — is refused, and the refusal comes AFTER you have
     written the review, so the review is wasted. Measured over the
-    development runs, half of all reviews handed in were rejected this way.
+    recorded runs, half of all reviews handed in were rejected this way.
     
     openPASO's critic requirement is enforced, not requested. The run and
     coupling tools do not take your word for it: they look up whether THIS
@@ -66,8 +66,11 @@ The text below is the tool's own description, exactly as the AI model receives i
         coupling_args: for the coupling tools instead of `setup` — a JSON
             object of the arguments you will pass. Keys per tool:
             coupled_solve: problem, solver_a, solver_b, nx, ny, max_iter,
-            tol, relaxation, params; couple: participants, max_iter, tol,
-            accelerator, theta, monolithic, probe; couple_precice:
+            tol, relaxation, params; couple AND couple_levels: participants,
+            max_iter, tol, accelerator, theta, monolithic, probe -- the SAME
+            seven for both, and for `couple_levels` you pass the values you
+            will give it, NOT the per-level meshes, because one review
+            covers the whole ladder; couple_precice:
             participants, data, exchanges, scheme, dimensions, max_time,
             time_window, max_iterations, convergence_tol, relaxation,
             mapping. Pass EVERY key for the tool you will call, with the

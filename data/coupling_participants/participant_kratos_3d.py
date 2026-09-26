@@ -796,8 +796,8 @@ def main():
           f"T=[{T.min():.6g},{T.max():.6g}] q=[{Q.min():.6g},{Q.max():.6g}] {bal}")
 
     # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-    # The audit and the hand-in read that exact shape, and they read it PER
-    # LEVEL: it is how a grader tells a refined mesh from the same mesh run
+    # The audit reads that exact shape, and they read it PER
+    # LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
     # three times. A number inside a prose sentence does not count, and a
     # wrong number is worse than none -- one coupled run that was right in
     # every other respect reported NDOF = 1 at all three levels, and its

@@ -253,7 +253,9 @@ Q[ok] = -r[iface_dofs][ok] / wt[iface_dofs][ok]
 # the OUTER reaction as well, so its residual is not this interface's flux.
 # Take the nearest interior interface node rather than exporting a corner
 # value that is physically a different quantity.
-suspect = np.isin(iface_dofs, outer_dofs) | ~ok
+# outer_dofs AS DOF NUMBERS: np.isin reads a Python set as ONE object and matches
+# nothing (measured: the corner values went out unreplaced).
+suspect = np.isin(iface_dofs, sorted(outer_dofs) if isinstance(outer_dofs, (set, frozenset)) else outer_dofs) | ~ok
 good = np.where(~suspect)[0]
 if len(good):
     for i in np.where(suspect)[0]:
@@ -292,7 +294,7 @@ if SIDE == "dirichlet" and _chk_qin.shape == _chk_flux.shape and _chk_flux.size 
                      "this side's own assembled system")
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN, printed
-# PER LEVEL. It is how a grader tells a refined mesh from the same mesh run
+# PER LEVEL. It is how anyone checking the result tells a refined mesh from the same mesh run
 # three times, and a number inside a prose sentence does not count. The
 # LEADING NEWLINE is deliberate: a program that writes to the terminal
 # without a trailing newline glues its text onto the front of the next

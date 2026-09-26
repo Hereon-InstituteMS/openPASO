@@ -16,7 +16,9 @@ those are the agent's and openPASO has no business dictating them. It reads the 
 """
 from __future__ import annotations
 
+import functools
 import re
+from pathlib import Path
 
 # (backend, pattern, what the run prints, the call that works)
 _TRAPS: tuple[tuple[str, str, str, str], ...] = (
@@ -572,9 +574,9 @@ _ERROR_FIXES: tuple = (
      "NGSolve: `inverse` is a KEYWORD of Inverse, not an import -- "
      "a.mat.Inverse(fes.FreeDofs(), inverse='sparsecholesky')"),
     ("cannot import name 'sym' from 'ngsolve'",
-     "NGSolve: there is no `sym`. Sym and Trace exist but act on a MATRIX -- the strain is "
-     "Sym(Grad(u)), never Sym(u) (that raises 'Sym of non-matrix called') -- and the identity "
-     "is Id(mesh.dim), never Id()"),
+     "NGSolve: there is no `sym`, `trace` or `Div`. Sym and Trace exist but act on a MATRIX -- the "
+     "strain is Sym(Grad(u)), never Sym(u) (that raises 'Sym of non-matrix called'); the "
+     "divergence is lowercase div(u); and the identity is Id(mesh.dim), never Id()"),
     ("Sym of non-matrix called",
      "NGSolve: Sym takes a matrix, so build the strain from the gradient -- Sym(Grad(u)), not Sym(u)"),
     ("cannot import name 'Div' from 'ngsolve'",
@@ -619,6 +621,20 @@ _ERROR_FIXES: tuple = (
      "update_flags), in that order"),
     ("is not registered",
      "Kratos: 2-D conduction is P1 TRIANGLES (LaplacianElement2D3N); 3-D is LaplacianElement3D4N"),
+    # 21 recorded transcripts carry one of these two; one run met it four times,
+    # exported NaN each time and replaced the served contract to get past it.
+    ("Error zero sum",
+     "Kratos: the skyline LU met a zero pivot -- the assembled system is singular, and what "
+     "it exports is NaN. On record both of these messages came from ELEMENT ORIENTATION: "
+     "tetrahedra with negative volume ('Error zero sum') and a triangle whose nodes run "
+     "clockwise ('Error zero in diagonal'). On a mesh you built, take each triangle's "
+     "signed area (x1-x0)*(y2-y0) - (x2-x0)*(y1-y0) (a tetrahedron's signed volume) and "
+     "swap two nodes where it is negative; the other causes are a node in no element and "
+     "a problem with no held value anywhere"),
+    ("Error zero in diagonal",
+     "Kratos: a zero on the diagonal of the assembled system -- on record, a triangle whose "
+     "nodes run clockwise (negative area); take each element's signed area and swap two "
+     "nodes where it is negative"),
 )
 
 
@@ -650,14 +666,21 @@ def participant_findings(text: str) -> list:
         # a SyntaxError does not, and returning early here made the parse
         # finding unreachable for exactly the files most likely to lack a
         # recognisable import -- truncated or garbled ones. Measured over the
-        # campaign record: 144 of 3873 participant scripts do not parse, and 47
+        # recorded runs: 144 of 3873 participant scripts do not parse, and 47
         # of those were silent here; 34 are the same garble,
         # `(a)**2 + **(b)2`.
         if looks_like_participant(text):
             return [f for f in undefined_names(text) if f.startswith("this file does not parse")]
         return []
     body = _strip_strings_and_comments(text)
-    out, seen = _module_findings(body, text) + undefined_names(text), set()
+    # AN UNFILLED SERVED CONTRACT IS NOT JUDGED FOR THE NAMES ITS HOLE MUST
+    # DEFINE. Measured: the pristine FEniCSx contract, written before its fill,
+    # drew nine NameError findings ("`domain` is used at line 234 and never
+    # defined") in three cells of one round -- the served text below the hole
+    # uses exactly the names the hole is asked to leave behind. Once the hole
+    # is filled (its markers go with the fill) the names are judged again.
+    out, seen = (_module_findings(body, text)
+                 + ([] if _SERVED_MARK in text else undefined_names(text))), set()
     for backend, pattern, error, fix in _TRAPS:
         if backend not in codes or (backend, pattern) in seen:
             continue
@@ -849,8 +872,8 @@ def missing_export_selfcheck(content: str) -> str:
 # downstream reports agreement. One recorded cell converged to 1.8e-15 that
 # way and graded on a field its partner never influenced.
 #
-# The separation is exact on the recorded runs: this fires on thirty-two of
-# them, no correct one among them, and is silent on every correct one. It is silent on all 32
+# The separation is exact on the recorded runs: it fires only on failing
+# ones and is silent on every correct one. It is silent on all 32
 # served contracts, including the two volume-coupled ones whose import
 # legitimately enters through the load vector rather than through essential
 # entries -- which is why the check identifies the solution vector from the
@@ -860,12 +883,96 @@ def missing_export_selfcheck(content: str) -> str:
 # author's: the only claim here is that values written into a vector have to
 # survive the step that follows them.
 
-_SOLVE_ASSIGN = re.compile(r"(\w+)\.vec\.data\s*(\+?=)\s*([^\n]*)")
+# `gfu.vec.data = ...` / `+=`, and the same through a full slice: `gfu.vec[:] = sol`
+# copies a solve's result over the whole vector (measured: silent on exactly that line
+# in a fill whose run-time check then caught the lost boundary data).
+_SOLVE_ASSIGN = re.compile(r"(\w+)\.vec(?:\.data|\s*\[\s*:\s*\])\s*(\+?=)(?!=)\s*([^\n]*)")
+# A solve computed and thrown away: the statement starts with the inverse call.
+_DISCARDED_SOLVE = re.compile(
+    r"^[ \t]*(?:[\w\.]+\.)?Inverse\s*\((?:[^()\n]|\([^()\n]*\))*\)\s*\*\s*[\w\.\[\]\(\)]+[ \t]*$", re.M)
 _SOLVE_CALL = re.compile(r"\bInverse\s*\(|\bCGSolver\b|\bsolvers\.\w|\bBVP\s*\(")
 _BOUND_NAME = re.compile(r"^\s*(\w+)\s*=\s*([^\n]*)", re.M)
 _IFACE_NAME = re.compile(r"interface|iface", re.I)
-_FREE_MASK = re.compile(r"\w+\s*\[\s*(?:int\()?\w+\)?\s*\]\s*=\s*(?:False|0)\b")
+# a mask bit cleared -- not an attribute's subscript: `gfu.vec[int(d)] = 0.0` zeroes a value
+# and was read as a mask, which silenced "nothing holds those entries fixed" (measured)
+_FREE_MASK = re.compile(r"(?<![\w.])\w+\s*\[\s*(?:int\()?\w+\)?\s*\]\s*=\s*(?:False|0)\b")
 _BILINEAR = re.compile(r"\bBilinearForm\s*\(")
+
+# ── WHICH LINES CAN RUN TOGETHER ───────────────────────────────────────────
+#
+# One file serves both roles: the served contract writes the partner's trace
+# under `if SIDE == "dirichlet":`, and a fill that solves each role its own way
+# puts the two solves on the two branches of a second `if SIDE == ...`. Pairing
+# a write with a solve by text order alone joined the Dirichlet-branch write to
+# the Neumann-branch solve and named a lost condition on a path where nothing
+# had been written (measured: one run was told so after each of its last seven
+# writes; its Dirichlet solve was the residual form throughout).
+_IF_HEAD = re.compile(r"^(\s*)(if|elif)\s+(.+?)\s*:\s*$")
+_ELSE_HEAD = re.compile(r"^(\s*)else\s*:\s*$")
+_EQ_TEST = re.compile(r"^\(?\s*([\w\.]+(?:\(\s*\))?(?:\.\w+\(\s*\))*)\s*(==|!=)\s*([\"'])(.*?)\3\s*\)?$")
+
+
+def _indent(s: str) -> int:
+    return len(s) - len(s.lstrip())
+
+
+def _branches_at(body: str, pos: int) -> list:
+    """The if-branches around the line at `pos`, innermost first, as (row of the
+    chain's `if`, branch number, [(condition, holds), ...]); an elif or an else
+    also records that every earlier condition of its chain failed."""
+    lines = body.split("\n")
+    row = body.count("\n", 0, pos)
+    level, out, r = _indent(lines[row]), [], row - 1
+    while r >= 0 and level > 0:
+        s = lines[r]
+        if s.strip() and _indent(s) < level:
+            head = _IF_HEAD.match(s)
+            if head or _ELSE_HEAD.match(s):
+                ind, earlier, k = _indent(s), [], r
+                if not (head and head.group(2) == "if"):
+                    k = r - 1
+                    while k >= 0:
+                        t = lines[k]
+                        if not t.strip() or _indent(t) > ind:
+                            k -= 1
+                            continue
+                        prev = _IF_HEAD.match(t) if _indent(t) == ind else None
+                        if not prev:
+                            break
+                        earlier.append(prev.group(3))
+                        if prev.group(2) == "if":
+                            break
+                        k -= 1
+                facts = [(c, False) for c in earlier] + ([(head.group(3), True)] if head else [])
+                out.append((k, len(earlier), facts))
+            level = _indent(s)
+        r -= 1
+    return out
+
+
+def _clash(a: tuple, b: tuple) -> bool:
+    """Two (condition, holds) facts that cannot both be true."""
+    (ca, ha), (cb, hb) = a, b
+    ca, cb = " ".join(ca.split()), " ".join(cb.split())
+    if ca == cb:
+        return ha != hb
+    ma, mb = _EQ_TEST.match(ca), _EQ_TEST.match(cb)
+    if not (ma and mb and ma.group(1) == mb.group(1)):
+        return False
+    eq_a = (ma.group(2) == "==") == ha            # the name equals its literal
+    eq_b = (mb.group(2) == "==") == hb
+    if eq_a and eq_b:
+        return ma.group(4) != mb.group(4)
+    return eq_a != eq_b and ma.group(4) == mb.group(4)
+
+
+def _never_together(body: str, p: int, q: int) -> bool:
+    """True when the lines at p and q sit on branches that cannot both run."""
+    for ra, ka, fa in _branches_at(body, p):
+        for rb, kb, fb in _branches_at(body, q):
+            if (ra == rb and ka != kb) or any(_clash(x, y) for x in fa for y in fb):
+                return True
+    return False
 
 
 def _solver_bound_names(body: str) -> set:
@@ -888,6 +995,132 @@ def _solver_bound_names(body: str) -> set:
     return names
 
 
+_BITARRAY = re.compile(r"^\s*(\w+)\s*=\s*(?:ngsolve\.)?BitArray\s*\(\s*([^)]*?)\s*\)", re.M)
+_FOR_IN = re.compile(r"\bfor\s+(\w+)\s+in\s+([A-Za-z_][\w\.]*(?:\s*\([^()\n]*(?:\([^()\n]*\))?[^()\n]*\))?)\s*(?=:|\bif\b|\]|\))")
+_REGION = re.compile(r"\b(?:Boundaries|Materials|Region)\s*\(")
+
+
+def _last_definition(body: str, name: str, upto: int) -> str:
+    found = ""
+    for dm in re.finditer(rf"^\s*{re.escape(name)}\s*=\s*([^\n]*)", body[:upto], re.M):
+        found = dm.group(1)
+    return found
+
+
+def _is_mask(expr: str, body: str, upto: int, depth: int = 0) -> bool:
+    """An NGSolve BitArray, or a set/list of one: BitArray(...), X.FreeDofs(...),
+    X.GetDofs(<a region>), or a name last bound to one of those. A comprehension
+    over range() that tests the mask is a list of numbers and is not one."""
+    e = re.sub(r"^(?:~\s*|\(\s*)+", "", expr.strip())
+    w = re.match(r"(?:set|list|sorted|tuple)\s*\((.*)\)\s*$", e)
+    e = w.group(1).strip() if w else e
+    if re.match(r"(?:ngsolve\.)?BitArray\s*\(|[\w\.]+\.FreeDofs\s*\(", e):
+        return True
+    g = re.match(r"[\w\.]+\.GetDofs\s*\((.*)\)", e)
+    if g:
+        arg = g.group(1).strip()
+        return bool(_REGION.search(arg)) or (bool(re.fullmatch(r"\w+", arg)) and bool(
+            _REGION.search(_last_definition(body, arg, upto))))
+    if re.fullmatch(r"\w+", e) and depth < 2:
+        d = _last_definition(body, e, upto)
+        return bool(d) and _is_mask(d, body, upto, depth + 1)
+    return False
+
+
+def _mask_walked_as_numbers(body: str) -> str:
+    """'' unless a loop walks a BitArray and uses what it yields as dof numbers.
+
+    MEASURED on this install: iterating a BitArray yields its bits as True/False,
+    and a mask filled by `for d in fes.FreeDofs(): m[d] = True` from a space with
+    12 free dofs came out with 2 bits set, dofs 0 and 1. A coupled run built its
+    Dirichlet-side mask this way (FreeDofs minus the interface dofs); on its own
+    space the mask ended with one bit set, on a held corner, so its solve moved
+    nothing and left the interior at its starting zeros."""
+    lines = body.split("\n")
+    for m in _FOR_IN.finditer(body):
+        var, expr = m.group(1), m.group(2).strip()
+        if not _is_mask(expr, body, m.start()):
+            continue
+        row = body.count("\n", 0, m.start())
+        scope = [lines[row].replace(m.group(0), " \u00a7 ")]
+        for t in lines[row + 1:]:
+            if t.strip() and _indent(t) <= _indent(lines[row]):
+                break
+            scope.append(t)
+        used = "\n".join(scope)
+        v = re.escape(var)
+        if re.search(rf"\[\s*(?:int\s*\(\s*)?{v}\s*\)?\s*\]|\b{v}\s+(?:not\s+)?in\b|\bint\s*\(\s*{v}\s*\)", used):
+            return (f"`for {var} in {expr}` walks an NGSolve BitArray, and a BitArray yields its bits "
+                    f"as True/False, not the numbers of the dofs that are set (measured: a mask filled "
+                    f"this way from a space with 12 free dofs came out with 2 bits set, dofs 0 and 1). "
+                    f"Every `[{var}]` or `{var} in ...` in that loop therefore reads 0 or 1, and what "
+                    f"it builds is not what you meant. Walk the numbers -- for i in range(len({expr})): "
+                    f"if {expr}[i]: ... -- or take BitArray(fes.FreeDofs()), a copy, and clear the "
+                    f"dofs you fix.")
+    return ""
+
+
+def unset_mask_bits(content: str) -> str:
+    """'' unless an NGSolve mask is built with bits that nothing set.
+
+    MEASURED on this install: a fresh BitArray(200) had 49, 14, 46 and 17 bits set
+    in four constructions -- it is not zeroed -- and BitArray([3, 5, 7]) is three
+    True bits, not a mask over dofs 3, 5 and 7. On one coupled round every
+    coupling that stalled had a side built on one of the two: the same imports
+    gave exports 11-92 % apart, and no iteration count converges below that.
+    """
+    if not isinstance(content, str) or "ngsolve" not in backends_in(content):
+        return ""
+    body = _strip_strings_and_comments(content)
+    walked = _mask_walked_as_numbers(body)
+    if walked:
+        return walked
+    for m in _BITARRAY.finditer(body):
+        name, arg = m.group(1), m.group(2).strip()
+        if arg.startswith("[") or "FreeDofs" in arg or "GetDofs" in arg:
+            continue
+        # A COPY OF A MASK IS A MASK: BitArray(free_dofs) with free_dofs = fes.FreeDofs()
+        # copies every bit, and was called "not zeroed" (measured, cost 41 s).
+        _src = ""
+        for dm in re.finditer(rf"^\s*{re.escape(arg)}\s*=\s*([^\n]*)", body[:m.start()], re.M):
+            _src = dm.group(1)
+        if re.fullmatch(r"\w+", arg) and re.search(r"FreeDofs|GetDofs|BitArray\s*\(", _src):
+            continue
+        after = body[m.end():]
+        first_write = re.search(rf"\b{re.escape(name)}\s*\[[^\]]+\]\s*=(?!=)", after)
+        # A WRITE OF EVERY BIT INITIALISES IT as well as .Clear() or .Set() does: a
+        # full slice `m[:] = FreeDofs()` (every bit copied, measured on 20 of 20
+        # constructions) and a loop over all of its bits were called "single-bit
+        # writes" on two correct files, one of them final.
+        n_ = re.escape(name)
+        a_ = re.escape(arg)
+        inits = [i for i in (
+            re.search(rf"\b{n_}\.(?:Clear|Set)\s*\(\s*\)", after),
+            re.search(rf"\b{n_}\s*\[\s*:\s*\]\s*=(?!=)", after),
+            re.search(rf"\bfor\s+(\w+)\s+in\s+range\s*\(\s*(?:{a_}|len\s*\(\s*{n_}\s*\))\s*\)\s*:"
+                      rf"\s*{n_}\s*\[\s*\1\s*\]\s*=(?!=)", after)) if i]
+        init = min(inits, key=lambda i: i.start()) if inits else None
+        d = ""
+        for dm in re.finditer(rf"^\s*{re.escape(arg)}\s*=\s*([^\n]*)", body[:m.start()], re.M):
+            d = dm.group(1)
+        from_indices = bool(re.fullmatch(r"\w+", arg)) and bool(
+            re.match(r"\s*(?:\[\s*(\w+)\s+for\s+\1\b|list\s*\(|sorted\s*\(|set\s*\()", d))
+        if from_indices:
+            return (f"`{name} = BitArray({arg})` builds a mask from a LIST, and BitArray reads a list "
+                    f"as one BOOLEAN per entry, not as dof numbers: BitArray([3, 5, 7]) is three True "
+                    f"bits (measured). Build the full-length mask instead -- start from "
+                    f"fes.FreeDofs() and clear the dofs you fix, or BitArray(fes.ndof) with .Clear() "
+                    f"and set the free ones.")
+        if first_write and (not init or init.start() > first_write.start()):
+            return (f"`{name} = BitArray({arg})` is not zeroed: its bits start as whatever memory "
+                    f"held (measured: 49, 14, 46 and 17 of 200 set in four constructions), and "
+                    f"single-bit writes leave the rest random. The solve then differs from run to "
+                    f"run on the same inputs, and a coupling built on it never converges. Call "
+                    f"{name}.Clear() (all False) or {name}.Set() (all True) first -- or start from "
+                    f"fes.FreeDofs(), which is already right, and clear only the dofs you fix.")
+    return ""
+
+
 def imported_values_not_held(content: str) -> str:
     """'' unless partner values are loaded into the solution vector and then lost."""
     if not isinstance(content, str) or "ngsolve" not in backends_in(content):
@@ -895,12 +1128,46 @@ def imported_values_not_held(content: str) -> str:
     body = _strip_strings_and_comments(content)
     bound = _solver_bound_names(body)
 
-    def _is_solve(rhs: str) -> bool:
+    def _calls_a_solver(rhs: str) -> bool:
         return bool(_SOLVE_CALL.search(rhs)) or any(
             re.search(rf"\b{re.escape(n)}\b", rhs) for n in bound)
 
-    solves = [(m.group(1), m.group(2)) for m in _SOLVE_ASSIGN.finditer(body)
-              if _is_solve(m.group(3))]
+    # A SOLVE THROUGH A TEMPORARY IS A SOLVE. `sol_vec.data = inv_a * f.vec` then
+    # `gfu.vec.data = sol_vec.data` was not one to this check, so it stayed silent on
+    # the defect it exists for (measured: two coupled runs' final files, one of which
+    # gave up with the right diagnosis and no fix).
+    temps = {}
+    for tm in re.finditer(r"^\s*(\w+)(?:\.data)?\s*=\s*([^\n]*)", body, re.M):
+        if tm.group(1) not in bound and _calls_a_solver(tm.group(2)):
+            temps[tm.group(1)] = tm.group(2).strip()
+
+    def _is_solve(rhs: str) -> bool:
+        base = re.sub(r"\.data\s*$", "", rhs.strip())
+        return _calls_a_solver(rhs) or base in temps
+
+    def _whole(m) -> str:
+        """The right-hand side through its closing parenthesis: a solve wrapped
+        over two lines was read to its first line only (the served contract's
+        own `... Inverse(fes.FreeDofs(),` / `inverse=...) * res` was flagged)."""
+        rhs, depth, i = m.group(3), m.group(3).count("(") - m.group(3).count(")"), m.end()
+        while depth > 0 and i < len(body):
+            j = body.find("\n", i + 1)
+            j = len(body) if j < 0 else j
+            nxt = body[i:j]
+            rhs += " " + nxt.strip()
+            depth += nxt.count("(") - nxt.count(")")
+            i = j
+        return rhs
+
+    dropped = _DISCARDED_SOLVE.search(body)
+    if dropped:
+        return (f"`{' '.join(dropped.group(0).split())[:90]}` computes a solve and throws its "
+                f"result away: nothing is assigned, so the solution vector keeps whatever was "
+                f"written into it before, and every value exported from it is that. A solve's "
+                f"result has to land in the solution vector.")
+    solves = [(m.group(1), m.group(2), _whole(m), m.start(),
+               "vec[:]" if "[" in m.group(0).split("=")[0] else "vec.data")
+              for m in _SOLVE_ASSIGN.finditer(body) if _is_solve(m.group(3))]
     if not solves:
         if _BILINEAR.search(body) and not _SOLVE_CALL.search(body):
             return (
@@ -914,23 +1181,111 @@ def imported_values_not_held(content: str) -> str:
                 "assemble is the one your solution comes out of.")
         return ""
 
-    for sol, op in solves:
-        writes = list(re.finditer(rf"\b{re.escape(sol)}\.vec\s*\[([^\]]+)\]\s*=", body))
-        if not writes:
+    def _definition(name: str) -> str:
+        """The right-hand side the script last gave `name` (or `name.data`)."""
+        found = ""
+        for dm in re.finditer(rf"^\s*{re.escape(name)}(?:\.data)?\s*=\s*([^\n]*)", body, re.M):
+            found = dm.group(1)
+        return found
+
+    def _applied_to(expr: str, depth: int = 0) -> str:
+        """What the solve is applied to: 'residual' (f - A u, the lifting present),
+        'load' (a linear form's vector alone), or 'unknown' -- and only 'load' is
+        a finding: a vector whose definition the script does not show is not
+        called wrong."""
+        expr = expr.strip()
+        if "-" in expr and ".mat" in expr:
+            return "residual"
+        # f - A u written in two steps: `Au.data = a.mat * gfu.vec` then `f.vec - Au`
+        if "-" in expr and depth <= 2:
+            for term in re.split(r"[-+]", expr):
+                nm = term.strip().split(".")[0]
+                if re.fullmatch(r"[A-Za-z_]\w*", nm or "") and ".mat" in _definition(nm):
+                    return "residual"
+        m = re.search(r"\*\s*\(?\s*([A-Za-z_][\w\.]*)\s*\)?\s*$", expr)
+        operand = m.group(1) if m else (expr if re.fullmatch(r"[A-Za-z_]\w*", expr) else "")
+        if not operand or depth > 2:
+            return "unknown"
+        d = _definition(operand.split(".")[0])
+        if not d:
+            return "unknown"
+        if re.match(r"\s*LinearForm\s*\(", d):
+            return "load"
+        return _applied_to(d, depth + 1)
+
+    for sol, op, rhs, at, lhs_form in solves:
+        writes = list(re.finditer(rf"\b{re.escape(sol)}\.vec\s*\[([^\]]+)\]\s*=(?!=)\s*([^\n]*)", body))
+        # A ZERO START IS NOT A LOST CONDITION. `gfu.vec[:] = 0.0` before an
+        # assignment-solve loses nothing, and this fired on it (measured).
+        writes = [w for w in writes
+                  if not re.fullmatch(r"\(?\s*0*\.?0*(?:e[+-]?\d+)?\s*\)?\s*", w.group(2).strip(), re.I)]
+        # ONLY WHAT IS WRITTEN BEFORE THE SOLVE CAN BE LOST OR LEFT OUT OF IT.
+        writes = [w for w in writes if not _never_together(body, w.start(), at)]
+        # `gfu.Set(0)` IS A ZERO START TOO, like `gfu.vec[:] = 0.0`: it fired on the
+        # correct final file of a right run, whose values were written
+        # later on a branch that solves in the residual form (measured).
+        before = [w for w in writes if w.start() < at] + [
+            None for s in re.finditer(rf"\b{re.escape(sol)}\.Set\s*\(\s*([^\n]*)", body[:at])
+            if not _never_together(body, s.start(), at)
+            and not re.match(r"(?:(?:CoefficientFunction|CF)\s*\(\s*)?\(?\s*0*\.?0*(?:e[+-]?\d+)?"
+                             r"\s*\)?\s*(?:\)|,)", s.group(1), re.I)][:1]
+        if not before:
             continue                                   # nothing essential loaded into it
-        if op == "=":
+        # IN WORDS, NOT AS THE TWO LINES OF THE SOLVE: the literal residual-form
+        # solve given here was copied verbatim into correct runs, and the linear
+        # solve is one of the things openPASO does not serve.
+        lifting = ("Solve for the CORRECTION instead: with the fixed values already in "
+                   "the solution vector, apply the inverse to the residual those values "
+                   "leave -- the load minus the assembled operator applied to them -- "
+                   "and ADD the result. That is the one form in which the fixed values "
+                   "both stay and reach the interior.")
+        if op == "=" and "+" not in rhs:
+            said = " ".join(rhs.split())
+            said = said if len(said) <= 72 else said[:69] + "..."
+            _t = re.sub(r"\.data\s*$", "", rhs.strip())
+            if _t in temps:
+                said += f"`, where `{_t}` is `{' '.join(temps[_t].split())[:60]}"
+            # A CORRECTION REPLACING THE VECTOR IS RIGHT WHEN THE HELD VALUES GO BACK.
+            # Solved from the residual, the free entries are the answer and the held
+            # ones come out zero; written back after it, the field is the lifting's.
+            # Measured: a correct final file doing exactly that was told its interior
+            # "was computed without them".
+            if _applied_to(rhs) == "residual":
+                _pre = {w.group(1).strip() for w in writes
+                        if w.start() < at and not _never_together(body, w.start(), at)}
+                _post = [w for w in writes if w.start() > at and w.group(1).strip() in _pre]
+                if _post:
+                    continue
+                return (
+                    f"`{sol}.{lhs_form} = {said}` replaces the whole vector with the "
+                    "CORRECTION alone: the inverse on the free dofs leaves zero on every "
+                    "held one, so the values written there before -- the partner's trace, "
+                    "the outer values -- are zeroed and never written back. ADD the "
+                    "correction to the vector instead, or write the held values back "
+                    "after it.")
             return (
                 f"`{sol}.vec[...]` is written with values first and then "
-                f"`{sol}.vec.data = ...` replaces the whole vector, so those "
-                "entries are gone by the time anything reads them. On a "
-                "Dirichlet side that is the partner's interface trace: it is "
-                "loaded, discarded, and the system is solved as though the "
-                "interface carried no condition at all. Re-applying the values "
-                "AFTER the solve does not repair it -- the interior was computed "
-                "without them and is the answer to a different problem. This is "
-                "the one defect that still converges, so the residual history "
-                "will not tell you. An update keeps what is already there; an "
-                "assignment does not.")
+                f"`{sol}.{lhs_form} = {said}` replaces the whole vector, so those "
+                "entries are gone by the time anything reads them: whatever "
+                "they held -- prescribed outer values on any side, the partner's "
+                "interface trace on a Dirichlet side -- is loaded, discarded, and "
+                "the system is solved as though those boundaries carried a zero "
+                "condition. Re-applying the values AFTER the solve does not repair "
+                "it -- the interior was computed without them and is the answer to "
+                "a different problem. This is the one defect that still converges, "
+                "so the residual history will not tell you. " + lifting)
+        if op == "+=" and _applied_to(rhs) == "load":
+            # MEASURED: the old closing hint here ("an update keeps what is already
+            # there") steered two runs into exactly this form, and the check was
+            # silent on it; one of them passed a grade with the error it leaves.
+            return (
+                f"`{sol}.vec.data += <inverse> * <load>` keeps the values written into "
+                f"`{sol}.vec` on the fixed dofs, but the vector the inverse is applied "
+                "to is the load alone, not the residual f - A u: the free dofs are "
+                "solved as if every fixed value were zero, so the boundary data -- the "
+                "partner's interface trace, the prescribed outer values -- never reach "
+                "the interior. It converges, and its error does not shrink with the "
+                "mesh. " + lifting)
         # The index is usually the loop variable, so the interface name sits on
         # the `for` line above it rather than inside the brackets. Read the
         # write together with the lines that bind it.
@@ -938,10 +1293,42 @@ def imported_values_not_held(content: str) -> str:
             head = body[:w.start()].rsplit("\n", 4)[1:]
             return bool(_IFACE_NAME.search("\n".join(head) + w.group(0)))
 
+        # A MASK OF ITS OWN IS A MASK. A solve inverted on a BitArray the script
+        # built (cleared, then the free bits set) may well hold the interface; this
+        # branch only knew masks made by clearing bits and called such a side
+        # "nothing holds those entries fixed" (measured on a recorded fill whose
+        # mask was broken for another reason, named by unset_mask_bits).
+        def _custom_mask(expr: str) -> bool:
+            src = temps.get(re.sub(r"\.data\s*$", "", expr.strip()), expr)
+            inv = re.search(r"Inverse\s*\(\s*([^,()]+(?:\([^()]*\))?)", src)
+            if not inv:
+                for n in bound:
+                    if re.search(rf"\b{re.escape(n)}\b", src):
+                        inv = re.search(r"Inverse\s*\(\s*([^,()]+(?:\([^()]*\))?)", _definition(n))
+                        break
+            if not inv:
+                return False
+            arg = inv.group(1).strip()
+            if "FreeDofs" in arg:
+                return False
+            d = _definition(arg) if re.fullmatch(r"\w+", arg) else ""
+            return not re.fullmatch(r"\s*[\w\.]+\.FreeDofs\s*\([^)]*\)\s*", d or "")
+
         if (any(_from_interface(w) for w in writes)
-                and not _FREE_MASK.search(body)):
+                and not _FREE_MASK.search(body) and not _custom_mask(rhs)):
             dm = re.search(r"H1\s*\([^)]*dirichlet\s*=\s*([\"'][^\"']*[\"']|\([^)]*\))", content)
-            if not (dm and _IFACE_NAME.search(dm.group(1))):
+
+            def _holds_interface(spec: str) -> bool:
+                # NGSolve reads dirichlet= as a regular expression over the boundary
+                # names: ".*" holds the interface as surely as "outer|interface" does
+                if _IFACE_NAME.search(spec):
+                    return True
+                try:
+                    return bool(re.fullmatch(spec.strip().strip("'\""), "interface"))
+                except re.error:
+                    return False
+
+            if not (dm and _holds_interface(dm.group(1))):
                 return (
                     f"interface values are written into `{sol}.vec[...]`, but "
                     "nothing holds those entries fixed: the space's `dirichlet=` "
@@ -966,8 +1353,8 @@ def imported_values_not_held(content: str) -> str:
 # contract builds the same elements and recovers finite fluxes.
 #
 # MEASURED: 48 recorded scripts build 3D4N elements by hand and 29 of them
-# check no sign at all. Every one of those that was evaluated is
-# incomplete. Silent on the served set.
+# check no sign at all; every recorded run among those was incomplete.
+# Silent on the served set.
 #
 # It names the defect, not the mesh: which decomposition to use stays the
 # author's choice, and the only claim is that a tetrahedron handed to an
@@ -1015,7 +1402,22 @@ def unoriented_tetrahedra(content: str) -> str:
 # Silent on all 33 served contracts, every one of which reads its imports
 # before it solves.
 
-_EXPORTS_ANY = re.compile(r"exports\.json")
+# A NAME IN A STRING IS NOT A USE, AND THIS CHECK COUNTED IT AS ONE.
+#
+# `_EXPORTS_ANY` matched the six characters anywhere in a file, including in a
+# path being READ. Measured on one coupled run: a post-processing
+# script that only reads side_A/exports.json and side_B/exports.json was told
+# three times, on three successive writes, "this script writes exports.json and
+# never reads imports.json, so nothing the partner computes can change what it
+# exports. A partitioned iteration between two sides where one side does not
+# listen is a fixed point at the first step". It is not a participant, it wrote
+# no export, and there was no partner for it to listen to.
+#
+# The correct pattern was two hundred lines above it the whole time:
+# `_EXPORTS_WRITE`, which requires an actual write. The same shape as counting
+# our own served text as failures, and as a coverage marker matching a name
+# inside a C++ string literal -- three instances in two days.
+_EXPORTS_ANY = _EXPORTS_WRITE
 _IMPORTS_ANY = re.compile(r"imports\.json|\bread_imports\s*\(")
 
 
@@ -1067,6 +1469,269 @@ _CONTRACT_DOOR = {
     "skfem": "skfem", "dune": "dune", "kratos": "kratos",
     "fourc": "fourc", "febio": "febio", "dealii": "dealii",
 }
+
+
+_SERVED_MARK = "DOES NOT SERVE THIS"
+# THE HOLE MARKERS DO NOT SURVIVE THE FILL. Measured on a live round: every
+# filled contract on disk (45-53k chars, side A; 27-28k, side B) had lost
+# "DOES NOT SERVE THIS" with the hole it framed, and read as hand-written to
+# a marker-only test. The export self-check block is served in every
+# contract ("keep this block") and stays through the fill.
+_SERVED_SIGNS = (_SERVED_MARK, "EXPORT SELF-CHECK")
+
+
+_HOLE_RE = re.compile(r"# ── SOLVE ─ [^\n]*?DOES NOT SERVE THIS ─ begin.*?DOES NOT SERVE THIS ─ end", re.S)
+
+
+@functools.lru_cache(maxsize=1)
+def _served_line_sets() -> tuple:
+    """Per shipped contract, its served lines of 40 characters or more, holes cut."""
+    out = []
+    try:
+        for q in sorted(_PARTICIPANT_DIR.glob("participant_*.py")):
+            lines = frozenset(ln.strip() for ln in _HOLE_RE.sub("", q.read_text(errors="ignore")).splitlines()
+                              if len(ln.strip()) >= 40)
+            if len(lines) >= 20:
+                out.append(lines)
+    except OSError:
+        return ()
+    return tuple(out)
+
+
+def _is_served_contract(text: str) -> bool:
+    """A served contract carries one of the served signs AND most of the served lines
+    of one shipped contract. ONE PHRASE WAS NOT ENOUGH: a hand-written side that
+    imitated a single served line ("EXPORT SELF-CHECK" in a comment) read as served,
+    and the check that names a hand-written side beside a served one stayed silent.
+    Measured over every shipped contract: 100 % of its served lines are in it, as
+    shipped and as the knowledge door serves it; the imitation shares none."""
+    if not isinstance(text, str) or not any(m in text for m in _SERVED_SIGNS):
+        return False
+    sets = _served_line_sets()
+    if not sets:
+        return True                      # nothing to compare against: the sign decides
+    have = {ln.strip() for ln in text.splitlines()}
+    return max(len(ls & have) / len(ls) for ls in sets) >= 0.5
+
+
+def hand_written_beside_a_served_side(content: str, near=None) -> str:
+    """'' unless this participant is hand-written while its partner side is a served contract.
+
+    MEASURED over twenty runs of one thermo-elastic family: seven runs wrote the served
+    contract for BOTH sides and every one delivered a complete three-level result; six
+    wrote it for one side and hand-wrote the other, and none delivered anything -- the
+    hand-written side was small (4.8-8.5k chars) and never read imports.json.
+    """
+    if not isinstance(content, str) or _is_served_contract(content) or near is None:
+        return ""
+    near = Path(near)
+    if near.suffix != ".py":
+        return ""
+    dirs = [near.parent]
+    if near.parent.name.lower().startswith("side"):
+        # A PROBE BESIDE THIS SIDE'S OWN SERVED PARTICIPANT IS NOT THIS SIDE. Measured: a
+        # 900-char mesh test written into side_A/ was told "this side is HAND-WRITTEN
+        # while side_A/participant_A.py is the served contract".
+        for q in sorted(near.parent.glob("*.py")):
+            if q.resolve() == near.resolve() or ".replaced-" in q.name:
+                continue
+            try:
+                if _is_served_contract(q.read_text(errors="ignore")):
+                    return ""
+            except OSError:
+                continue
+        dirs = [d for d in sorted(near.parent.parent.glob("side*")) if d.is_dir() and d != near.parent]
+    elif not near.name.lower().startswith("participant"):
+        return ""                        # one flat folder: only a participant is a side
+    partner = None
+    for d in dirs:
+        for q in sorted(d.glob("*.py")):
+            if q.resolve() == near.resolve() or ".replaced-" in q.name:
+                continue
+            try:
+                txt = q.read_text(errors="ignore")
+            except OSError:
+                continue
+            if _is_served_contract(txt) and ("imports.json" in txt or "exports.json" in txt):
+                partner = q
+                break
+        if partner:
+            break
+    if partner is None:
+        return ""
+    codes = [c for c in backends_in(content) if c in _CONTRACT_DOOR]
+    code = _CONTRACT_DOOR[codes[0]] if codes else None
+    try:
+        rel = str(near.relative_to(near.parent.parent)) if near.parent.name.lower().startswith("side") else near.name
+    except ValueError:
+        rel = near.name
+    try:
+        who = str(partner.relative_to(partner.parent.parent))
+    except ValueError:
+        who = partner.name
+    call = (f"write_participant_contract(solver='{code}', path='{rel}')" if code
+            else f"write_participant_contract(solver=<this side's code>, path='{rel}')")
+    # WHICH SERVED CHECKS THE FILE LACKS, read from the file: a re-typed contract that kept
+    # its held-edge stop under a renamed comment was told it carried none of them.
+    _labels = (("EXPORT SELF-CHECK", "the export self-check"),
+               ("OUTER BOUNDARY", "the held-edge check"),
+               ("INTERFACE DOFS", "the interface list against the mesh"),
+               ("INTERFACE VERTICES", "the interface list against the mesh"),
+               ("SOLVE SELF-CHECK", "the solve self-check"))
+    _missing = []
+    for _lab, _what in _labels:
+        if _lab not in content and _what not in _missing:
+            if _lab == "INTERFACE DOFS" and "INTERFACE VERTICES" in content:
+                continue
+            if _lab == "INTERFACE VERTICES" and "INTERFACE DOFS" in content:
+                continue
+            _missing.append(_what)
+    _lack = (f" It lacks the served {', '.join(_missing)}, so a defect those would stop runs on "
+             f"silently." if _missing else "")
+    return (
+        f"this side is HAND-WRITTEN ({len(content):,} chars) while {who} is the served contract."
+        f"{_lack} The served contract for this side is one call, {call}; then fill only its "
+        f"marked hole, in place.")
+
+
+_PARTICIPANT_DIR = Path(__file__).resolve().parents[2] / "data" / "coupling_participants"
+
+
+def unsolved_linear_solve(content: str) -> str:
+    """'' unless a PETSc solve is configured to apply one preconditioner sweep and call it a solve.
+
+    MEASURED (petsc4py 3.24.4): LinearProblem(..., petsc_options={"ksp_type": "preonly"}) with no
+    pc_type leaves |b - Ax|/|b| at 0.61 / 0.80 / 0.90 on refining Laplacians -- PETSc's default
+    preconditioner is one ILU sweep and 'preonly' asks for exactly one application. With
+    "pc_type": "lu" the same call reaches 1e-14. A run whose side never solved its systems
+    showed every field diverging, the interface flux jump O(1) at every level, and the served
+    cause list at the time (sign, points) sent it verifying causes that did not apply.
+    """
+    if not isinstance(content, str):
+        return ""
+    body = _strip_strings_and_comments(content)
+    hits = []
+    for m in re.finditer(r"petsc_options\s*=\s*\{([^}]*)\}", body):
+        opts = m.group(1)
+        if re.search(r"[\"']ksp_type[\"']\s*:\s*[\"']preonly[\"']", opts) and not re.search(
+                r"[\"']pc_type[\"']\s*:\s*[\"'](?:lu|cholesky)[\"']", opts):
+            hits.append(body[:m.start()].count("\n") + 1)
+    if not hits:
+        return ""
+    where = ", ".join(str(h) for h in hits[:4])
+    return (f"a PETSc solve at line {where} asks for ksp_type 'preonly' WITHOUT pc_type 'lu': that applies "
+            f"one preconditioner sweep (ILU by default) and solves nothing -- measured |b - Ax|/|b| = 0.6-0.9 on "
+            f"every level, every field diverging, the interface flux jump O(1). A direct solve is "
+            f'petsc_options={{"ksp_type": "preonly", "pc_type": "lu"}} (add "pc_factor_mat_solver_type": '
+            f'"mumps" when available); an iterative one needs a converging KSP (cg/gmres with a tolerance).')
+
+
+def served_guard_removed(content: str, near=None) -> str:
+    """'' unless this is a served contract whose refusals were deleted or demoted to prints.
+
+    MEASURED: a run replaced the served `raise SystemExit("the TSI deck's temperature differs ...")`
+    with a WARNING print, its own logs then carried "scatra-vs-tsi T mismatch 1.00e+00" at every
+    level -- the structural deck's temperature was zero, its traction had no thermal stress -- and
+    the coupling never converged at the finest level. A served refusal stops a run that would hand
+    in a wrong number; the fill is the agent's, the guards are not.
+    """
+    if not isinstance(content, str) or not _is_served_contract(content):
+        return ""
+    first = content.lstrip().split("\n", 1)[0].strip()
+    if not first.startswith('"""') or len(first) < 20:
+        return ""
+    template = None
+    try:
+        for q in sorted(_PARTICIPANT_DIR.glob("participant_*.py")):
+            head = q.read_text(errors="ignore").lstrip().split("\n", 1)[0].strip()
+            if head == first:
+                template = q.read_text(errors="ignore")
+                break
+    except OSError:
+        return ""
+    if template is None:
+        return ""
+    # THE HOLE'S OWN LINES ARE NEVER SERVED: the contract reaches the agent
+    # with every hole elided, so a refusal inside a hole (the "hole is not
+    # filled" stop) is not a guard the agent received. Measured: the pristine
+    # served 4C contract drew this finding in four cells of one round for
+    # exactly that stop, and the round was abandoned after five minutes.
+    hole_free = re.sub(r"# ── SOLVE ─ [^\n]*?DOES NOT SERVE THIS ─ begin.*?DOES NOT SERVE THIS ─ end",
+                       "", template, flags=re.S)
+    # A GUARD IS ITS CONDITION, AND ITS MESSAGE ONLY SECOND. Matching the
+    # message word for word over 70 characters called a refusal "removed"
+    # when a run had kept it and only shortened its text (served three times
+    # to a correct run, measured). A guard counts as kept when its `if`
+    # condition is still there and a `raise SystemExit` follows it, or when
+    # the first words of its message still sit behind a `raise SystemExit`;
+    # demoted when the condition is followed by a print instead; gone only
+    # when neither its condition nor the start of its message is left.
+    def _norm(line):
+        return re.sub(r"\s+", "", line)
+
+    hole_lines = hole_free.splitlines()
+    guards = []                      # (condition or None, message head)
+    for i, line in enumerate(hole_lines):
+        if "raise SystemExit(" not in line:
+            continue
+        m = re.search(r"raise SystemExit\(\s*f?([\"'])", line)
+        text = ""
+        if m:                         # up to the quote that opened it; an apostrophe inside stays
+            rest = line[m.end():]
+            end = rest.find(m.group(1))
+            text = rest if end < 0 else rest[:end]
+        full = text.split("{", 1)[0].strip()
+        head = full[:30]
+        if "not filled" in full or "DOES NOT SERVE" in full:
+            continue
+        cond = None
+        for j in range(i - 1, max(-1, i - 4), -1):
+            prev = hole_lines[j].strip()
+            if not prev or prev.startswith("#"):
+                continue
+            if prev.startswith("if ") and prev.endswith(":"):
+                cond = _norm(prev)
+            break
+        if (cond, head, full[:50]) not in guards and (cond or len(head) >= 12):
+            guards.append((cond, head, full[:50]))
+    if not guards:
+        return ""
+    body_lines = content.splitlines()
+    norm_body = [_norm(l) for l in body_lines]
+    gone = []
+    for cond, head, label in guards:
+        state = None
+        if cond is not None:
+            for i, nl in enumerate(norm_body):
+                if nl != cond:
+                    continue
+                follow = [l.strip() for l in body_lines[i + 1:i + 5] if l.strip() and not l.strip().startswith("#")]
+                nxt = follow[0] if follow else ""
+                state = "kept" if nxt.startswith("raise SystemExit") else ("demoted" if nxt.startswith("print(") else "changed")
+                if state == "kept":
+                    break
+        if state != "kept" and len(head) >= 12:
+            for mm in re.finditer(re.escape(head), content):
+                before = content[max(0, mm.start() - 40):mm.start()]
+                if "raise SystemExit" in before:
+                    state = "kept"
+                    break
+                if "print(" in before:
+                    state = state or "demoted"
+        if state == "kept":
+            continue
+        label = label or head or (cond or "")[:40]
+        if state == "demoted":
+            gone.append(f"'{label}' (demoted to a print)")
+        elif state is None:
+            gone.append(f"'{label}'")
+    if not gone:
+        return ""
+    return (f"SERVED GUARD REMOVED: {len(gone)} of the {len(guards)} refusals this contract came with "
+            f"are gone or demoted to a print: {'; '.join(gone[:4])}{'; ...' if len(gone) > 4 else ''}. "
+            f"Each stops a run that would hand in a wrong number (measured: with the temperature "
+            f"cross-check demoted, a run exported tractions with no thermal stress at every level). "
+            f"Put them back as `raise SystemExit(...)`; fill the hole, keep the guards.")
 
 
 def _solvers_asked_about(near=None):

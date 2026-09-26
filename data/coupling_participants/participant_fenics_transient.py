@@ -523,7 +523,9 @@ ok = np.abs(wi) > 1e-14
 # nearest interior interface node rather than exporting a corner value that is
 # physically a different quantity. This applies on BOTH sides; with
 # OUTER_FACES = "x" it never fires, because then no interface node is outer.
-suspect = np.isin(iface_dofs, outer_dofs) | ~ok
+# outer_dofs AS DOF NUMBERS: np.isin reads a Python set as ONE object and matches
+# nothing (measured: the corner values went out unreplaced).
+suspect = np.isin(iface_dofs, sorted(outer_dofs) if isinstance(outer_dofs, (set, frozenset)) else outer_dofs) | ~ok
 good = np.where(~suspect)[0]
 fixup = [(i, good[np.argmin(np.abs(good - i))])
          for i in np.where(suspect)[0]] if len(good) else []
@@ -687,8 +689,8 @@ print(f"[fenics-transient {SIDE}] iface n={len(iface_dofs)} steps={N_STEPS} "
       f"q(last step)=[{Q_out[:, -1].min():.6g},{Q_out[:, -1].max():.6g}]")
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
-# The audit and the hand-in read that exact shape, and they read it PER
-# LEVEL: it is how a grader tells a refined mesh from the same mesh run
+# The audit reads that exact shape, and they read it PER
+# LEVEL: it is how anyone checking the result tells a refined mesh from the same mesh run
 # three times. The LEADING NEWLINE is deliberate -- a program that writes
 # without a trailing newline glues its text onto the front of the next
 # line, and an X11 warning has done exactly that here, turning a correct
