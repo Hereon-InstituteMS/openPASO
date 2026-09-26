@@ -573,11 +573,10 @@ TEN RULES THAT APPLY WHATEVER YOU ASKED FOR
    still exit 0), re-run with the backend's verbose flag, and ask
    knowledge(topic='pitfalls', solver=...) before reporting a failure.
 
-4. THE MOST COMMON FAILURE IS NEVER PRODUCING THE NUMBERS: 36% of 464 measured
-   runs wrote no probe output, and the largest slice of those SOLVED and never
-   read the field back at the required points. Do ONE coarse level end to end
-   -- solve, extract at the prescribed points, write the file -- before
-   refining anything.
+4. PRODUCE THE NUMBERS EARLY. A field that was solved and never read back at
+   the required points is no result. Do ONE coarse level end to end -- solve,
+   extract at the prescribed points, write the file -- before refining
+   anything.
 
 5. MEASURE, DO NOT GUESS. Whether your field satisfies the equation you were
    given is falsifiable with no reference answer:

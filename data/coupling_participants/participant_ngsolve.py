@@ -149,8 +149,9 @@ G_OUTER = ((lambda x, y, _g=_expr_fn(_cfg_all["outer_expr"]): _g(x, y))
            if _cfg_all.get("outer_expr") is not None else (lambda x, y: 0.0 * x + T_OUTER))
 print(f"SOURCES IN USE: from {_SOURCE_FROM}"
       + (f"; f = {str(_cfg_all.get('source_expr'))[:80]}" if _cfg_all.get("source_expr") is not None else "")
-      + f"; k = {K:g}; reaction = {REACTION:g}; held outer value = "
-      + (f"{str(_cfg_all.get('outer_expr'))[:60]}" if _cfg_all.get("outer_expr") is not None else f"{T_OUTER:g}"))
+      + f"; k = {K:g}; reaction = {REACTION:g}; outer value stated = "
+      + (f"{str(_cfg_all.get('outer_expr'))[:60]}" if _cfg_all.get("outer_expr") is not None else
+         f"{T_OUTER:g}" + ("" if _cfg_all.get("outer") is not None else " (T_OUTER in this file)")))
 if FULL_OUTER_DIRICHLET is None:
     raise SystemExit("FULL_OUTER_DIRICHLET is unset: say whether the two non-interface edges the "
                      "interface ends on are held (True) or natural (False), from your problem "
@@ -478,7 +479,15 @@ with TaskManager():
     # carries the OUTER reaction as well, so its residual is not this
     # interface's flux. Take the nearest interior interface node rather than
     # exporting a corner value that is physically a different quantity.
-    suspect = np.isin(iface_dofs, outer_dofs) | ~ok
+    # outer_dofs AS DOF NUMBERS, whatever the hole built: np.isin reads a Python set
+    # as ONE object and a BitArray (fes.GetDofs(...)) as bits, and on four coupled
+    # runs this rule matched nothing and the corner values went out unreplaced.
+    _od = outer_dofs
+    if type(_od).__name__ == "BitArray":
+        _od = [_i for _i in range(len(_od)) if _od[_i]]
+    elif isinstance(_od, (set, frozenset)):
+        _od = sorted(_od)
+    suspect = np.isin(iface_dofs, np.asarray(_od, int)) | ~ok
     good = np.where(~suspect)[0]
     if len(good):
         for i in np.where(suspect)[0]:
@@ -550,6 +559,41 @@ if _chk_in.size and _chk_rows is not None and not getattr(a, "condense", False):
             f"correction applied to the load alone instead of to the residual that the "
             f"values already in gfu leave. The flux recovery above reads the same a.mat, "
             f"so nothing was exported.")
+
+# THE LOAD THE SOLVE USED CARRIES THE SOURCE. Off every boundary, f (the solve's
+# load) and f_vol (the one the flux recovery subtracts) are the same volume
+# integral. Measured on a coupled run: f was built and never assembled, the side
+# solved with no source through a whole ladder, and the check above -- which
+# compares A u with that same f -- passed it.
+_chk_bd = fes.GetDofs(mesh.Boundaries(".*"))
+_chk_io = np.array([d for d in range(fes.ndof) if not _chk_bd[d]], int)
+if _chk_io.size:
+    _chk_lf = np.asarray(f.vec.FV().NumPy(), float)[_chk_io]
+    _chk_lv = np.asarray(f_vol.vec.FV().NumPy(), float)[_chk_io]
+    _chk_m = max(float(np.abs(_chk_lf).max()), float(np.abs(_chk_lv).max()))
+    try:
+        _chk_xy = np.array([mesh.vertices[_i].point for _i in range(mesh.nv)], float)
+        _chk_s = float(np.abs(np.asarray(F_SRC(_chk_xy[:, 0], _chk_xy[:, 1]), float)).max())
+    except Exception:                  # noqa: BLE001 -- a source this line cannot sample: no check
+        _chk_s = 0.0
+    if (_chk_m > 0 and np.abs(_chk_lf - _chk_lv).max() > 0.25 * _chk_m) or (_chk_m == 0 and _chk_s > 0):
+        raise SystemExit(
+            f"LOAD: off the boundary, the load the solve used (f) reaches {np.abs(_chk_lf).max():.3e} "
+            f"and the volume load the flux recovery subtracts (f_vol) {np.abs(_chk_lv).max():.3e}"
+            + (f", while F_SRC reaches {_chk_s:.3e}" if _chk_m == 0 else "")
+            + ". There both are the same volume integral of the source, and a form built but "
+              "never assembled holds zeros. Nothing was exported.")
+# WHAT THE HELD NON-INTERFACE EDGES HOLD, read from the solved field: the line
+# printed before the solve says only what this file or config.json states.
+_chk_hd = [(_d, _pt) for _d, _pt in _d2p.items() if not _chk_fd[_d] and abs(_pt[AX] - IFACE_X) > TOL]
+if _chk_hd:
+    _chk_hu = np.array([float(gfu.vec[_d]) for _d, _ in _chk_hd])
+    _chk_hg = np.array([float(G_OUTER(float(_pt[0]), float(_pt[1]))) for _, _pt in _chk_hd])
+    print(f"HELD OUTER EDGES: the solved field holds {_chk_hu.min():g} .. {_chk_hu.max():g} there"
+          + ("" if np.abs(_chk_hu - _chk_hg).max() <= 1e-9 * max(1.0, float(np.abs(_chk_hg).max())) else
+             f", NOT the value stated for them ({_chk_hg.min():g} .. {_chk_hg.max():g}): the stated "
+             f"value is not your problem's (T_OUTER, or \"outer\" / \"outer_expr\" in config.json), "
+             f"or those dofs are not held at it"))
 
 # THE RUN-LOG CONTRACT LINE: `NDOF = <integer>` on a line of its OWN.
 # The audit reads that exact shape, and they read it PER

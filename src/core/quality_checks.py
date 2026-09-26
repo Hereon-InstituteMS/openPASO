@@ -1368,7 +1368,8 @@ def check_interface_meshes(export_a, export_b, label_a="A", label_b="B",
 
 def check_residual_blocks(block_residuals: dict, tol: float,
                           slack: float = 10.0,
-                          fixed_point: dict | None = None) -> tuple[list[str], list[str]]:
+                          fixed_point: dict | None = None,
+                          distance: dict | None = None) -> tuple[list[str], list[str]]:
     """Is the reported global residual actually representative?
 
     The driver converges on ONE relative norm over every participant's stacked
@@ -1393,12 +1394,14 @@ def check_residual_blocks(block_residuals: dict, tol: float,
     bad = {k: v for k, v in finite.items() if v > limit}
     # A LAST STEP IS NOT A DISTANCE. Under an accelerator a block can move a lot on its
     # last step and land on the fixed point; where the driver measured the block's own
-    # fixed-point residual (raw output against the relaxed input) and it is inside the
-    # limit, the block has converged whatever its last step was.
-    if fixed_point:
-        bad = {k: v for k, v in bad.items()
-               if not (isinstance(fixed_point.get(k), float) and fixed_point[k] == fixed_point[k]
-                       and fixed_point[k] <= limit)}
+    # fixed-point residual (raw output against the relaxed input), or estimated the
+    # distance left from how fast its last two steps shrank, and either is inside the
+    # limit, the block has converged whatever its last step was. With no relaxation the
+    # fixed-point residual IS the last step, and only the distance can clear it.
+    for est in (fixed_point, distance):
+        if est:
+            bad = {k: v for k, v in bad.items()
+                   if not (isinstance(est.get(k), float) and est[k] == est[k] and est[k] <= limit)}
     if bad:
         worst = max(bad.items(), key=lambda kv: kv[1])
         findings.append(

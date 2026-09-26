@@ -253,7 +253,9 @@ Q[ok] = -r[iface_dofs][ok] / wt[iface_dofs][ok]
 # the OUTER reaction as well, so its residual is not this interface's flux.
 # Take the nearest interior interface node rather than exporting a corner
 # value that is physically a different quantity.
-suspect = np.isin(iface_dofs, outer_dofs) | ~ok
+# outer_dofs AS DOF NUMBERS: np.isin reads a Python set as ONE object and matches
+# nothing (measured: the corner values went out unreplaced).
+suspect = np.isin(iface_dofs, sorted(outer_dofs) if isinstance(outer_dofs, (set, frozenset)) else outer_dofs) | ~ok
 good = np.where(~suspect)[0]
 if len(good):
     for i in np.where(suspect)[0]:

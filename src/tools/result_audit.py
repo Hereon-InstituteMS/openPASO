@@ -1969,6 +1969,14 @@ def interface_sign_findings(work: Path) -> list[dict]:
             dudn = _IF.recover_normal_derivative(
                 gs[0], gs[1], ipts, _axis, _plane, sign)
             res = _IF.flux_ratio_consistency(iq, dudn)
+            # THE RATIO ROWS BELOW LEAVE OUT THE TWO END NODES AT EACH END: a partner
+            # whose end-node flux went out raw (a corner reaction) made a right Neumann
+            # side's delivered flux, which is what it applied, read "does not follow
+            # from its own field" (measured). The sign test above keeps every point.
+            _along = 1 - _axis
+            _ord = sorted(range(len(ipts)), key=lambda i: float(ipts[i][_along]))
+            _keep = _ord[2:-2] if len(_ord) > 7 else _ord
+            res_inner = _IF.flux_ratio_consistency([iq[i] for i in _keep], [dudn[i] for i in _keep])
         except Exception:
             continue
         # A ZERO FLUX COLUMN HAS NO SIGN. Its implied coefficient is round-off of
@@ -1988,9 +1996,11 @@ def interface_sign_findings(work: Path) -> list[dict]:
                 assessed += 1
                 if k < 0:
                     inverted.append((lvl, side, k))
-                if comp.get("component", 0) == 0:
-                    ratio_rows.setdefault(side, []).append(
-                        (lvl, str(comp.get("verdict")), float(k), float(comp.get("spread") or 0.0)))
+        for comp in res_inner.get("per_component") or []:
+            k = comp.get("implied_coefficient")
+            if isinstance(k, (int, float)) and comp.get("component", 0) == 0:
+                ratio_rows.setdefault(side, []).append(
+                    (lvl, str(comp.get("verdict")), float(k), float(comp.get("spread") or 0.0)))
     for lvl in sorted({l for l, _ in ifs}):
         a, b = ifs.get((lvl, "A")), ifs.get((lvl, "B"))
         if not (a and b):
@@ -2250,20 +2260,19 @@ def interface_sign_findings(work: Path) -> list[dict]:
             + ". The two subdomains use OPPOSITE outward normals at the same "
             "physical point, so qA + qB must be zero to discretisation error "
             "and |qA - qB| must be about twice |q|. Here it is the other way "
-            "round: the sum is the big number and the difference is tiny, "
-            "which means both files carry the same physical quantity rather "
-            "than each side's own outward flux. THIS IS ONE SIGN ON THE VALUE "
-            "YOU WRITE OUT, not a defect in your solve -- your two fields "
-            "already agree across the seam if the temperatures match. Negate "
-            "the flux column of ONE side, the side whose normal you did not "
-            "actually use:\n"
-            "        qn_out = -qn_computed_with_the_other_sides_normal\n"
-            "and leave the temperature column alone. On the Neumann side the "
-            "flux you IMPORT and the flux you REPORT are opposite anyway, "
-            "because Kratos's FACE_HEAT_FLUX is the INWARD flux, so if you "
-            "wrote out what you applied you wrote the wrong sign. Check it by "
-            "recomputing max|qA + qB| after the change: it must be small and "
-            "must SHRINK from level to level, not grow.")})
+            "round: the sum is the big number and the difference is tiny. Two "
+            "ways lead here, fixed in different places: a sign flipped in what "
+            "one side WRITES OUT (its field is right, its file is not), or the "
+            "partner's flux APPLIED with the wrong sign (then that side's field "
+            "itself answers the wrong flux, and negating a written column only "
+            "hides it -- measured: a run did exactly that and handed in a field "
+            "of the wrong size as converged). The fields decide: the flux each "
+            "side's own FIELD carries, -k du/dn outward, cancels its partner's in "
+            "the first case and adds in the second, and the own-field flux "
+            "finding reads it from the field dumps. (Kratos's FACE_HEAT_FLUX is "
+            "the heat ENTERING a side.) Check after the change: the files and "
+            "the fields must both cancel, and the sum must SHRINK from level to "
+            "level, not grow.")})
     # A FLIPPED SIGN READS ABOUT -k, THE SAME AT EVERY LEVEL. Measured on a coupled
     # run whose side had never solved its interior: implied k -33.09, -8.736, -0.889
     # against a stated k of 1, and this finding said "THE DEFECT IS IN YOUR RECOVERY
@@ -2343,20 +2352,19 @@ def interface_sign_findings(work: Path) -> list[dict]:
         out.append({"sequence": "interface flux sign", "values": [], "finding": (
             "INTERFACE FLUX HAS THE WRONG SIGN at " + where + ". Your "
             "reported q_n is proportional to your own field's normal "
-            "derivative but NEGATIVE, so it was computed with the INWARD "
-            "normal. The task defines q_n = -(K grad u) . n_out with n_out "
-            "pointing OUT of the subdomain. On the NEUMANN side the flux you "
-            "IMPORT and the flux you REPORT are opposite -- Kratos's "
-            "FACE_HEAT_FLUX is the inward flux -- so write the NEGATIVE of "
-            "the value you applied. With the sign reversed the two sides "
-            "appear to balance when they do not, and the observed order "
-            "cannot see it. THE DEFECT IS IN YOUR RECOVERY FUNCTION, NOT IN "
-            "THE LEVEL(S) NAMED ABOVE: the same code produced every level's "
-            "flux, so after any fix RE-DERIVE AND RE-WRITE THE FLUX AT EVERY "
-            "LEVEL AND BOTH SIDES, then re-run this audit. Measured: one run "
-            "corrected only the level a warning named, left the others as "
-            "they were, and the result set failed on a level it never "
-            "re-checked.")})
+            "derivative but NEGATIVE: it does not carry the outward sign the "
+            "task defines, q_n = -(K grad u) . n_out with n_out pointing OUT of "
+            "the subdomain. Which number is wrong, the fields decide: if the "
+            "flux each side's own FIELD carries cancels its partner's, only the "
+            "written sign is wrong -- correct the code that writes the flux, at "
+            "every level and both sides; if the fields' fluxes add (the "
+            "own-field flux finding says so), the field itself answers a flux "
+            "of the wrong sign and the partner's flux was APPLIED with the "
+            "wrong sign (Kratos's FACE_HEAT_FLUX is the heat entering the "
+            "side) -- then flipping the written sign only hides it. Measured: "
+            "one run corrected only the level a warning named and failed on a "
+            "level it never re-checked; another flipped its written sign over "
+            "a field of the wrong size and handed it in as converged.")})
     # A FIXED PROBE GRID HAS THE SAME ROW COUNT AT EVERY LEVEL.
     #
     # MEASURED, one recorded run: its coupling genuinely converged
@@ -3456,13 +3464,16 @@ def flux_cancellation_finding(export_a: dict, export_b: dict,
             f"interface points, and ~2.0 is the exact-opposite-convention "
             f"signature (both sides carry the SAME sign). The two subdomains "
             f"share the seam with OPPOSITE outward normals, so a correct "
-            f"coupling has q_{name_a}+q_{name_b} ~ 0. FLIP THE SIGN OF ONE "
-            f"SIDE'S EXPORTED OUTWARD FLUX: export q_n with respect to THAT "
-            f"side's own outward normal, and on a Neumann side remember the "
-            f"flux you IMPORT and the flux you REPORT are opposite. This is one "
-            f"sign on the number you write out, not a defect in the solve. "
-            f"Re-check max|q_A+q_B|/max|q| after the change — it must be small "
-            f"and must SHRINK as you refine, not grow.")}
+            f"coupling has q_{name_a}+q_{name_b} ~ 0. Two ways lead here, and "
+            f"they are fixed in different places: a sign flipped in what one "
+            f"side WRITES OUT (its field is right, its export is not), or the "
+            f"partner's flux APPLIED with the wrong sign (then that side's field "
+            f"itself is wrong, and flipping the written sign only hides it). The "
+            f"fields tell which: the flux each side's own field carries, -k du/dn "
+            f"outward, cancels its partner's in the first case and adds in the "
+            f"second -- the own-field flux finding reads exactly that from the "
+            f"field dumps. Re-check after the change: the exports and the fields "
+            f"must both cancel, and the imbalance must SHRINK as you refine.")}
     return None
 
 
@@ -4022,6 +4033,142 @@ def _read_named_csv(p: Path):
             if len(v) == len(hdr):
                 rows.append(v)
     return hdr, rows
+
+
+def _own_field_flux(side_dir: Path, lvl: int, k: float):
+    """(along-coordinates, outward flux -k du/dn from the side's OWN field dump) at its
+    interface points, excluding the two end nodes and their neighbours; None when the
+    dumps cannot say. The derivative is a one-sided difference over one interface spacing
+    into the side's own field (exact on the first element row of a structured P1 grid)."""
+    import numpy as np
+    try:
+        from scipy.interpolate import griddata
+        hf, rf = _read_named_csv(side_dir / f"field_level{lvl}.csv")
+        hi, ri = _read_named_csv(side_dir / f"interface_level{lvl}.csv")
+    except (OSError, ImportError, StopIteration):
+        return None
+    if not ({"x", "y"} <= set(hf) and {"x", "y"} <= set(hi)) or len(rf) < 16 or len(ri) < 7:
+        return None
+    vc = next((hf.index(c) for c in hf if c not in ("x", "y", "z")), None)
+    if vc is None:
+        return None
+    F = np.asarray(rf, float)
+    I = np.asarray(ri, float)[:, [hi.index("x"), hi.index("y")]]
+    if not (np.isfinite(F).all() and np.isfinite(I).all()):
+        return None
+    xy, u = F[:, [hf.index("x"), hf.index("y")]], F[:, vc]
+    ax = int(np.argmin(np.ptp(I, axis=0)))           # the coordinate the interface fixes
+    al = 1 - ax
+    plane = float(np.median(I[:, ax]))
+    inside = 1.0 if float(np.mean(xy[:, ax])) > plane else -1.0   # direction into the side
+    order = np.argsort(I[:, al])
+    pts = I[order]
+    s = np.diff(pts[:, al])
+    s = s[s > 0]
+    if not s.size:
+        return None
+    delta = float(np.median(s))
+    keep = pts[2:-2]
+    if len(keep) < 3:
+        return None
+    p0 = keep.copy()
+    p1 = keep.copy()
+    p1[:, ax] = plane + inside * delta
+    u0 = griddata(xy, u, p0, method="linear")
+    u1 = griddata(xy, u, p1, method="linear")
+    if np.isnan(u0).any() or np.isnan(u1).any():
+        return None
+    # outward normal points AWAY from the side: du/dn_out = (u0 - u1) / delta
+    return keep[:, al], -float(k) * (u0 - u1) / delta
+
+
+def own_field_flux_findings(work: Path, dirs=None, since=None, levels=None,
+                            scan: bool = True) -> list[dict]:
+    """The flux each side's OWN field carries across the interface, against its partner's.
+
+    THE EXPORTS CAN BE MADE TO AGREE; THE FIELDS CANNOT. A side can write its flux with any
+    sign, and the exchange checks compare what the sides write. Measured on a coupled run:
+    its Neumann side applied the partner's flux with the wrong sign, so its field answered a
+    flux opposite to the one it was sent; the exported fluxes added (~2.0), the reply said
+    the fix was "one sign on the number you write out, not a defect in the solve", the run
+    flipped its written sign, its files balanced, and it handed in a field 40 % of the right
+    size as converged. From the fields themselves -- -k du/dn outward, from each side's own
+    dump and the k its config states -- the two fluxes still added. On a right coupling
+    they cancel, to the accuracy of a one-sided difference, shrinking with the mesh."""
+    out: list[dict] = []
+    seen, folders = set(), []
+    for d in list(dirs or []) + (_side_dirs(work) if scan else []):
+        try:
+            key = Path(d).resolve()
+        except OSError:
+            continue
+        if key not in seen and Path(d).is_dir():
+            seen.add(key)
+            folders.append(Path(d))
+    ks = {}
+    for d in folders:
+        try:
+            cfg = json.loads((d / "config.json").read_text() or "{}")
+        except (OSError, ValueError):
+            continue
+        if isinstance(cfg, dict) and isinstance(cfg.get("k"), (int, float)) and cfg["k"] > 0:
+            ks[d] = float(cfg["k"])
+    if len(ks) != 2:
+        return out                                   # two sides, each stating its k
+    (da, ka), (db, kb) = sorted(ks.items(), key=lambda kv: kv[0].name)
+    import numpy as np
+    rows = []
+    lvls = sorted({int(m.group(1)) for d in (da, db) for q in d.glob("field_level*.csv")
+                   for m in [re.fullmatch(r"field_level(\d+)\.csv", q.name)] if m})
+    for lvl in lvls:
+        if levels is not None and lvl not in levels:
+            continue
+        try:
+            _cut = [_cutoff_for(d, since) for d in (da, db)]
+            if any(c is not None and (d / f"field_level{lvl}.csv").stat().st_mtime < c
+                   for c, d in zip(_cut, (da, db))):
+                continue
+        except OSError:
+            continue
+        fa, fb = _own_field_flux(da, lvl, ka), _own_field_flux(db, lvl, kb)
+        if fa is None or fb is None:
+            continue
+        qb_at_a = np.interp(fa[0], fb[0], fb[1])
+        inside = (fa[0] >= fb[0].min()) & (fa[0] <= fb[0].max())
+        if inside.sum() < 3:
+            continue
+        qa, qb = fa[1][inside], qb_at_a[inside]
+        scale = max(float(np.abs(qa).max()), float(np.abs(qb).max()))
+        if scale <= 0:
+            continue
+        rows.append((lvl, float(np.abs(qa + qb).max()) / scale))
+    if not rows:
+        return out
+    lv = [l for l, _ in rows]
+    bal = [b for _, b in rows]
+    txt = " -> ".join(f"{b:.0%}" for b in bal)
+    added = any(b >= 1.5 for b in bal)
+    stays = len(bal) >= 3 and all(b > 0.2 for b in bal) and not all(
+        q < 0.6 * p for p, q in zip(bal, bal[1:]))
+    if not (added or stays):
+        return out
+    out.append({
+        "sequence": "own-field flux balance", "values": bal, "priority": 4,
+        "finding": (
+            f"THE TWO FIELDS DO NOT CARRY OPPOSITE FLUXES ACROSS THE INTERFACE: the flux each "
+            f"side's own field carries out of it (-k du/dn, from {da.name}/ and {db.name}/'s "
+            f"field dumps and the k each config states) fails to cancel its partner's by "
+            f"{txt} at level(s) {', '.join(str(l) for l in lv)}"
+            + (" -- about 200 %: the two fields' fluxes carry the SAME sign, so one side's "
+               "field answers a flux of the opposite sign to the one its partner sent. That "
+               "is a flux APPLIED with the wrong sign, and it is fixed in the solve, not in "
+               "the number written out."
+               if added else
+               " and it does not shrink with the mesh: the field on one side does not carry "
+               "the flux its partner's field does.")
+            + " A side's exports can be made to balance while its field does not; this reads "
+            "the fields.")})
+    return out
 
 
 def nonfinite_field_findings(work: Path, dirs=None, since=None, levels=None,
@@ -4686,7 +4833,14 @@ def _momentum_findings(work: Path, side: str, op: dict, since=None) -> list[dict
                                 f"{type(exc).__name__}: {exc}")})
         return out
     # THE SOLVER'S OWN DUMPS DECIDE WHAT THE FIELD IS; the delivered files decide
-    # only whether they carry it (see _verdict_finding).
+    # only whether they carry it (see _verdict_finding). Where the dumps are newer and the
+    # two disagree, both are said with their ages (see _timed_verdict).
+    _dv = str((dres or {}).get("verdict")) if dres else None
+    _vv = str((vres or {}).get("verdict")) if vres else None
+    if (_dv in ("CONSISTENT", "INCONSISTENT") and _vv in ("CONSISTENT", "INCONSISTENT")
+            and _dv != _vv and _dumps_newer_than_the_files(op["dir"], work)):
+        out.append(_timed_verdict(side, "momentum", op_txt, dres, vres, op["dir"], work))
+        return out
     if (dres and str(dres.get("verdict")) in ("CONSISTENT", "INCONSISTENT")
             and not (vres and _dumps_newer_than_the_files(op["dir"], work))):
         res, levels = dres, dumps
@@ -5184,6 +5338,37 @@ def _verdict_finding(side: str, what: str, op_txt: str, dres, vres, folder: str)
         f"SIDE {side}'S {eq} CHECK COULD NOT JUDGE IT (NOT CHECKED): {why}")}
 
 
+def _timed_verdict(side: str, what: str, op_txt: str, dres, vres, side_dir: Path, work: Path) -> dict:
+    """The verdict from the side's dumps and its delivered files, saying which is newer.
+
+    DUMPS NEWER THAN THE FILES ARE NOT ALWAYS THE ONES TO BELIEVE, NOR ALWAYS THE ONES TO
+    DROP. Measured both ways: a level-1 dump overwritten by a later test run on another
+    mesh, beside delivered files that held the right answer; and delivered files left
+    from before a re-run, which read "DOES NOT SATISFY" of a side whose current field
+    satisfies its equation to round-off -- the run gave up on it. So both are judged and,
+    where they disagree, both are said with their ages."""
+    dv = str((dres or {}).get("verdict")) if dres else None
+    vv = str((vres or {}).get("verdict")) if vres else None
+    newer = _dumps_newer_than_the_files(side_dir, work)
+    if dres and dv in ("CONSISTENT", "INCONSISTENT", "UNSETTLED") and not newer:
+        return _verdict_finding(side, what, op_txt, dres, None, side_dir.name)
+    if not (newer and dv in ("CONSISTENT", "INCONSISTENT") and vv in ("CONSISTENT", "INCONSISTENT")
+            and dv != vv):
+        return _verdict_finding(side, what, op_txt, None if vres else dres, vres, side_dir.name)
+    if dv == "CONSISTENT" and vv == "INCONSISTENT":
+        f = _verdict_finding(side, what, op_txt, dres, vres, side_dir.name)
+        f["finding"] += (" The delivered files are OLDER than this side's latest dumps: they are "
+                         "the last run's, not this one's.")
+        return f
+    eq = "EQUATION" if what == "equation" else "MOMENTUM EQUATION"
+    say = {"CONSISTENT": "satisfy it", "INCONSISTENT": "do not satisfy it"}
+    return {"sequence": f"{what} check side {side}", "values": [], "priority": 8, "finding": (
+        f"SIDE {side}'S DELIVERED FILES AND ITS NEWER DUMPS DISAGREE ON ITS {eq} ({op_txt}): the "
+        f"delivered files {say[vv]} ({_resid_text(vres)}); its own mesh dumps, written after them, "
+        f"{say[dv]} ({_resid_text(dres)}). The two come from different runs. Write the delivered "
+        f"files and the dumps from the same run, then check again.")}
+
+
 def equation_findings(work: Path, since=None) -> list[dict]:
     """Does each side's delivered field satisfy the equation that side states?
 
@@ -5259,12 +5444,7 @@ def equation_findings(work: Path, since=None) -> list[dict]:
         op_txt = (f"-div({op['k']:g} grad u)"
                   + (f" + {op['reaction']:g} u" if op["reaction"] else "")
                   + " = f")
-        if (dres and str(dres.get("verdict")) in ("CONSISTENT", "INCONSISTENT", "UNSETTLED")
-                and not _dumps_newer_than_the_files(op["dir"], work)):
-            out.append(_verdict_finding(side, "equation", op_txt, dres, None, op["dir"].name))
-        else:
-            out.append(_verdict_finding(side, "equation", op_txt, None if vres else dres, vres,
-                                        op["dir"].name))
+        out.append(_timed_verdict(side, "equation", op_txt, dres, vres, op["dir"], work))
         # A CONFIG WRITTEN AFTER THE FIELD IT DESCRIBES is said, not assumed: measured, two
         # runs wrote side A's source_expr minutes after their last dump, and the verdict
         # judged the field against a statement the run did not carry when it solved.
@@ -5276,6 +5456,15 @@ def equation_findings(work: Path, since=None) -> list[dict]:
                     f" Its config.json was written after these dumps "
                     f"({_cfg_t - max(_dump_t):.0f} s after the last): the operator judged is the "
                     f"one it states now, which is not proof it is the one the run solved.")
+            # AND A SCRIPT CHANGED AFTER THEM (measured: a side's final script was not the
+            # version that wrote the dumps judged here, and nothing said so).
+            _scr = [q for q in op["dir"].glob("participant*.py") if ".replaced-" not in q.name]
+            _scr_t = max((q.stat().st_mtime for q in _scr), default=0.0)
+            if _dump_t and _scr_t > max(_dump_t) + 1.0 and out and out[-1].get("finding"):
+                out[-1]["finding"] += (
+                    f" Its participant script was changed after these dumps "
+                    f"({_scr_t - max(_dump_t):.0f} s after the last): the field judged is the one "
+                    f"an earlier version wrote.")
         except OSError:
             pass
 
@@ -5638,8 +5827,8 @@ def coupled_ladder(work: Path) -> dict | None:
                  "per-level history file name with {k} in place of the level number>') ONCE. It runs every remaining "
                  "level in that single call: each side gets its level's nx, ny in the environment (every cell count "
                  "doubled to halve h), each level warm-starts from the previous one, and each level's history file and "
-                 "participant_output_level<k>.log are written. Measured: per-level couple() calls cost ten calls a level "
-                 "and six proven couplings never reached level 3 that way. Then do steps 4 and 5 for every new level. "
+                 "participant_output_level<k>.log are written; per-level couple() calls cost several calls a level. "
+                 "Then do steps 4 and 5 for every new level. "
                  "If the task prescribes no further level: write the summary file naming ONLY files that exist, then run "
                  "audit_results(work_dir). CHECK: the audit reports no missing level, no invented name and no missing "
                  "field file.")
@@ -6001,6 +6190,7 @@ def audit(work_dir: str, claimed_order: float | None = None,
     findings.extend(_guarded("residual_findings", residual_findings, work))
     findings.extend(_guarded("unsolved_field_findings", unsolved_field_findings, work))
     findings.extend(_guarded("nonfinite_field_findings", nonfinite_field_findings, work))
+    findings.extend(_guarded("own_field_flux_findings", own_field_flux_findings, work))
     findings.extend(_guarded("exports_not_the_field_findings", exports_not_the_field_findings, work))
     findings.extend(_guarded("completeness_findings", completeness_findings, work))
     findings.extend(_guarded("exact_ladder_findings", exact_ladder_findings, work))   # the provable one leads the band one
@@ -6489,6 +6679,10 @@ def field_quality_due(work: Path, levels_done) -> list[dict]:
         pass
     try:
         out += nonfinite_field_findings(work, levels=lv)
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
+        out += own_field_flux_findings(work, levels=lv)
     except Exception:                                    # noqa: BLE001
         pass
     try:

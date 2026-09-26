@@ -1507,13 +1507,29 @@ def _deck_findings_text(tag: str, name: str, findings: list, when: str) -> str:
             + "\n".join(f"  - {f}" for f in shown) + more + ("\n  " + note[0] if note else ""))
 
 
-def _participant_run_check(output: str) -> str:
+_VIEWERS = {"cat", "head", "tail", "sed", "less", "more", "grep", "egrep", "awk", "wc", "nl",
+            "ls", "cd", "echo", "diff", "sort", "uniq", "cut", "find", "stat", "file", "pwd"}
+
+
+def _only_views(command: str) -> bool:
+    """True when every step of a shell command only shows files: a `tail` of a script
+    that quotes an error message in its own text is not a run that failed with it."""
+    import re as _re                                         # noqa: PLC0415
+    steps = [s.strip() for s in _re.split(r"&&|\|\||;|\|", command or "") if s.strip()]
+    return bool(steps) and all(s.split()[0].rsplit("/", 1)[-1] in _VIEWERS for s in steps)
+
+
+def _participant_run_check(output: str, command: str = "") -> str:
     """A run that already failed names its own fix, in the same reply.
 
     Measured in round 49: 12-36 shell calls per cell and 8-31 file writes, at 35-73 seconds each, and
     the loop that consumed them was write-run-error-rewrite on the participant. When the console
     carries one of the errors this project has measured, the call that works goes back with it.
+    It says nothing on a command that only shows files (measured: it fired on the `tail` of a
+    participant whose served text quotes the error it answers).
     """
+    if command and _only_views(command):
+        return ""
     try:
         from tools.participant_lint import findings_from_output   # noqa: PLC0415
         findings = findings_from_output(output)

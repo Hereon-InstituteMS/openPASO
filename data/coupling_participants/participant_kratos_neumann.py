@@ -403,30 +403,33 @@ def main():
     hy = (Y1 - Y0) / NY
     load_iface = float(hy * (0.5 * q_in[0] + q_in[1:-1].sum() + 0.5 * q_in[-1]))
     load_vol = 0.0
+    _cw = 0                                           # triangles whose nodes run clockwise
     for el in mp.Elements:
         nds = el.GetNodes()
         x = [n.X for n in nds]
         y = [n.Y for n in nds]
         det = (x[1]-x[0])*(y[2]-y[0]) - (x[2]-x[0])*(y[1]-y[0])
+        _cw += det < 0
         load_vol += (0.5 * abs(det)) * sum(
             n.GetSolutionStepValue(KM.HEAT_FLUX) for n in nds) / 3.0
-    # OVER EVERY FIXED ROW, not the outer x-column alone: with the y-edges held
-    # (FULL_OUTER_DIRICHLET) their reactions are part of the sum, and leaving them
-    # out printed a ~100 % imbalance on every correct run (measured: 1.000 / 0.997
-    # / 0.994 where the sum over all fixed rows is 5e-16).
+    if _cw:
+        raise SystemExit(f"MESH: {_cw} of {len(mp.Elements)} triangles run clockwise; order "
+                         f"each element's nodes counter-clockwise.")
+    # Over EVERY fixed row: held y-edges' reactions belong to the sum too.
     react = sum(n.GetSolutionStepValue(KM.REACTION_FLUX) for n in mp.Nodes
                 if n.IsFixed(KM.TEMPERATURE))
     imb_abs = abs(react + load_vol + load_iface)
     scale = max(abs(react), abs(load_vol), abs(load_iface))
-    # On iteration 1 with Q_INIT = 0 and no source there is no heat flow at all,
-    # every term is round-off, and a RATIO of round-off to round-off is O(1)
-    # while meaning nothing. Say "trivial" instead of printing a 1.0 that reads
-    # as a 100% conservation error.
+    # No heat flow yet (iteration 1, no source): a ratio of round-offs means nothing.
     if scale <= 1e-10 * K * max(1.0, abs(T_OUTER)) * (Y1 - Y0):
         bal = f"balance trivial (no heat flow yet, |imbalance|={imb_abs:.3e})"
     else:
         bal = (f"balance |sum(reactions)+vol+iface| = {imb_abs:.3e} abs / "
                f"{imb_abs / scale:.3e} rel")
+        if imb_abs / scale > 1e-3:        # exact on a right solve (measured 1e-16..4e-15)
+            raise SystemExit(f"CONSERVATION SELF-CHECK: imbalance {imb_abs / scale:.3g} of scale: "
+                             f"the partner's flux entered with the wrong sign or size, or not at "
+                             f"all. Nothing was exported.")
 
     print(f"[kratos neumann] interface n={len(T)} "
           f"q_applied=[{q_in.min():.6g},{q_in.max():.6g}] "
@@ -434,10 +437,7 @@ def main():
     print(f"\nNDOF = {len(mp.Nodes)}")
 
     # ── EXPORT SELF-CHECK (served) ─ keep this block. A singular system leaves NaN
-    #    behind: Kratos prints "Error zero sum" (or "Error zero in diagonal") and the
-    #    script goes on to export it. Measured on a coupled run: a Neumann side built
-    #    on its own mesh hit that four times and exported NaN each time; the NGSolve
-    #    contracts already stop here.
+    #    behind ("Error zero sum"), and nothing else would stop its export.
     if not (np.isfinite(np.asarray(T, float)).all() and np.isfinite(np.asarray(Q, float)).all()):
         raise SystemExit("EXPORT SELF-CHECK: non-finite interface values or fluxes -- the solve "
                          "produced no usable field, so nothing was exported. When Kratos printed "

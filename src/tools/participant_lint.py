@@ -893,7 +893,9 @@ _DISCARDED_SOLVE = re.compile(
 _SOLVE_CALL = re.compile(r"\bInverse\s*\(|\bCGSolver\b|\bsolvers\.\w|\bBVP\s*\(")
 _BOUND_NAME = re.compile(r"^\s*(\w+)\s*=\s*([^\n]*)", re.M)
 _IFACE_NAME = re.compile(r"interface|iface", re.I)
-_FREE_MASK = re.compile(r"\w+\s*\[\s*(?:int\()?\w+\)?\s*\]\s*=\s*(?:False|0)\b")
+# a mask bit cleared -- not an attribute's subscript: `gfu.vec[int(d)] = 0.0` zeroes a value
+# and was read as a mask, which silenced "nothing holds those entries fixed" (measured)
+_FREE_MASK = re.compile(r"(?<![\w.])\w+\s*\[\s*(?:int\()?\w+\)?\s*\]\s*=\s*(?:False|0)\b")
 _BILINEAR = re.compile(r"\bBilinearForm\s*\(")
 
 # ── WHICH LINES CAN RUN TOGETHER ───────────────────────────────────────────
@@ -1076,6 +1078,13 @@ def unset_mask_bits(content: str) -> str:
     for m in _BITARRAY.finditer(body):
         name, arg = m.group(1), m.group(2).strip()
         if arg.startswith("[") or "FreeDofs" in arg or "GetDofs" in arg:
+            continue
+        # A COPY OF A MASK IS A MASK: BitArray(free_dofs) with free_dofs = fes.FreeDofs()
+        # copies every bit, and was called "not zeroed" (measured, cost 41 s).
+        _src = ""
+        for dm in re.finditer(rf"^\s*{re.escape(arg)}\s*=\s*([^\n]*)", body[:m.start()], re.M):
+            _src = dm.group(1)
+        if re.fullmatch(r"\w+", arg) and re.search(r"FreeDofs|GetDofs|BitArray\s*\(", _src):
             continue
         after = body[m.end():]
         first_write = re.search(rf"\b{re.escape(name)}\s*\[[^\]]+\]\s*=(?!=)", after)
@@ -1308,7 +1317,18 @@ def imported_values_not_held(content: str) -> str:
         if (any(_from_interface(w) for w in writes)
                 and not _FREE_MASK.search(body) and not _custom_mask(rhs)):
             dm = re.search(r"H1\s*\([^)]*dirichlet\s*=\s*([\"'][^\"']*[\"']|\([^)]*\))", content)
-            if not (dm and _IFACE_NAME.search(dm.group(1))):
+
+            def _holds_interface(spec: str) -> bool:
+                # NGSolve reads dirichlet= as a regular expression over the boundary
+                # names: ".*" holds the interface as surely as "outer|interface" does
+                if _IFACE_NAME.search(spec):
+                    return True
+                try:
+                    return bool(re.fullmatch(spec.strip().strip("'\""), "interface"))
+                except re.error:
+                    return False
+
+            if not (dm and _holds_interface(dm.group(1))):
                 return (
                     f"interface values are written into `{sol}.vec[...]`, but "
                     "nothing holds those entries fixed: the space's `dirichlet=` "

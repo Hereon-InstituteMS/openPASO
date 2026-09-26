@@ -140,6 +140,8 @@ class CouplingResult:
     block_residuals: dict[str, float] = field(default_factory=dict)
     # the same blocks' fixed-point residuals: raw output against the relaxed input
     block_fixed_point: dict[str, float] = field(default_factory=dict)
+    # and each block's estimated distance to its fixed point, from its last two steps
+    block_distance: dict[str, float] = field(default_factory=dict)
     # participant -> "responsive" | "unresponsive" | "imports never changed"
     #              | "no imports declared"
     responsiveness: dict[str, str] = field(default_factory=dict)
@@ -643,6 +645,8 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
     returncodes: dict[str, int] = {}
     block_residuals: dict[str, float] = {}
     block_fixed_point: dict[str, float] = {}
+    block_distance: dict[str, float] = {}          # estimated distance to the fixed point
+    step_hist: dict[str, list] = {}               # each block's last four steps
     # participant -> list of (imports digest, exports digest) per iteration
     trace: dict[str, list[tuple[str, str]]] = {p.name: [] for p in participants}
     last_imports: dict[str, str] = {}
@@ -664,6 +668,7 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
         kw.setdefault("returncodes", returncodes)
         kw.setdefault("block_residuals", block_residuals)
         kw.setdefault("block_fixed_point", block_fixed_point)
+        kw.setdefault("block_distance", block_distance)
         kw.setdefault("responsiveness", _responsiveness(trace, participants))
         kw.setdefault("responsiveness_detail", _responsiveness_detail(trace, participants))
         kw.setdefault("graph", graph)
@@ -950,6 +955,29 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                 fp = (prelax or {}).get(bname)
                 block_fixed_point[f"{n}.{bname}"] = (
                     _rel_change(arr, fp) if fp is not None else float("nan"))
+                # THE DISTANCE LEFT, FROM HOW FAST THE STEPS SHRINK. Without relaxation
+                # the fixed-point residual IS the last step, so it could not clear a
+                # block that had landed (measured: named 6e-8 .. 1.4e-7 from its own
+                # fixed point, a 1e-5 limit, seven false caveats and a right ladder
+                # denied). The ratio is taken over TWO steps, because every side reads
+                # the partner's previous output: a two-sided exchange alternates, and
+                # the step can hold still for one iteration and fall 4x on the next
+                # (measured on a linear pair: one-step ratios 1, 0.25, 1, 0.25, ...,
+                # where the last-step estimate is 5x short). With steps s1..s4 and
+                # q = max(s4/s2, s3/s1) < 1, the fixed point lies within
+                # q (s3 + s4) / (1 - q) -- exact for a steady two-step contraction,
+                # and s4 r / (1 - r) again when every step shrinks by the same r.
+                _key = f"{n}.{bname}"
+                _hs = step_hist.setdefault(_key, [])
+                if block_residuals[_key] == block_residuals[_key]:
+                    _hs.append(block_residuals[_key])
+                    del _hs[:-4]
+                else:
+                    _hs.clear()
+                if len(_hs) == 4 and _hs[0] > 0 and _hs[1] > 0:
+                    _q = max(_hs[3] / _hs[1], _hs[2] / _hs[0])
+                    block_distance[_key] = (_q * (_hs[2] + _hs[3]) / (1.0 - _q)
+                                            if _q < 0.95 else float("inf"))
             prev_blocks[n] = nb
             # write relaxed values back into the InterfaceData carrier
             ifd = new_exports[n]

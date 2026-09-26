@@ -6790,7 +6790,8 @@ def register_consolidated_tools(mcp: FastMCP):
                             sorted(r.block_residuals.items()) if v == v))
         elif r.converged:
             f, n = check_residual_blocks(r.block_residuals, tol,
-                                         fixed_point=getattr(r, "block_fixed_point", None))
+                                         fixed_point=getattr(r, "block_fixed_point", None),
+                                         distance=getattr(r, "block_distance", None))
             val += f; not_run += n
         names = list(r.exports)
         _bal_numbers: dict = {}
@@ -7040,7 +7041,7 @@ def register_consolidated_tools(mcp: FastMCP):
             _nf = []
         if _nf:
             checks_ok = False
-            reason = str(_nf[0].get("finding", ""))[:400]
+            reason = _at_sentence(str(_nf[0].get("finding", "")), 400)
             val = list(val) + [str(f.get("finding", "")) for f in _nf]
             result["validation"] = val
         _stamp_verification(result, evidence_ok=checks_ok, reason=reason,
@@ -7905,7 +7906,7 @@ def register_consolidated_tools(mcp: FastMCP):
             # to the right function from one converging to a wrong one ran on
             # no side of no cell, silently. The note that would have said so
             # is 300 characters.
-            _eq_gaps = [str(f["finding"])[:300] for f in _all_eq
+            _eq_gaps = [_at_sentence(str(f["finding"]), 400) for f in _all_eq
                         if "NOT CHECKED" in f.get("finding", "")]
             # FILES OLDER THAN THIS LADDER ARE THE LAST RUN'S. After a re-run the
             # per-level deliverables on disk are still the previous ladder's until
@@ -8002,6 +8003,12 @@ def register_consolidated_tools(mcp: FastMCP):
         except Exception:                                    # noqa: BLE001
             pass
         try:
+            from .result_audit import own_field_flux_findings as _own_flux
+            for _f in _own_flux(Path(history_dir), dirs=_part_dirs, since=_cut or _ladder_t0, scan=False):
+                _ladder_faults.append(_at_sentence(str(_f.get("finding", "")), 700))
+        except Exception:                                    # noqa: BLE001
+            pass
+        try:
             from .result_audit import nonfinite_field_findings as _nonfinite
             for _f in _nonfinite(Path(history_dir), dirs=_part_dirs, since=_cut or _ladder_t0, scan=False):
                 _ladder_faults.append(_at_sentence(str(_f.get("finding", "")), 500))
@@ -8063,7 +8070,7 @@ def register_consolidated_tools(mcp: FastMCP):
             _verif = ("CONVERGED LADDER, NOT VERIFIED: every level converged, exchanged "
                       "data and refined, but the check of each side's field against its "
                       "own equation has not passed on " + ", ".join(n for n, _ in _unchecked)
-                      + ". " + (f"{_first_side}: {_why[:400]} " if _why else
+                      + ". " + (f"{_first_side}: {_at_sentence(_why, 500)} " if _why else
                                 f"{_first_side}: no equation finding was produced for that "
                                 "folder. ")
                       + "Two sides that agree with each other are not two sides that each "
@@ -8115,11 +8122,26 @@ def register_consolidated_tools(mcp: FastMCP):
         elastic, transient, 3d (the same words the knowledge door takes).
         Refuses to overwrite an existing file unless overwrite=True.
         """
-        from .coupling_knowledge import participant_contract_text
+        from .coupling_knowledge import participant_contract_text, resolve_participant
         from .result_audit import resolve_under_cell
         text, err = participant_contract_text(solver, variant or "")
         if err:
             return json.dumps({"written": False, "error": err})
+        # WHICH CONTRACT THIS IS, SAID. Measured: two runs took the default Kratos
+        # contract -- its Dirichlet side -- for their Neumann side, because the
+        # reply said only "written"; one re-typed the Neumann text by hand after it.
+        _src_path, _label, _ = resolve_participant(solver, variant or "")
+        _doc = next((_l.strip().strip('"').strip() for _l in text.splitlines()
+                     if _l.strip().strip('"').strip()), "")
+        _stem = _src_path.stem
+        _key = _stem.split("_")[1] if _stem.count("_") >= 1 else _stem
+        _others = sorted(_q.stem[len(f"participant_{_key}_"):] for _q in
+                         _src_path.parent.glob(f"participant_{_key}_*.py") if _q != _src_path)
+        if _stem != f"participant_{_key}":
+            _others.insert(0, "the base one (variant='')")
+        _which = (f"This is the {_label} contract ({_src_path.name}): {_doc[:160]}"
+                  + (f" Other variants for this solver: {', '.join(_others)} (variant=...)."
+                     if _others else "") + " ")
         # THE MCP SERVER IS A SEPARATE PROCESS WITH ITS OWN WORKING DIRECTORY,
         # which the caller can neither see nor control (result_audit's
         # resolve_under_cell and the three doors that learned it the hard way).
@@ -8181,7 +8203,7 @@ def register_consolidated_tools(mcp: FastMCP):
         return json.dumps({
             "written": True, "path": str(target), "chars": len(text),
             "sha256": _hl.sha256(text.encode()).hexdigest(),
-            "note": (f"the served contract with the solve elided, not a program: "
+            "note": (_which + f"The served contract with the solve elided, not a program: "
                      f"{edit_blocks + solve_holes} marked region(s) are yours to fill "
                      f"({edit_blocks} EDIT THIS BLOCK, and {solve_holes} elided solve "
                      f"region(s), each where an elision banner sits). Fill them IN "
@@ -10355,7 +10377,7 @@ sees nothing but this task= string (measured: a worker whose brief kept
     own interpreter (generous timeout, first runs compile) until
     ./side_A/exports.json appears with finite values. CHECK: exports.json
     exists and the script exited 0. Report DONE or the exact error.")
-THEN A SECOND WORKER FOR SIDE B, WITH THE SAME CARE. Its brief carries side B's OWN geometry, equations, boundary values, level-1 mesh and file names, its own knowledge(topic='coupling', solver='<side B's code>', physics=...) call, and ITS interpreter -- a different binary from side A's in most pairs. The worker sees nothing but its task= string, so "the same as side A" tells it nothing. Same check: ./side_B/exports.json with finite values, exit 0. Measured: 151 runs ended with one side exporting and the other with no exports.json at all; the silent one is side B 117 times of 144, and every backend appears there, including codes that ran as the other side of a different pair. One side alone is not a coupling.
+THEN A SECOND WORKER FOR SIDE B, WITH THE SAME CARE. Its brief carries side B's OWN geometry, equations, boundary values, level-1 mesh and file names, its own knowledge(topic='coupling', solver='<side B's code>', physics=...) call, and ITS interpreter -- a different binary from side A's in most pairs. The worker sees nothing but its task= string, so "the same as side A" tells it nothing. Same check: ./side_B/exports.json with finite values, exit 0. One side alone is not a coupling: a side with no exports.json never ran to completion, whichever code it runs.
 
 THAT CODE'S OWN INTERPRETER IS PRINTED BY discover(query='list'), next to the
 backend, and it is the argv `couple` needs as well. The default `python3` is
@@ -10483,10 +10505,9 @@ does not model. It implements second-order scalar diffusion, so an elasticity
 form or an added reaction term is refused BY NAME on the equation string. Read
 a refusal as having learned NOTHING about that side, not as a pass.
 
-READ THE TWO VERDICTS ASYMMETRICALLY. Measured: INCONSISTENT lands on 28 sides
-that are wrong and NONE that are right, so fix it before spending budget on
-further levels. CONSISTENT is weaker -- 62 wrong sides also read CONSISTENT,
-because an identity whose test function vanishes on the boundary cannot see a
+READ THE TWO VERDICTS ASYMMETRICALLY. INCONSISTENT is strong evidence against
+a side, so fix it before spending budget on further levels. CONSISTENT is
+weaker, because an identity whose test function vanishes on the boundary cannot see a
 wrong condition ON that boundary. A clean verdict is not a clean bill of
 health.
 
@@ -10560,11 +10581,9 @@ shared interface probes, computed from the two profiles you exported:
 
 An update norm, one side's own solver residual, or the driver's iterate
 difference all fall to 1e-7 while the two codes still disagree completely.
-Reporting one of those is the most common way a coupled answer is lost: of the
-coupled result sets on record that exported both sides, 17 of 31 report a
-residual below 1e-5 that their OWN two files contradict -- one with a 189% flux
-mismatch behind a reported 1.12e-07 -- and it happens whether or not the run
-uses these tools. Recompute the number from the files you just wrote. If it is
+Reporting one of those loses a coupled answer: measured, a 189% flux mismatch
+between the two exported files sat behind a reported residual of 1.12e-07.
+Recompute the number from the files you just wrote. If it is
 not small, the coupling has not converged, whatever the iteration history says.
 
 IF YOU DRIVE THE LOOP YOURSELF, IT MUST ACTUALLY ITERATE. A closed-form
@@ -10918,11 +10937,8 @@ def _front_load_coupling(payload: str, solver: str = "",
             f"diverging iteration, a sign convention, a flux that will not "
             f"balance, a participant that will not start.\n"
             f"WHY IT IS CUT. Reading all of it costs you the actions you need "
-            f"to solve the problem. Measured over many coupled runs: those "
-            f"that read the full coupling corpus got a median 39 tool calls "
-            f"and wrote no output file 60% of the time; runs with no coupling "
-            f"text at all got 95 calls and a median 10 output files. The text "
-            f"was not the binding constraint -- your budget was.\n"
+            f"to solve the problem: the text is not the binding constraint, "
+            f"your budget is.\n"
             f"WHAT TO DO NEXT, in order: get ONE participant running "
             f"standalone until it writes exports.json; get the SECOND one "
             f"running; then call couple(); then write the deliverables. Ask "

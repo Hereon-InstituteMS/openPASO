@@ -523,7 +523,9 @@ ok = np.abs(wi) > 1e-14
 # nearest interior interface node rather than exporting a corner value that is
 # physically a different quantity. This applies on BOTH sides; with
 # OUTER_FACES = "x" it never fires, because then no interface node is outer.
-suspect = np.isin(iface_dofs, outer_dofs) | ~ok
+# outer_dofs AS DOF NUMBERS: np.isin reads a Python set as ONE object and matches
+# nothing (measured: the corner values went out unreplaced).
+suspect = np.isin(iface_dofs, sorted(outer_dofs) if isinstance(outer_dofs, (set, frozenset)) else outer_dofs) | ~ok
 good = np.where(~suspect)[0]
 fixup = [(i, good[np.argmin(np.abs(good - i))])
          for i in np.where(suspect)[0]] if len(good) else []

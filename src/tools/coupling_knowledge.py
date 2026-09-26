@@ -442,9 +442,7 @@ that most often sink a coupled result set:
     a sampler that reads the nearest NODE instead of interpolating, which caps
         your measured convergence order at 1 however good the solve was
 
-It costs one call. Measured, 3% of coupled runs used it,
-and the defects above account for most of the result sets that were read as
-incomplete or invented rather than wrong.
+It costs one call.
 
 """
 
@@ -605,8 +603,7 @@ that counts and a wasted one.
 
 ## 3a. THE ONE BUG THAT CONVERGES TO THE WRONG ANSWER
 
-Measured over the recorded runs: agents wrote 260 participant scripts
-and the same defect kept coming back — exporting the raw traction instead of
+A defect that keeps coming back: exporting the raw traction instead of
 the NEGATED outward normal flux. That flips the sign the partner applies, and
 the coupling then converges, smoothly, with a clean residual history, to the
 wrong answer. Nothing errors and nothing looks wrong.
