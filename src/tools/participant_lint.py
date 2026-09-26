@@ -883,7 +883,13 @@ def missing_export_selfcheck(content: str) -> str:
 # author's: the only claim here is that values written into a vector have to
 # survive the step that follows them.
 
-_SOLVE_ASSIGN = re.compile(r"(\w+)\.vec\.data\s*(\+?=)\s*([^\n]*)")
+# `gfu.vec.data = ...` / `+=`, and the same through a full slice: `gfu.vec[:] = sol`
+# copies a solve's result over the whole vector (measured: silent on exactly that line
+# in a fill whose run-time check then caught the lost boundary data).
+_SOLVE_ASSIGN = re.compile(r"(\w+)\.vec(?:\.data|\s*\[\s*:\s*\])\s*(\+?=)(?!=)\s*([^\n]*)")
+# A solve computed and thrown away: the statement starts with the inverse call.
+_DISCARDED_SOLVE = re.compile(
+    r"^[ \t]*(?:[\w\.]+\.)?Inverse\s*\((?:[^()\n]|\([^()\n]*\))*\)\s*\*\s*[\w\.\[\]\(\)]+[ \t]*$", re.M)
 _SOLVE_CALL = re.compile(r"\bInverse\s*\(|\bCGSolver\b|\bsolvers\.\w|\bBVP\s*\(")
 _BOUND_NAME = re.compile(r"^\s*(\w+)\s*=\s*([^\n]*)", re.M)
 _IFACE_NAME = re.compile(r"interface|iface", re.I)
@@ -1144,8 +1150,15 @@ def imported_values_not_held(content: str) -> str:
             i = j
         return rhs
 
-    solves = [(m.group(1), m.group(2), _whole(m), m.start()) for m in _SOLVE_ASSIGN.finditer(body)
-              if _is_solve(m.group(3))]
+    dropped = _DISCARDED_SOLVE.search(body)
+    if dropped:
+        return (f"`{' '.join(dropped.group(0).split())[:90]}` computes a solve and throws its "
+                f"result away: nothing is assigned, so the solution vector keeps whatever was "
+                f"written into it before, and every value exported from it is that. A solve's "
+                f"result has to land in the solution vector.")
+    solves = [(m.group(1), m.group(2), _whole(m), m.start(),
+               "vec[:]" if "[" in m.group(0).split("=")[0] else "vec.data")
+              for m in _SOLVE_ASSIGN.finditer(body) if _is_solve(m.group(3))]
     if not solves:
         if _BILINEAR.search(body) and not _SOLVE_CALL.search(body):
             return (
@@ -1174,6 +1187,12 @@ def imported_values_not_held(content: str) -> str:
         expr = expr.strip()
         if "-" in expr and ".mat" in expr:
             return "residual"
+        # f - A u written in two steps: `Au.data = a.mat * gfu.vec` then `f.vec - Au`
+        if "-" in expr and depth <= 2:
+            for term in re.split(r"[-+]", expr):
+                nm = term.strip().split(".")[0]
+                if re.fullmatch(r"[A-Za-z_]\w*", nm or "") and ".mat" in _definition(nm):
+                    return "residual"
         m = re.search(r"\*\s*\(?\s*([A-Za-z_][\w\.]*)\s*\)?\s*$", expr)
         operand = m.group(1) if m else (expr if re.fullmatch(r"[A-Za-z_]\w*", expr) else "")
         if not operand or depth > 2:
@@ -1185,7 +1204,7 @@ def imported_values_not_held(content: str) -> str:
             return "load"
         return _applied_to(d, depth + 1)
 
-    for sol, op, rhs, at in solves:
+    for sol, op, rhs, at, lhs_form in solves:
         writes = list(re.finditer(rf"\b{re.escape(sol)}\.vec\s*\[([^\]]+)\]\s*=(?!=)\s*([^\n]*)", body))
         # A ZERO START IS NOT A LOST CONDITION. `gfu.vec[:] = 0.0` before an
         # assignment-solve loses nothing, and this fired on it (measured).
@@ -1217,9 +1236,27 @@ def imported_values_not_held(content: str) -> str:
             _t = re.sub(r"\.data\s*$", "", rhs.strip())
             if _t in temps:
                 said += f"`, where `{_t}` is `{' '.join(temps[_t].split())[:60]}"
+            # A CORRECTION REPLACING THE VECTOR IS RIGHT WHEN THE HELD VALUES GO BACK.
+            # Solved from the residual, the free entries are the answer and the held
+            # ones come out zero; written back after it, the field is the lifting's.
+            # Measured: a correct final file doing exactly that was told its interior
+            # "was computed without them".
+            if _applied_to(rhs) == "residual":
+                _pre = {w.group(1).strip() for w in writes
+                        if w.start() < at and not _never_together(body, w.start(), at)}
+                _post = [w for w in writes if w.start() > at and w.group(1).strip() in _pre]
+                if _post:
+                    continue
+                return (
+                    f"`{sol}.{lhs_form} = {said}` replaces the whole vector with the "
+                    "CORRECTION alone: the inverse on the free dofs leaves zero on every "
+                    "held one, so the values written there before -- the partner's trace, "
+                    "the outer values -- are zeroed and never written back. ADD the "
+                    "correction to the vector instead, or write the held values back "
+                    "after it.")
             return (
                 f"`{sol}.vec[...]` is written with values first and then "
-                f"`{sol}.vec.data = {said}` replaces the whole vector, so those "
+                f"`{sol}.{lhs_form} = {said}` replaces the whole vector, so those "
                 "entries are gone by the time anything reads them: whatever "
                 "they held -- prescribed outer values on any side, the partner's "
                 "interface trace on a Dirichlet side -- is loaded, discarded, and "
@@ -1514,12 +1551,27 @@ def hand_written_beside_a_served_side(content: str, near=None) -> str:
         who = partner.name
     call = (f"write_participant_contract(solver='{code}', path='{rel}')" if code
             else f"write_participant_contract(solver=<this side's code>, path='{rel}')")
+    # WHICH SERVED CHECKS THE FILE LACKS, read from the file: a re-typed contract that kept
+    # its held-edge stop under a renamed comment was told it carried none of them.
+    _labels = (("EXPORT SELF-CHECK", "the export self-check"),
+               ("OUTER BOUNDARY", "the held-edge check"),
+               ("INTERFACE DOFS", "the interface list against the mesh"),
+               ("INTERFACE VERTICES", "the interface list against the mesh"),
+               ("SOLVE SELF-CHECK", "the solve self-check"))
+    _missing = []
+    for _lab, _what in _labels:
+        if _lab not in content and _what not in _missing:
+            if _lab == "INTERFACE DOFS" and "INTERFACE VERTICES" in content:
+                continue
+            if _lab == "INTERFACE VERTICES" and "INTERFACE DOFS" in content:
+                continue
+            _missing.append(_what)
+    _lack = (f" It lacks the served {', '.join(_missing)}, so a defect those would stop runs on "
+             f"silently." if _missing else "")
     return (
-        f"this side is HAND-WRITTEN ({len(content):,} chars) while {who} is the served contract. "
-        f"MEASURED over twenty runs of one family: all seven that wrote the served contract for both "
-        f"sides delivered a complete three-level result; none of the six that hand-wrote their second "
-        f"side did (those sides never read imports.json). The served contract for this side is one "
-        f"call, {call}; then fill only its marked hole, in place.")
+        f"this side is HAND-WRITTEN ({len(content):,} chars) while {who} is the served contract."
+        f"{_lack} The served contract for this side is one call, {call}; then fill only its "
+        f"marked hole, in place.")
 
 
 _PARTICIPANT_DIR = Path(__file__).resolve().parents[2] / "data" / "coupling_participants"

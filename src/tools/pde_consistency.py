@@ -338,6 +338,101 @@ def check_levels(levels: dict, source_expr: str, coefficient,
     return _decide(res)
 
 
+def tensor_grid(rows, tol: float = 1e-7):
+    """(xs, ys, U) when the (x, y, u) rows are the nodes of one tensor grid, each once;
+    None otherwise (a scattered, crossed or repeated node set)."""
+    import numpy as np
+    a = np.asarray(rows, dtype=float)
+    if a.ndim != 2 or a.shape[1] < 3 or len(a) < 9 or not np.isfinite(a).all():
+        return None
+    unit = tol * max(float(np.ptp(a[:, 0])), float(np.ptp(a[:, 1])), 1e-300)
+    qx, ix = np.unique(np.round(a[:, 0] / unit), return_inverse=True)
+    qy, iy = np.unique(np.round(a[:, 1] / unit), return_inverse=True)
+    if len(qx) < 3 or len(qy) < 3 or len(qx) * len(qy) != len(a):
+        return None
+    U = np.full((len(qx), len(qy)), np.nan)
+    U[ix, iy] = a[:, 2]
+    if np.isnan(U).any():
+        return None                                  # a node listed twice, another missing
+    xs = np.bincount(ix, weights=a[:, 0]) / np.bincount(ix)
+    ys = np.bincount(iy, weights=a[:, 1]) / np.bincount(iy)
+    return xs, ys, U
+
+
+# The 7-point, degree-5 rule on the reference triangle (barycentric l1, l2; weights sum to 1).
+_TRI7 = ((1 / 3, 1 / 3, 0.225),
+         (0.059715871789770, 0.470142064105115, 0.132394152788506),
+         (0.470142064105115, 0.059715871789770, 0.132394152788506),
+         (0.470142064105115, 0.470142064105115, 0.132394152788506),
+         (0.797426985353087, 0.101286507323456, 0.125939180544827),
+         (0.101286507323456, 0.797426985353087, 0.125939180544827),
+         (0.101286507323456, 0.101286507323456, 0.125939180544827))
+_GAUSS3 = ((-0.774596669241483, 5 / 9), (0.0, 8 / 9), (0.774596669241483, 5 / 9))
+
+
+def check_levels_on_grid(raw_levels: dict, source_expr: str, coefficient, box: list,
+                         reaction: float = 0.0, rule: str = "anti") -> ConsistencyResult:
+    """The identity of check_levels, integrated EXACTLY over the field a tensor grid's
+    nodes carry under one reconstruction: P1 with every cell cut along its main
+    diagonal ('main'), along the other one ('anti'), or bilinear cells ('q1').
+
+    WHY. check_levels reads each dump through a Delaunay rebuild, and on a tensor grid
+    every cell's four corners are cocircular: the rebuild picks either diagonal, cell
+    by cell (measured: 31 / 33, 128 / 128, 52 / 48 of each). Its value error is O(h^2),
+    the size of the residual itself, and on one side that solved its own P1 system to
+    1e-12 the two nearly cancelled: 5.990e-04 -> 5.826e-04 -> 2.177e-04 and DOES NOT
+    SATISFY, where the same field on its own triangles falls 9.84e-4 -> 3.51e-4 ->
+    9.39e-5. A structured solver's field is one of these reconstructions exactly."""
+    import numpy as np
+    res = ConsistencyResult()
+    for lvl in sorted(raw_levels):
+        g = tensor_grid(raw_levels[lvl])
+        if g is None:
+            res.levels.append(LevelResult(lvl, len(raw_levels[lvl]), float("nan"),
+                                          "not a tensor grid"))
+            continue
+        xs, ys, U = g
+        X0, X1 = np.meshgrid(xs[:-1], ys[:-1], indexing="ij")
+        HX = np.diff(xs)[:, None] * np.ones((1, len(ys) - 1))
+        HY = np.ones((len(xs) - 1, 1)) * np.diff(ys)[None, :]
+        u00, u10, u01, u11 = U[:-1, :-1], U[1:, :-1], U[:-1, 1:], U[1:, 1:]
+        pts, wts, uq = [], [], []
+        if rule == "q1":
+            for s, ws in _GAUSS3:
+                for t, wt in _GAUSS3:
+                    a, b = 0.5 * (1 + s), 0.5 * (1 + t)
+                    pts.append(np.stack([X0 + a * HX, X1 + b * HY], -1).reshape(-1, 2))
+                    wts.append((0.25 * ws * wt * HX * HY).ravel())
+                    uq.append(((1 - a) * (1 - b) * u00 + a * (1 - b) * u10
+                               + (1 - a) * b * u01 + a * b * u11).ravel())
+        else:
+            # corners as (a, b) in the cell's unit square, with their values
+            c = {(0, 0): u00, (1, 0): u10, (0, 1): u01, (1, 1): u11}
+            tris = (((0, 0), (1, 0), (1, 1)), ((0, 0), (1, 1), (0, 1))) if rule == "main" else \
+                   (((0, 0), (1, 0), (0, 1)), ((1, 0), (1, 1), (0, 1)))
+            for p0, p1, p2 in tris:
+                for l1, l2, w in _TRI7:
+                    l0 = 1.0 - l1 - l2
+                    a = l0 * p0[0] + l1 * p1[0] + l2 * p2[0]
+                    b = l0 * p0[1] + l1 * p1[1] + l2 * p2[1]
+                    pts.append(np.stack([X0 + a * HX, X1 + b * HY], -1).reshape(-1, 2))
+                    wts.append((w * 0.5 * HX * HY).ravel())
+                    uq.append((l0 * c[p0] + l1 * c[p1] + l2 * c[p2]).ravel())
+        P = np.concatenate(pts)
+        W = np.concatenate(wts)
+        u = np.concatenate(uq)
+        v, Lv = _adjoint_of_v_flat(coefficient, P, box)
+        if reaction:
+            Lv = Lv + float(reaction) * v
+        f = _eval_source(source_expr, P, 2)
+        lhs = float(np.sum(W * u * Lv))
+        rhs = float(np.sum(W * f * v))
+        res.levels.append(LevelResult(lvl, int(U.size), abs(lhs - rhs) / max(abs(rhs), 1e-300),
+                                      f"lhs={lhs:.6e} rhs={rhs:.6e} ({rule})",
+                                      umax=float(np.abs(U).max())))
+    return _decide(res)
+
+
 def _decide(res: ConsistencyResult) -> ConsistencyResult:
     """Turn per-level residuals into a verdict.
 
@@ -436,6 +531,10 @@ def _decide(res: ConsistencyResult) -> ConsistencyResult:
         # difference or rise toward it, and every one of them fails this, where
         # the old first-against-last rule (last < first/3) passed 5 % of them and
         # called one correct side wrong (2.21e-03 -> 1.31e-03 -> 7.79e-04).
+        # THE OTHER DIRECTION IS WEAKER, measured 2026-09-25 over 184 recorded sides
+        # on tensor grids: scaled by 0.99 about half still pass (99 of 184), where the
+        # discretisation residual's sign adds to the defect and three levels cannot
+        # separate the two. A pass here is weaker evidence than a failure.
         res.verdict = "CONSISTENT"
         seq = " -> ".join(f"{r.residual:.3e}" for r in good)
         res.explanation = (
@@ -467,10 +566,10 @@ def _decide(res: ConsistencyResult) -> ConsistencyResult:
         res.explanation = (
             f"the weak residual does not fall at every refinement: {seq}. A "
             f"field that solves the equation you state shows a residual that "
-            f"falls with each refinement (on 73 correct coupled sides every step "
-            f"fell by a fifth or more); a field solving a slightly different "
-            f"equation levels off at the size of the difference or rises toward "
-            f"it. Look at the source term first -- a sign, a missing term, or an "
+            f"falls with each refinement, about fourfold per halving of h for a "
+            f"P1 field; a field solving a different equation levels off at the "
+            f"size of the difference or rises toward it. Look at the source term "
+            f"first -- a sign, a missing term, or an "
             f"expression evaluated in element-local instead of global "
             f"coordinates -- then the coefficient. This check does not see the "
             f"boundary conditions.")

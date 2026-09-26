@@ -94,6 +94,11 @@ from core.field_transfer import InterfaceData
 # into a count. An unbounded list turned a single NaN into ~80 near-identical
 # lines, which buries every other finding in the validation block.
 _MAX_NONFINITE_WARNINGS = 4
+# Non-finite exports of one participant, in a row, that end the coupling. One is enough:
+# the residual and the relaxation carry a NaN into every later iteration (measured: a
+# single non-finite first pass, with finite exports ever after, still ends 150 iterations
+# later in "did not converge ... last residual nan").
+_NONFINITE_STOP = 1
 _MAX_PARTICIPANT_STREAM_BYTES = 3_500_000
 
 
@@ -133,9 +138,15 @@ class CouplingResult:
     # of that block alone on the final iteration. A global norm hides a small
     # block behind a large one; these do not.
     block_residuals: dict[str, float] = field(default_factory=dict)
+    # the same blocks' fixed-point residuals: raw output against the relaxed input
+    block_fixed_point: dict[str, float] = field(default_factory=dict)
     # participant -> "responsive" | "unresponsive" | "imports never changed"
     #              | "no imports declared"
     responsiveness: dict[str, str] = field(default_factory=dict)
+    # for an "unresponsive" participant: {"changed": [...], "unchanged": [...]}, the
+    # imported columns ("<partner>.<key>") that moved, and those that never moved, on
+    # the iterations where its imports changed and its export did not
+    responsiveness_detail: dict = field(default_factory=dict)
     # the coupling graph as the driver resolved it (declared vs. actually wired)
     graph: dict = field(default_factory=dict)
     # relaxation actually applied: {"mode": "aitken"|"constant", "theta0": float,
@@ -631,10 +642,12 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
     warnings: list[str] = []
     returncodes: dict[str, int] = {}
     block_residuals: dict[str, float] = {}
+    block_fixed_point: dict[str, float] = {}
     # participant -> list of (imports digest, exports digest) per iteration
     trace: dict[str, list[tuple[str, str]]] = {p.name: [] for p in participants}
     last_imports: dict[str, str] = {}
     nonfinite_hits = 0
+    nonfinite_run: dict[str, int] = {}          # participant -> consecutive non-finite exports
     # ── the stochastic branch's state, bound BEFORE _finish so every exit
     # carries it. `floor` and `tol_eff` are rebound below once the floor is
     # measured; _finish reads them at call time, so a late measurement is
@@ -650,7 +663,9 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
         kw.setdefault("warnings", warnings)
         kw.setdefault("returncodes", returncodes)
         kw.setdefault("block_residuals", block_residuals)
+        kw.setdefault("block_fixed_point", block_fixed_point)
         kw.setdefault("responsiveness", _responsiveness(trace, participants))
+        kw.setdefault("responsiveness_detail", _responsiveness_detail(trace, participants))
         kw.setdefault("graph", graph)
         rp = res_prev.get("*")
         kw.setdefault("theta", {"mode": accelerator, "theta0": theta0,
@@ -785,7 +800,8 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                 return _finish(converged=False, iterations=it, residual=float("nan"),
                                exports={}, history=history,
                                error=f"participant {p.name} bad exports.json: {e}")
-            trace[p.name].append((_digest(imp_text), _digest(ep.read_text(errors="replace"))))
+            trace[p.name].append((_digest(imp_text), _digest(ep.read_text(errors="replace")),
+                                  _import_columns(imp_text)))
             ifd = new_exports[p.name]
             v = _stack(ifd)
             # An EMPTY export is not a converged one. With nothing in the stacked
@@ -809,6 +825,27 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
                     where = "values/fluxes" if not np.all(np.isfinite(v)) else "coordinates"
                     warnings.append(
                         f"{p.name}: non-finite export {where} at iter {it}")
+                # A NON-FINITE EXPORT ENDS THE COUPLING, BY NAME. Measured: a run whose side
+                # exported NaN flux iterated 150 times (two minutes) to "did not converge ...
+                # last residual nan", and a NaN first pass never recovers (see _NONFINITE_STOP).
+                nonfinite_run[p.name] = nonfinite_run.get(p.name, 0) + 1
+                if nonfinite_run[p.name] >= _NONFINITE_STOP:
+                    cols = [name for name, arr in (("values", getattr(ifd, "values", None)),
+                                                   ("normal_fluxes", getattr(ifd, "normal_fluxes", None)),
+                                                   ("coordinates", ifd.coordinates))
+                            if arr is not None and np.asarray(arr, float).size
+                            and not np.all(np.isfinite(np.asarray(arr, float)))]
+                    return _finish(converged=False, iterations=it, residual=float("nan"),
+                                   exports={}, history=history,
+                                   error=(f"participant {p.name} exported non-finite "
+                                          f"{', '.join(cols) or 'data'} at iteration {it}: the "
+                                          "residual and the relaxation carry a non-finite number "
+                                          "into every later iteration, so the coupling stops here. "
+                                          "Find where that side's own computation produces it -- "
+                                          "a division by a zero weight or norm, a solve that "
+                                          "failed -- and run that side standalone first."))
+            else:
+                nonfinite_run[p.name] = 0
             # An export whose length changes between iterations breaks relaxation:
             # numpy either broadcasts a length-1 block up to the new length or
             # raises out of the driver. Neither is a result.
@@ -887,12 +924,32 @@ def run_coupling(participants: list[Participant], max_iter: int = 50,
             total_res += float(np.sum((raw_new - prev) ** 2))
             total_ref += float(np.sum(raw_new ** 2)) + 1e-30
             # per-block relative change, so a large settled block cannot mask a
-            # small moving one in the single global norm below
+            # small moving one in the single global norm below; and beside it the
+            # block's OWN FIXED-POINT RESIDUAL (its raw output against the relaxed input
+            # that produced it). The change alone is, under an accelerator, the size of
+            # the last step, not the distance left: measured, a block that moved 5.0e-4
+            # of itself on its last Aitken step had landed within 4.8e-7 of an
+            # independently converged run, and a right ladder read NOT VERIFIED on it.
             nb = _blocks(new_exports[n])
+            prelax = None
+            if prev is not None and np.asarray(prev).size == raw_new.size:
+                _vshape = np.asarray(new_exports[n].values).shape
+                _nv = int(np.prod(_vshape)) if _vshape else 1
+                _fl = new_exports[n].normal_fluxes
+                _carrier = InterfaceData(
+                    coordinates=new_exports[n].coordinates,
+                    field_name=new_exports[n].field_name,
+                    values=np.asarray(prev[:_nv], float).reshape(_vshape),
+                    normal_fluxes=(np.asarray(prev[_nv:], float).reshape(np.asarray(_fl).shape)
+                                   if _fl is not None else None))
+                prelax = _blocks(_carrier)
             for bname, arr in nb.items():
                 pb = prev_blocks.get(n, {}).get(bname)
                 block_residuals[f"{n}.{bname}"] = (
                     _rel_change(arr, pb) if pb is not None else float("nan"))
+                fp = (prelax or {}).get(bname)
+                block_fixed_point[f"{n}.{bname}"] = (
+                    _rel_change(arr, fp) if fp is not None else float("nan"))
             prev_blocks[n] = nb
             # write relaxed values back into the InterfaceData carrier
             ifd = new_exports[n]
@@ -1222,6 +1279,60 @@ def _f(x) -> Optional[float]:
     return None if x is None or x != x else float(x)
 
 
+def _import_columns(imp_text: str) -> dict:
+    """{"<partner>.<key>": array} for every numeric array in an imports.json text."""
+    try:
+        data = json.loads(imp_text or "{}")
+    except Exception:                                        # noqa: BLE001
+        return {}
+    out: dict = {}
+    if isinstance(data, dict):
+        for partner, block in data.items():
+            if isinstance(block, dict):
+                for key, val in block.items():
+                    if isinstance(val, list):
+                        try:
+                            out[f"{partner}.{key}"] = np.asarray(val, dtype=float).ravel()
+                        except (TypeError, ValueError):
+                            continue
+    return out
+
+
+def _column_moved(a, b) -> bool:
+    """A column moved when it changed by more than round-off of its own scale:
+    relaxing a constant column shifts it by a bit, which is no change at all."""
+    if a is None or b is None or a.shape != b.shape:
+        return True
+    scale = max(float(np.abs(a).max(initial=0.0)), float(np.abs(b).max(initial=0.0)), 1e-300)
+    return bool(np.abs(a - b).max(initial=0.0) > 1e-9 * scale)
+
+
+def _responsiveness_detail(trace: dict, participants: list[Participant]) -> dict:
+    """WHICH IMPORTED COLUMNS MOVED. A side's export can stay byte-identical while its
+    imports change in a column it does not apply: measured, a Neumann side whose partner
+    exported the same placeholder flux (1e-10 at every point) every iteration saw only the
+    partner's values move under relaxation, and was told its answer did not depend on its
+    imports and that it never read imports.json -- it did, and applied the flux."""
+    out: dict = {}
+    for name, status in _responsiveness(trace, participants).items():
+        if status != "unresponsive":
+            continue
+        hist = trace.get(name) or []
+        changed: set = set()
+        seen: set = set()
+        for a, b in zip(hist, hist[1:]):
+            if len(a) < 3 or len(b) < 3 or a[0] == b[0] or a[1] != b[1]:
+                continue
+            both = set(a[2]) & set(b[2])                     # a column that appears is no change
+            seen |= both
+            changed |= {k for k in both if _column_moved(a[2][k], b[2][k])}
+        # the points themselves never move; naming them as "unchanged" says nothing
+        static = {k for k in seen if k.endswith(".coordinates")}
+        if seen:
+            out[name] = {"changed": sorted(changed), "unchanged": sorted(seen - changed - static)}
+    return out
+
+
 def _responsiveness(trace: dict[str, list[tuple[str, str]]],
                     participants: list[Participant]) -> dict[str, str]:
     """Did each participant's export ever MOVE when its imports moved?
@@ -1243,7 +1354,8 @@ def _responsiveness(trace: dict[str, list[tuple[str, str]]],
             out[name] = "no imports declared"
             continue
         moved_in = moved_out = 0
-        for (i0, e0), (i1, e1) in zip(hist, hist[1:]):
+        for h0, h1 in zip(hist, hist[1:]):
+            i0, e0, i1, e1 = h0[0], h0[1], h1[0], h1[1]
             if i0 != i1:
                 moved_in += 1
                 if e0 != e1:

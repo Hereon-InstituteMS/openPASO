@@ -647,14 +647,30 @@ def residual_findings(work: Path) -> list[dict]:
                             f"a fixed point leaves a history; fewer than three "
                             f"entries is read as not having coupled.")})
             continue
-        if any((v != v) or v in (float('inf'), float('-inf')) or v <= 0
+        if any((v != v) or v in (float('inf'), float('-inf')) or v < 0
                for v in vals):
             out.append({"sequence": name, "values": vals[:6],
                         "finding": (
                             "NON-POSITIVE OR NON-FINITE RESIDUAL: a relative "
-                            "interface mismatch is a positive number. A zero, "
-                            "a negative or a nan here means the residual was "
+                            "interface mismatch is a positive number. A "
+                            "negative or a nan here means the residual was "
                             "never actually computed from the two sides.")})
+            continue
+        # AN EXACT ZERO IS COMPUTED, AND SAYS SOMETHING ELSE. It was lumped with the
+        # negative and NaN rows as "never actually computed", and the give-up advice
+        # told a run to delete, as invented, histories couple_levels had written from a
+        # real iteration whose last step was exactly zero (measured: the partner
+        # exported the same placeholder flux every time).
+        _z = [i + 1 for i, v in enumerate(vals) if v == 0.0]
+        if _z:
+            out.append({"sequence": name, "values": vals[:6],
+                        "finding": (
+                            f"A RESIDUAL OF EXACTLY ZERO at row(s) {', '.join(str(i) for i in _z[:4])}: "
+                            f"the data the two sides exchanged were bit-identical between two "
+                            f"iterations. Two independently solved sides reach a fixed point to "
+                            f"the last bit only when what they exchange stopped changing -- look "
+                            f"at each side's exports for a column that never moves (a placeholder, "
+                            f"a copy, an answer re-served).")})
             continue
         if vals[0] / max(vals[-1], 1e-300) < 10.0:
             # A STALLED ITERATION AND A WANDERING ONE HAVE DIFFERENT CAUSES,
@@ -3352,10 +3368,31 @@ def exchange_carried_nothing_finding(export_a: dict, export_b: dict,
     def _scale(rows_a, rows_b) -> float:
         vals = [abs(x) for r in (rows_a or []) for x in (r or [])]
         vals += [abs(x) for r in (rows_b or []) for x in (r or [])]
-        vals = [v for v in vals if v == v]
+        if any(not math.isfinite(v) for v in vals):
+            return float("nan")               # not finite: not zero either (named below)
         if not vals:
             return -1.0                       # absent, not zero: different defect
         return max(vals)
+
+    # A NaN IS NOT A ZERO. The scale used to drop non-finite entries, and a run whose
+    # flux channel was NaN at every point led with "identically zero on BOTH sides ...
+    # the iteration converges at once and the residual looks excellent" for a coupling
+    # that never converged (measured).
+    nonfinite = []
+    for label, (ra, rb) in (("interface value", (ua, ub)), ("interface flux", (qa, qb))):
+        for nm, rows in ((name_a, ra), (name_b, rb)):
+            vals = [x for r in (rows or []) for x in (r or [])]
+            bad = sum(1 for x in vals if not math.isfinite(x))
+            if bad:
+                nonfinite.append(f"the {label} of {nm} ({bad} of {len(vals)} values)")
+    if nonfinite:
+        return {"sequence": "interface exchange not finite", "priority": 9, "values": [],
+                "finding": (
+            "THE EXCHANGE IS NOT FINITE: " + "; ".join(nonfinite) + " are NaN or infinite at "
+            "the matched interface points. Nothing a partner computes from them is a coupling. "
+            "Find where that side's own computation produces them -- a division by a zero weight "
+            "or norm, a solve that failed, a field that was never solved -- and run that side "
+            "standalone until its exports are finite.")}
 
     _ROUNDOFF = 1e-14
     dead = [label for label, scale in (("interface value", _scale(ua, ub)),
@@ -3987,6 +4024,70 @@ def _read_named_csv(p: Path):
     return hdr, rows
 
 
+def nonfinite_field_findings(work: Path, dirs=None, since=None, levels=None,
+                             scan: bool = True) -> list[dict]:
+    """A side's own field dump holding NaN or inf.
+
+    INVISIBLE UNTIL NAMED. The equation check's reader drops a dump whose rebuild is
+    NaN, and the audit then said "neither two or more of its own mesh dumps ... were
+    found" of a side whose three dumps existed and were NaN at 90-97 % of their nodes;
+    couple() called that level "CONVERGED -- THIS IS A RESULT" (measured: the side's
+    bilinear form was assembled from the solution function instead of the trial
+    function, an all-zero matrix, and its exports carried finite placeholders)."""
+    out: list[dict] = []
+    seen, folders = set(), []
+    for d in list(dirs or []) + (_side_dirs(work) if scan else []):
+        try:
+            key = Path(d).resolve()
+        except OSError:
+            continue
+        if key not in seen and Path(d).is_dir():
+            seen.add(key)
+            folders.append(Path(d))
+    for d in folders:
+        worst = None
+        for p in sorted(d.glob("field_level*.csv")):
+            m = re.fullmatch(r"field_level(\d+)\.csv", p.name)
+            if not m or (levels is not None and int(m.group(1)) not in levels):
+                continue
+            try:
+                _cut = _cutoff_for(d, since)
+                if _cut is not None and p.stat().st_mtime < _cut:
+                    continue
+                n = bad = 0
+                with p.open() as fh:
+                    next(fh, None)
+                    for line in fh:
+                        parts = line.strip().split(",")
+                        if len(parts) < 3:
+                            continue
+                        n += 1
+                        try:
+                            if not all(math.isfinite(float(v)) for v in parts[2:]):
+                                bad += 1
+                        except ValueError:
+                            bad += 1
+            except OSError:
+                continue
+            if n and bad and (worst is None or bad / n > worst[2] / worst[3]):
+                worst = (int(m.group(1)), p.name, bad, n)
+        if worst is None:
+            continue
+        try:
+            name = str(d.relative_to(work))
+        except ValueError:
+            name = d.name
+        lvl, fname, bad, n = worst
+        out.append({"sequence": f"nonfinite field {name}", "values": [bad, n], "priority": 2,
+                    "finding": (
+            f"{name.upper()}'S FIELD IS NOT FINITE: its own {fname} holds NaN or inf at {bad} of "
+            f"{n} nodes. Whatever it exported, the solve that produced this field failed -- a "
+            f"singular or empty system (a form built from the solution instead of the trial "
+            f"function assembles zero), a division by zero -- and nothing built on it is a "
+            f"result. Run this side standalone and look at its field before coupling again.")})
+    return out
+
+
 def exports_not_the_field_findings(work: Path, dirs=None, since=None, levels=None,
                                    scan: bool = True) -> list[dict]:
     """A side's interface dump does not carry its own field at the same points.
@@ -4343,7 +4444,8 @@ def _dump_level_sets(side_dir: Path, box: list, kind: str = "scalar", field: str
     (73 sides of correct runs with three dumped levels): judged this way 72 read
     CONSISTENT and one was refused as meaningless (residual above 1e6); the same
     fields scaled by 1.01 -- a source one percent off -- all read INCONSISTENT,
-    and scaled by 1.005, 5 of 73 still pass. One side whose delivered files had
+    and scaled by 1.005, 5 of 73 still pass; scaled by 0.99, about half of the
+    sides on tensor grids still pass (99 of 184, measured 2026-09-25). One side whose delivered files had
     been called wrong (their third level rose) reads CONSISTENT on its own dumps.
 
     `kind` "scalar" gives rows (x, y, u) -- the column named `field` (e.g. "T"),
@@ -4426,6 +4528,69 @@ def _dump_level_sets(side_dir: Path, box: list, kind: str = "scalar", field: str
         pts = np.column_stack([X.ravel(), Y.ravel()] + vals)
         out[int(m.group(1))] = [tuple(float(z) for z in r) for r in pts]
     return out
+
+
+def _dump_raw_levels(side_dir: Path, field: str | None = None, since=None) -> dict:
+    """{level: [(x, y, u), ...]} straight from a side's own scalar dumps, no rebuild."""
+    out: dict = {}
+    cut = _cutoff_for(side_dir, since)
+    for p in sorted(Path(side_dir).glob("field_level*.csv")):
+        m = re.fullmatch(r"field_level(\d+)\.csv", p.name)
+        if not m:
+            continue
+        try:
+            if cut is not None and p.stat().st_mtime < cut:
+                continue
+            hdr, rows = _read_named_csv(p)
+        except (OSError, StopIteration):
+            continue
+        if not rows or "x" not in hdr or "y" not in hdr:
+            continue
+        c = hdr.index(field.lower()) if field and field.lower() in hdr else (
+            hdr.index("u") if "u" in hdr else (2 if len(hdr) == 3 else None))
+        if c is None:
+            continue
+        ix, iy = hdr.index("x"), hdr.index("y")
+        out[int(m.group(1))] = [(r[ix], r[iy], r[c]) for r in rows]
+    return out
+
+
+def _on_the_grid_itself(dres, raw: dict, op: dict):
+    """A DOES NOT SATISFY read through the Delaunay rebuild, judged again on a tensor grid
+    with bilinear cells (pde_consistency.check_levels_on_grid, rule 'q1').
+
+    THE REBUILD ACCUSED A RIGHT SIDE. On a tensor grid every cell's four corners are
+    cocircular, and the rebuild picks either diagonal cell by cell; a Kratos side that
+    solved its own P1 system to 1e-12, with the source and k its config states, read
+    5.990e-04 -> 5.826e-04 -> 2.177e-04, DOES NOT SATISFY, and the run gave up on it.
+    Read with one uniform reconstruction the same field falls 2.0e-03 -> 9.8e-04 -> 2.7e-04.
+
+    ONLY TO LIFT A REFUSAL, AND ONLY ON A CLEAN FALL. Measured over the recorded sides on
+    tensor grids, as they are and scaled by 0.99 and 1.01: lifting a refusal when the
+    bilinear reading falls by half at every step changes one verdict -- that side's -- and
+    admits no scaled field; replacing the rebuild by that reading outright would change
+    fifteen, and accuse a right side. Picking the most favourable of three reconstructions
+    let a field scaled by 0.99 through on 50 of 119 right sides. Returns `dres` unchanged
+    otherwise."""
+    if not (dres and str(dres.get("verdict")) == "INCONSISTENT" and len(raw) >= 3):
+        return dres
+    try:
+        from .pde_consistency import check_levels_on_grid, tensor_grid
+        if any(tensor_grid(rows) is None for rows in raw.values()):
+            return dres
+        r = check_levels_on_grid(raw, op["source"], op["k"], op["box"],
+                                 reaction=op["reaction"], rule="q1").as_dict()
+        seq = [l.get("relative_weak_residual") for l in r.get("levels", [])]
+        if (str(r.get("verdict")) == "CONSISTENT" and len(seq) >= 3
+                and all(isinstance(x, float) for x in seq)
+                and all(q < 0.5 * p for p, q in zip(seq, seq[1:]))):
+            r["explanation"] = (str(r.get("explanation") or "") + " Read on the side's own grid "
+                                "with bilinear cells: its nodes form a tensor grid, and the "
+                                "scattered-node rebuild mixes the two diagonals of its cells.")
+            return r
+    except Exception:                                        # noqa: BLE001
+        return dres
+    return dres
 
 
 def _judge_pair(check, dump_sets: dict, deliv_sets: list):
@@ -4652,6 +4817,134 @@ def zero_channel_findings(work: Path) -> list[dict]:
             f"flux condition does not sit on the interface (the flux-calc line's E id names a line other "
             f"than the interface, or its topology lists other nodes) or the exported column was never "
             f"filled. Fix the exchange before any level is refined.")})
+    return out
+
+
+def free_interface_end_findings(work: Path, dirs=None, levels=None) -> list[dict]:
+    """An edge held at one value everywhere but at the node where it meets the interface.
+
+    THE SHAPE OF A LOOP THAT SKIPS THE INTERFACE COLUMN. A side whose held edges are
+    written by `for i in range(1, NX + 1)` leaves the node the interface ends on free;
+    measured on coupled runs (hand-written sides, which carry no served check), those two
+    nodes held 10-42 % of the side's peak while every other node of the edge held the
+    outer value exactly, and nothing named it -- the audit's outer check exempts the
+    interface's end points because on a Dirichlet side they carry the partner's value.
+    Read from the side's own field dump alone: no config key is needed, and a side whose
+    end node holds exactly what it imported there is named as carrying its partner's
+    value, not as the one that left it free."""
+    out: list[dict] = []
+    try:
+        import numpy as _np
+    except Exception:                                        # noqa: BLE001
+        return out
+    seen, folders = set(), []
+    for d in list(dirs or []) + _side_dirs(work):
+        try:
+            key = Path(d).resolve()
+        except OSError:
+            continue
+        if key not in seen and Path(d).is_dir():
+            seen.add(key)
+            folders.append(Path(d))
+    # ONLY WHERE THE RUN SAYS THE EDGES ARE HELD. Whether the edges the interface ends on
+    # carry the outer value is the problem's, and the run states it as full_outer_dirichlet
+    # in a side's config.json; one side saying true covers the pair (it is one outer
+    # boundary), any side saying false, or none saying, leaves this silent.
+    said = []
+    for d in folders:
+        try:
+            cfg = json.loads((d / "config.json").read_text() or "{}")
+        except (OSError, ValueError):
+            continue
+        if isinstance(cfg, dict) and isinstance(cfg.get("full_outer_dirichlet"), bool):
+            said.append(cfg["full_outer_dirichlet"])
+    if not said or not all(said):
+        return out
+    for d in folders:
+        hits = []
+        for p in sorted(d.glob("field_level*.csv")):
+            m = re.fullmatch(r"field_level(\d+)\.csv", p.name)
+            q = d / p.name.replace("field_", "interface_")
+            if not (m and q.is_file()):
+                continue
+            lvl = int(m.group(1))
+            if levels is not None and lvl not in levels:
+                continue
+            try:
+                hf, rf = _read_named_csv(p)
+                hi, ri = _read_named_csv(q)
+            except OSError:
+                continue
+            if not ({"x", "y"} <= set(hf) and {"x", "y"} <= set(hi)) or len(rf) < 16 or len(ri) < 3:
+                continue
+            vc = next((hf.index(c) for c in hf if c not in ("x", "y", "z")), None)
+            if vc is None:
+                continue
+            F = _np.asarray(rf, float)
+            I = _np.asarray(ri, float)
+            xy, u = F[:, [hf.index("x"), hf.index("y")]], F[:, vc]
+            iax = int(_np.argmin(_np.ptp(I[:, [hi.index("x"), hi.index("y")]], axis=0)))
+            along = 1 - iax
+            span = float(_np.ptp(xy, axis=0).max()) or 1.0
+            tol = 1e-9 * span
+            plane = float(_np.median(I[:, [hi.index("x"), hi.index("y")][iax]]))
+            scale = float(_np.abs(u).max()) or 0.0
+            if scale <= 0.0:
+                continue
+            for edge in (float(xy[:, along].min()), float(xy[:, along].max())):
+                on = _np.where(_np.abs(xy[:, along] - edge) <= tol)[0]
+                if len(on) < 4:
+                    continue
+                end = [i for i in on if abs(xy[i, iax] - plane) <= tol]
+                rest = [i for i in on if i not in end]
+                if len(end) != 1 or len(rest) < 3:
+                    continue
+                c = float(_np.median(u[rest]))
+                if _np.abs(u[rest] - c).max() > 1e-12 * scale:
+                    continue                                  # the edge is not held at one value
+                gap = abs(float(u[end[0]]) - c)
+                if gap > 1e-6 * scale:
+                    hits.append((lvl, tuple(float(v) for v in xy[end[0]]), float(u[end[0]]), c, gap / scale))
+        if not hits:
+            continue
+        # does this side hold, at those nodes, exactly what it imported there?
+        imposed = False
+        try:
+            imp = json.loads((d / "imports.json").read_text() or "{}")
+            blk = next(iter(imp.values()), {}) if isinstance(imp, dict) else {}
+            ic = _np.asarray(blk.get("coordinates") or [], float)
+            iv = _np.asarray(blk.get("values") or [], float).ravel()
+            if ic.ndim == 2 and len(ic) == len(iv) and len(iv):
+                lvl_last = max(h[0] for h in hits)
+                last = [h for h in hits if h[0] == lvl_last]
+                imposed = all(_np.abs(_np.hypot(ic[:, 0] - h[1][0], ic[:, 1] - h[1][1])).min() <= 1e-9 * max(span, 1.0)
+                              and abs(iv[int(_np.argmin(_np.hypot(ic[:, 0] - h[1][0], ic[:, 1] - h[1][1])))] - h[2])
+                              <= 1e-9 * max(abs(h[2]), scale) for h in last)
+        except Exception:                                    # noqa: BLE001
+            imposed = False
+        try:
+            name = str(d.relative_to(work))
+        except ValueError:
+            name = d.name
+        lv = sorted({h[0] for h in hits})
+        worst = max(hits, key=lambda h: h[4])
+        share = " / ".join(f"{max(h[4] for h in hits if h[0] == l):.0%}" for l in lv)
+        out.append({
+            "sequence": f"free interface end {name}", "values": [h[4] for h in hits],
+            "priority": 7 if not imposed else 27,
+            "finding": (
+                f"{name.upper()}'S FIELD DEPARTS AT THE NODE WHERE THE INTERFACE MEETS AN EDGE IT "
+                f"HOLDS: every other node of that edge carries {worst[3]:.6g} exactly, and the "
+                f"interface end node ({worst[1][0]:g}, {worst[1][1]:g}) carries {worst[2]:.3g} -- "
+                f"{share} of the side's peak at level(s) {', '.join(str(l) for l in lv)}. "
+                + ("This side holds there exactly the value it imported: it carries its partner's "
+                   "end node, and the partner is where to look -- a partner whose held edges skip "
+                   "the interface column leaves those nodes free."
+                   if imposed else
+                   "An edge held at one value is held end to end: a loop over the edge's nodes "
+                   "that skips the interface column leaves exactly this node free. The error "
+                   "shrinks with the mesh, but the boundary condition at that node is not the "
+                   "problem's.")) })
     return out
 
 
@@ -4931,22 +5224,32 @@ def equation_findings(work: Path, since=None) -> list[dict]:
         sets = _per_level_field_sets(work, op["box"])
         dumps = _dump_level_sets(op["dir"], op["box"], "scalar", op.get("field"), since)
         if not sets and len(dumps) < 2:
+            _nf = nonfinite_field_findings(work, dirs=[op["dir"]], since=since, scan=False)
+            _have = len(list(op["dir"].glob("field_level*.csv")))
             out.append({
                 "sequence": f"equation check side {side}", "values": [],
                 "priority": 26, "informational": True,
                 "finding": (
                     f"SIDE {side}'S FIELD WAS NOT CHECKED AGAINST ITS OWN EQUATION: "
-                    f"neither two or more of its own mesh dumps (field_level<k>.csv in "
-                    f"{op['dir'].name}/) nor a per-level file of yours holding that side's "
-                    f"field at the cell MIDPOINTS of its box {op['box']} were found. The "
-                    f"served contracts write the dumps at every level run; the check "
-                    f"interpolates them to the midpoints, where its quadrature is exact.")})
+                    + (f"its {_have} mesh dump(s) in {op['dir'].name}/ hold non-finite values, "
+                       f"so there is no field to judge (see the finding that names them)."
+                       if _nf else
+                       f"its {_have} mesh dump(s) in {op['dir'].name}/ do not cover its box "
+                       f"{op['box']} (the dump's points and the config's box disagree), and no "
+                       f"per-level file of yours holds that side's field at the cell midpoints."
+                       if _have >= 2 else
+                       f"neither two or more of its own mesh dumps (field_level<k>.csv in "
+                       f"{op['dir'].name}/) nor a per-level file of yours holding that side's "
+                       f"field at the cell MIDPOINTS of its box {op['box']} were found. The "
+                       f"served contracts write the dumps at every level run; the check "
+                       f"interpolates them to the midpoints, where its quadrature is exact."))})
             continue
         try:
             from .pde_consistency import check_levels
             dres, vres = _judge_pair(
                 lambda lv: check_levels(lv, op["source"], op["k"], op["box"],
                                         reaction=op["reaction"]), dumps, sets)
+            dres = _on_the_grid_itself(dres, _dump_raw_levels(op["dir"], op.get("field"), since), op)
         except Exception as exc:                              # noqa: BLE001
             out.append({"sequence": f"equation check side {side}", "values": [],
                         "priority": 26, "informational": True,
@@ -4962,6 +5265,19 @@ def equation_findings(work: Path, since=None) -> list[dict]:
         else:
             out.append(_verdict_finding(side, "equation", op_txt, None if vres else dres, vres,
                                         op["dir"].name))
+        # A CONFIG WRITTEN AFTER THE FIELD IT DESCRIBES is said, not assumed: measured, two
+        # runs wrote side A's source_expr minutes after their last dump, and the verdict
+        # judged the field against a statement the run did not carry when it solved.
+        try:
+            _cfg_t = (op["dir"] / "config.json").stat().st_mtime
+            _dump_t = [q.stat().st_mtime for q in op["dir"].glob("field_level*.csv")]
+            if _dump_t and _cfg_t > max(_dump_t) + 1.0 and out and out[-1].get("finding"):
+                out[-1]["finding"] += (
+                    f" Its config.json was written after these dumps "
+                    f"({_cfg_t - max(_dump_t):.0f} s after the last): the operator judged is the "
+                    f"one it states now, which is not proof it is the one the run solved.")
+        except OSError:
+            pass
 
     for side, op in sorted(_side_operators(work).items()):
         out.extend(_momentum_findings(work, side, op, since))
@@ -5684,6 +6000,7 @@ def audit(work_dir: str, claimed_order: float | None = None,
     findings: list[dict] = []
     findings.extend(_guarded("residual_findings", residual_findings, work))
     findings.extend(_guarded("unsolved_field_findings", unsolved_field_findings, work))
+    findings.extend(_guarded("nonfinite_field_findings", nonfinite_field_findings, work))
     findings.extend(_guarded("exports_not_the_field_findings", exports_not_the_field_findings, work))
     findings.extend(_guarded("completeness_findings", completeness_findings, work))
     findings.extend(_guarded("exact_ladder_findings", exact_ladder_findings, work))   # the provable one leads the band one
@@ -5966,6 +6283,7 @@ def audit(work_dir: str, claimed_order: float | None = None,
     findings.extend(_guarded("zero_channel_findings", zero_channel_findings, work))
     findings.extend(_guarded("deliverable_flux_vs_export_findings", deliverable_flux_vs_export_findings, work))
     findings.extend(_guarded("outer_boundary_findings", outer_boundary_findings, work))
+    findings.extend(_guarded("free_interface_end_findings", free_interface_end_findings, work))
     findings.extend(_guarded("unparsed_level_files_findings", unparsed_level_files_findings, work))
     findings.extend(_guarded("solver_stopped_findings", solver_stopped_findings, work))
     findings.extend(_guarded("export_findings", export_findings, work))
@@ -6170,7 +6488,15 @@ def field_quality_due(work: Path, levels_done) -> list[dict]:
     except Exception:                                    # noqa: BLE001
         pass
     try:
+        out += nonfinite_field_findings(work, levels=lv)
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
         out += exports_not_the_field_findings(work, levels=lv)
+    except Exception:                                    # noqa: BLE001
+        pass
+    try:
+        out += free_interface_end_findings(work, levels=lv)
     except Exception:                                    # noqa: BLE001
         pass
     out += _interface_transmitted_nothing(work, lv)

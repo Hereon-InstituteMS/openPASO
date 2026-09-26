@@ -1250,7 +1250,26 @@ def check_coupling_directionality(graph: dict, max_iter: int = 0
     return findings, not_checked
 
 
-def check_participant_responsiveness(responsiveness: dict) -> tuple[list[str], list[str]]:
+def unresponsive_clause(name: str, detail: dict | None) -> str:
+    """'' unless the driver saw `name`'s imports change only in some columns: then what
+    the export's byte-identity does and does not say, in the columns' own names."""
+    d = (detail or {}).get(name) or {}
+    changed, same = list(d.get("changed") or []), list(d.get("unchanged") or [])
+    if not changed and same:
+        return (f"{name}'s imports changed only at round-off of their own scale "
+                f"({', '.join(same)}): nothing it was given moved, so its byte-identical "
+                f"export says nothing about whether it reads them")
+    if not (changed and same):
+        return ""
+    return (f"{name}'s export stayed byte-identical while its imports changed only in "
+            f"{', '.join(changed)}; {', '.join(same)} arrived the same at every one of those "
+            f"iterations. A side applies one of them (a Neumann side its partner's "
+            f"normal_fluxes, a Dirichlet side its values): if {name} applies an unchanged one, "
+            f"what it applied never changed, and the partner's export is where to look")
+
+
+def check_participant_responsiveness(responsiveness: dict,
+                                     detail: dict | None = None) -> tuple[list[str], list[str]]:
     """Did every participant's answer actually depend on what it was given?
 
     This is the check for the participant that exits 0 having done nothing: it
@@ -1275,9 +1294,16 @@ def check_participant_responsiveness(responsiveness: dict) -> tuple[list[str], l
                           "could not be ruled out"]
     dead = [n for n, s in responsiveness.items() if s == "unresponsive"]
     frozen = [n for n, s in responsiveness.items() if s == "imports never changed"]
-    if dead:
+    partial = [n for n in dead if unresponsive_clause(n, detail)]
+    whole = [n for n in dead if n not in partial]
+    if partial:
         findings.append(
-            f"Participant(s) {dead} produced byte-identical output while the data "
+            "; ".join(unresponsive_clause(n, detail) for n in partial)
+            + ". Any convergence reported here is the coupling standing still, not a "
+            "solution.")
+    if whole:
+        findings.append(
+            f"Participant(s) {whole} produced byte-identical output while the data "
             "handed to them CHANGED — their answer does not depend on their "
             "imports. Either the script never reads imports.json, or it re-serves "
             "a cached/initial result. Any convergence reported here is the "
@@ -1341,7 +1367,8 @@ def check_interface_meshes(export_a, export_b, label_a="A", label_b="B",
 
 
 def check_residual_blocks(block_residuals: dict, tol: float,
-                          slack: float = 10.0) -> tuple[list[str], list[str]]:
+                          slack: float = 10.0,
+                          fixed_point: dict | None = None) -> tuple[list[str], list[str]]:
     """Is the reported global residual actually representative?
 
     The driver converges on ONE relative norm over every participant's stacked
@@ -1364,6 +1391,14 @@ def check_residual_blocks(block_residuals: dict, tol: float,
                           "non-finite or unavailable"]
     limit = tol * slack
     bad = {k: v for k, v in finite.items() if v > limit}
+    # A LAST STEP IS NOT A DISTANCE. Under an accelerator a block can move a lot on its
+    # last step and land on the fixed point; where the driver measured the block's own
+    # fixed-point residual (raw output against the relaxed input) and it is inside the
+    # limit, the block has converged whatever its last step was.
+    if fixed_point:
+        bad = {k: v for k, v in bad.items()
+               if not (isinstance(fixed_point.get(k), float) and fixed_point[k] == fixed_point[k]
+                       and fixed_point[k] <= limit)}
     if bad:
         worst = max(bad.items(), key=lambda kv: kv[1])
         findings.append(

@@ -1305,11 +1305,16 @@ def _interface_balance_trend(out_levels: list, shrink: float = 0.6):
         path = " -> ".join(f"{v:.1%}" for v in vals)
         lv = ", ".join(str(k) for k, _ in seq)
         if all(r <= shrink for r in ratios) or vals[-1] <= rtol:
+            # THE TREND, NOT A CAUSE. "discretisation error, as a consistent exchange
+            # shows" was said of an imbalance of exactly h (12.5 % -> 6.2 % -> 3.1 %):
+            # two zeroed end nodes against a partner's constant placeholder flux of
+            # 1e-10 (measured). A shrinking imbalance is what discretisation error does,
+            # and not the only thing that does it.
             notes.append(
-                f"Interface balance of {name}: {path} over levels {lv}, "
-                f"shrinking under refinement -- discretisation error, as a "
-                f"consistent exchange shows; the coarse-level caveat is not "
-                f"held against the ladder.")
+                f"Interface balance of {name}: {path} over levels {lv}, shrinking under "
+                f"refinement, as discretisation error does; the coarse-level caveat is not "
+                f"held against the ladder. The trend is all this measures: an error that "
+                f"lives on a fixed number of nodes shrinks the same way.")
             excused.update(fired)
         else:
             held.update(fired)
@@ -1409,7 +1414,8 @@ def _stamp_verification(result: dict, *, evidence_ok: bool, reason: str = "",
         _conserv = any(w in _low for w in ("balance", "conserv", "flux",
                                            "caveat", "silent-wrong"))
         _converged = ("did not converge" not in _low
-                      and "not converged" not in _low)
+                      and "not converged" not in _low
+                      and "not finite" not in _low)             # a NaN field is no result
         _says_converged = "converged" in _low and _converged
         if (_conserv or _says_converged) and _converged:
             result["verification"] = (
@@ -3128,6 +3134,13 @@ def _level_not_a_coupled_result(rep: dict) -> str:
     unresp = sorted(n for n, st in (rep.get("responsiveness") or {}).items()
                     if "unresponsive" in str(st).lower())
     if unresp:
+        try:
+            from core.quality_checks import unresponsive_clause as _uc
+            _parts = [_uc(n, rep.get("responsiveness_detail")) for n in unresp]
+        except Exception:                                    # noqa: BLE001
+            _parts = []
+        if _parts and all(_parts):
+            return "; ".join(_parts) + ", so the coupling stood still"
         return (f"participant(s) {', '.join(unresp)} exported byte-identical "
                 f"data while their imports changed, so nothing was transmitted")
     rows = len(rep.get("history") or [])
@@ -6471,6 +6484,7 @@ def register_consolidated_tools(mcp: FastMCP):
         try:
             _level_secs = None
             _t_level = __import__('time').perf_counter()
+            _t_level_wall = __import__('time').time()      # the dumps this call writes are newer
             r = run_coupling(parts, max_iter=max_iter, tol=tol,
                              accelerator=accelerator, theta0=theta, probe=probe,
                              noise_replicates=int(noise_replicates),
@@ -6718,7 +6732,8 @@ def register_consolidated_tools(mcp: FastMCP):
             val += check_finite(ex.get("coordinates", []), label=f"{nm}.coordinates")
         f, n = check_returncodes(r.returncodes); val += f; not_run += n
         f, n = check_coupling_directionality(r.graph, max_iter); val += f; not_run += n
-        f, n = check_participant_responsiveness(r.responsiveness); val += f; not_run += n
+        f, n = check_participant_responsiveness(r.responsiveness,
+                                                getattr(r, "responsiveness_detail", None)); val += f; not_run += n
         if probe:
             # The measured floor is handed over, so the one branch that cannot
             # tell "stochastic" from "hidden state" reports coverage instead of
@@ -6774,7 +6789,8 @@ def register_consolidated_tools(mcp: FastMCP):
                 + ", ".join(f"{k}={v:.2e}" for k, v in
                             sorted(r.block_residuals.items()) if v == v))
         elif r.converged:
-            f, n = check_residual_blocks(r.block_residuals, tol)
+            f, n = check_residual_blocks(r.block_residuals, tol,
+                                         fixed_point=getattr(r, "block_fixed_point", None))
             val += f; not_run += n
         names = list(r.exports)
         _bal_numbers: dict = {}
@@ -6922,6 +6938,8 @@ def register_consolidated_tools(mcp: FastMCP):
                   "block_residuals": r.block_residuals,
                   "returncodes": r.returncodes,
                   "responsiveness": r.responsiveness,
+                  **({"responsiveness_detail": r.responsiveness_detail}
+                     if getattr(r, "responsiveness_detail", None) else {}),
                   "graph": r.graph, "relaxation": r.theta,
                   "interface_sensitivity": r.sensitivity,
                   "participant_output_logs": {
@@ -7009,6 +7027,22 @@ def register_consolidated_tools(mcp: FastMCP):
         # away in a different payload from this message. So the operative
         # sentence is repeated here, where the agent is actually reading.
         reason = _couple_failure_reason(r, checks_ok)
+        # A SIDE WHOSE OWN FIELD IS NOT FINITE IS NOT A RESULT, whatever its exports
+        # say. Measured: a side whose form assembled to zero exported finite
+        # placeholders over a NaN field, and this reply called the level "CONVERGED --
+        # THIS IS A RESULT, SAVE IT NOW".
+        try:
+            from . import result_audit as _ra_nf
+            _nf = _ra_nf.nonfinite_field_findings(
+                Path(str(parts[0].work_dir)).parent, dirs=[Path(str(p.work_dir)) for p in parts],
+                since=_t_level_wall - 1.0, scan=False)
+        except Exception:                                    # noqa: BLE001
+            _nf = []
+        if _nf:
+            checks_ok = False
+            reason = str(_nf[0].get("finding", ""))[:400]
+            val = list(val) + [str(f.get("finding", "")) for f in _nf]
+            result["validation"] = val
         _stamp_verification(result, evidence_ok=checks_ok, reason=reason,
                             critic_approved=critic_approved,
                             solver="couple",
@@ -7051,11 +7085,9 @@ def register_consolidated_tools(mcp: FastMCP):
             "deliberately not nodes: interpolate each side's converged "
             "solution onto the listed points, with that side's own material "
             "and its own outward normal. Copying exports.json into a "
-            "per-level interface file is the single most common way an "
-            "otherwise working coupled run is made unverifiable — measured at "
-            "13.7% of coupled runs with these tools against 1.2% of runs "
-            "without them, because only a run with these tools has the file. "
-            "A task that lists interior "
+            "per-level interface file is a common way an otherwise working "
+            "coupled run is made unverifiable: the file is at the nodes, and "
+            "the list is not. A task that lists interior "
             "points only has excluded the interface ENDS on purpose; do not "
             "complete the list with them.")
 
@@ -7239,8 +7271,15 @@ def register_consolidated_tools(mcp: FastMCP):
             except Exception:                                # noqa: BLE001
                 _pjson = ""
             _plist = f"participants='{_pjson}'" if _pjson else "participants=<the same list you passed here>"
+            try:
+                from core.quality_checks import unresponsive_clause as _uc
+            except Exception:                                # noqa: BLE001
+                _uc = lambda _n, _d: ""                      # noqa: E731
+            _rdet = getattr(r, "responsiveness_detail", None)
+            _unresp_txt = "; ".join(_uc(_n, _rdet) or f"participant {_n} exported byte-identical data while its imports changed"
+                                    for _n in _unresp)
             _not_yet = (f"{_lvl_txt} IS NOT A COUPLED RESULT YET: the iteration stopped after {_n_hist} step(s)"
-                        + (f"; participant(s) {', '.join(_unresp)} exported byte-identical data while their imports changed" if _unresp else "")
+                        + (f"; {_unresp_txt}" if _unresp else "")
                         + (f"; {_probe_hits[0][:220]}" if _probe_hits else "")
                         + ". A fixed point reached at once means the exchanged data never changed between iterations. "
                           "Two ways are on record: a participant that does not read ./imports.json on every run, and one "
@@ -7423,10 +7462,9 @@ def register_consolidated_tools(mcp: FastMCP):
                            "one per side, of the console this level just produced"
                          + (f" (this level: {_logs})" if _logs else " (participant_output_level<k>.log)")
                          + " -- into the per-level run log name your task gives for that side. It costs one action "
-                           "now and is the step that is measured to vanish when it is left to the end: across four "
-                           "recent rounds, every level that ran left its captured console on disk and only 2 to 4 "
-                           "cells in 9 ever turned them into the logs the task asked for, so those runs handed in "
-                           "coupling that was PROVEN and were read as not run. Then write the remaining "
+                           "now and is the step most often lost when it is left to the end: the consoles stay on "
+                           "disk, the logs the task asks for are never written, and a coupling that was proven is "
+                           "read as not run. Then write the remaining "
                            "deliverables -- the field and interface files per side from each level's dumps -- in "
                            "ONE pass at the end. A run log copied from another level's console reads as "
                            "an unchanged mesh and sinks the whole sequence, and the write check names it the "
@@ -7443,8 +7481,7 @@ def register_consolidated_tools(mcp: FastMCP):
                            "the last. "
                          + (f" MEASURED COST: this level's iteration took {_level_secs:.0f} s of solver wall time; the next two "
                             f"levels have 4x and 16x the cells, so their iterations cost roughly {4 * _level_secs:.0f} s and "
-                            f"{16 * _level_secs:.0f} s inside that one call (measured: parents stopped at 26-27 min left calling "
-                            f"the remaining levels a 'time constraint')." if _level_secs is not None else ""))
+                            f"{16 * _level_secs:.0f} s inside that one call." if _level_secs is not None else ""))
             _lead = _dump_txt + _one_call + (_tag_txt if not _trivial else "") + ("\n" + _lead if _lead else "")
         if _mesh_note:
             _lead = _mesh_note + ("\n" + _lead if _lead else "")
@@ -7939,7 +7976,7 @@ def register_consolidated_tools(mcp: FastMCP):
             try:
                 from .result_audit import ndof_ladder_findings as _ndof
                 for _f in _ndof(Path(history_dir)):
-                    _ladder_faults.append(str(_f.get("finding", ""))[:600])
+                    _ladder_faults.append(_at_sentence(str(_f.get("finding", "")), 600))
             except Exception:                                # noqa: BLE001
                 pass
         # TWO FAULTS NO EXCHANGE CHECK CAN SEE. Measured on a coupled run: a
@@ -7961,18 +7998,24 @@ def register_consolidated_tools(mcp: FastMCP):
             # THE LADDER ANSWERS FOR ITS PARTICIPANTS: a probe folder beside them holds
             # no dump of this sequence and must not sink it (scan=False).
             for _f in _unsolved(Path(history_dir), dirs=_part_dirs, since=_cut or _ladder_t0, scan=False):
-                _ladder_faults.append(str(_f.get("finding", ""))[:500])
+                _ladder_faults.append(_at_sentence(str(_f.get("finding", "")), 500))
+        except Exception:                                    # noqa: BLE001
+            pass
+        try:
+            from .result_audit import nonfinite_field_findings as _nonfinite
+            for _f in _nonfinite(Path(history_dir), dirs=_part_dirs, since=_cut or _ladder_t0, scan=False):
+                _ladder_faults.append(_at_sentence(str(_f.get("finding", "")), 500))
         except Exception:                                    # noqa: BLE001
             pass
         try:
             from .result_audit import exports_not_the_field_findings as _not_field
             for _f in _not_field(Path(history_dir), dirs=_part_dirs, since=_cut or _ladder_t0, scan=False):
-                _ladder_faults.append(str(_f.get("finding", ""))[:700])
+                _ladder_faults.append(_at_sentence(str(_f.get("finding", "")), 700))
         except Exception:                                    # noqa: BLE001
             pass
         for _t in _eq:
             if "DOES NOT SATISFY" in str(_t):
-                _ladder_faults.append(str(_t)[:600])
+                _ladder_faults.append(_at_sentence(str(_t), 600))
         # VERIFIED MEANS EACH SIDE'S OWN EQUATION WAS CHECKED AND HOLDS, not only
         # that the two sides agree with each other. The equation findings are
         # keyed by the side's folder name; a participant with none is unchecked.
